@@ -202,7 +202,7 @@ git commit -m "chore: initialise go module, package doc, and make targets"
 
 This task answers M0's question: what does the measurement rig look like, before there is anything to measure? The answer is that the rig's first job is to measure the transport with no framework on top, so that M1 has something honest to be compared against.
 
-- [ ] **Step 1: Write the bench package doc**
+- [x] **Step 1: Write the bench package doc**
 
 Create `bench/doc.go`:
 
@@ -231,7 +231,7 @@ Create `bench/doc.go`:
 package bench
 ```
 
-- [ ] **Step 2: Write the shared helper**
+- [x] **Step 2: Write the shared helper**
 
 Create `bench/helpers_test.go`:
 
@@ -251,7 +251,7 @@ func newRequestCtx(method, uri string) *fasthttp.RequestCtx {
 }
 ```
 
-- [ ] **Step 3: Write the baseline benchmark**
+- [x] **Step 3: Write the baseline benchmark**
 
 Create `bench/fasthttp_baseline_test.go`:
 
@@ -285,7 +285,7 @@ func BenchmarkFasthttpBaseline(b *testing.B) {
 }
 ```
 
-- [ ] **Step 4: Run it and confirm the rig works**
+- [x] **Step 4: Run it and confirm the rig works**
 
 ```bash
 go test ./bench/... -run '^$' -bench . -benchmem -count=1
@@ -293,7 +293,7 @@ go test ./bench/... -run '^$' -bench . -benchmem -count=1
 
 Expected: one benchmark line for `BenchmarkFasthttpBaseline`, reporting `0 B/op` and `0 allocs/op`. If it reports allocations, the warm-up call in Step 3 is missing or the response buffer is being reset inside the loop. Investigate before continuing, because every later number depends on this one being trustworthy.
 
-- [ ] **Step 5: Write the recording script**
+- [x] **Step 5: Write the recording script**
 
 Create `scripts/bench.sh`:
 
@@ -330,7 +330,7 @@ Make it executable:
 chmod +x scripts/bench.sh
 ```
 
-- [ ] **Step 6: Write the results README**
+- [x] **Step 6: Write the results README**
 
 Create `bench/results/README.md`:
 
@@ -357,7 +357,7 @@ Install benchstat with:
     go install golang.org/x/perf/cmd/benchstat@latest
 ```
 
-- [ ] **Step 7: Record the M0 baseline**
+- [x] **Step 7: Record the M0 baseline**
 
 ```bash
 make bench-record LABEL=M0-fasthttp-baseline
@@ -365,7 +365,7 @@ make bench-record LABEL=M0-fasthttp-baseline
 
 Expected: `bench/results/M0-fasthttp-baseline.txt` exists, has the stamp header, and contains ten runs of `BenchmarkFasthttpBaseline`.
 
-- [ ] **Step 8: Verify the make targets**
+- [x] **Step 8: Verify the make targets**
 
 ```bash
 make lint
@@ -375,7 +375,7 @@ make bench
 
 Expected: all three exit 0. M0's exit criterion is now met.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add bench scripts
