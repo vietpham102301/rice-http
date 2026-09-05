@@ -72,7 +72,7 @@ Files created by this plan, and what each is responsible for.
 - Consumes: nothing.
 - Produces: the module path `github.com/vietpham102301/rice-http` and package name `rice`, which every later task imports. The make targets `test`, `bench`, `bench-record`, `cover`, `lint`, `tidy`.
 
-- [ ] **Step 1: Initialise the module and pin fasthttp**
+- [x] **Step 1: Initialise the module and pin fasthttp**
 
 ```bash
 cd /Users/vietpham1023/dev/rice-http
@@ -88,7 +88,7 @@ grep fasthttp go.mod
 
 Do not hand-write a version number. Whatever `@latest` resolves to is the pin, and `go.sum` locks it.
 
-- [ ] **Step 2: Confirm the Go directive**
+- [x] **Step 2: Confirm the Go directive**
 
 Open `go.mod` and ensure the directive line reads exactly:
 
@@ -98,7 +98,7 @@ go 1.25
 
 If `go mod init` wrote a more specific version such as `go 1.25.6`, change it to `go 1.25`. A patch-level directive forces every contributor onto that exact patch for no benefit.
 
-- [ ] **Step 3: Write the package doc**
+- [x] **Step 3: Write the package doc**
 
 Create `doc.go`:
 
@@ -124,7 +124,7 @@ Create `doc.go`:
 package rice
 ```
 
-- [ ] **Step 4: Write the Makefile**
+- [x] **Step 4: Write the Makefile**
 
 Create `Makefile`. Note that recipe lines must be indented with a real tab character, and that `$` is escaped as `$$` so make passes a literal dollar sign to the shell:
 
@@ -161,7 +161,7 @@ tidy:
 	$(GO) mod tidy
 ```
 
-- [ ] **Step 5: Add coverage output to .gitignore**
+- [x] **Step 5: Add coverage output to .gitignore**
 
 Append to the existing `.gitignore`:
 
@@ -169,7 +169,7 @@ Append to the existing `.gitignore`:
 coverage.out
 ```
 
-- [ ] **Step 6: Verify**
+- [x] **Step 6: Verify**
 
 ```bash
 make lint
@@ -178,7 +178,7 @@ make test
 
 Expected: `make lint` produces no output and exits 0. `make test` prints `?   github.com/vietpham102301/rice-http  [no test files]` and exits 0. `make bench` will fail at this point because `bench/` does not exist yet; that is Task 2.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add go.mod go.sum doc.go Makefile .gitignore
