@@ -16,6 +16,42 @@ Each entry uses this shape:
 
 ---
 
+## 2026-09-06 — M0 — Scaffold: the rig exists, and its floor is a true zero
+
+**Did:** Created the module at `github.com/vietpham102301/rice-http` with fasthttp v1.73.0 as
+its only runtime dependency, a `Makefile` with the six targets every later milestone drives,
+the `bench/` package, `scripts/bench.sh` for stamped recordings, `bench/results/` with its
+comparability warning, and CI running lint, race tests and a benchmark smoke run. The only
+benchmark written measures raw fasthttp with no framework in the path.
+
+**Learned:** Two things, neither of them about benchmarking.
+
+1. *A dependency is not pinned until something imports it.* After `go get`, fasthttp sat in
+   `go.mod` marked `// indirect`, because no Go file referenced it yet. `make tidy` at that
+   moment would have deleted the require block and silently undone the pin. Task 2 fixed it by
+   importing fasthttp for real, but the hazard was invisible until the command was in front of
+   me.
+
+2. *A tidiness check that can fail finds things a warning never would.* The plan required the
+   Go directive to read exactly `go 1.25`; `go mod tidy` rewrites that to `go 1.25.0`
+   deterministically. Two decisions that each looked obviously correct were quietly
+   incompatible, and only the CI step's `git diff --exit-code` surfaced it. `go 1.25.0`
+   expresses the same minimum, so it is kept and the plan's constraint is the one that gave
+   way. Recorded in [M0-scaffold.md](milestones/M0-scaffold.md).
+
+**Measured:** The first real number in the project, and it is deliberately not rice's.
+`BenchmarkFasthttpBaseline` — a bare fasthttp handler writing a plaintext body on a reused,
+pre-warmed `*fasthttp.RequestCtx` — costs **11.17 ns/op, 0 B/op, 0 allocs/op** (median of ten
+runs, range 11.06–11.26) on an Apple M2 Pro under go1.25.6 darwin/arm64. Raw output in
+[bench/results/M0-fasthttp-baseline.txt](../bench/results/M0-fasthttp-baseline.txt). Because
+the floor is a true zero, every allocation rice reports from here on is rice's own.
+
+**Next:** M1 — `Handler`, a `Ctx` that thinly wraps `*fasthttp.RequestCtx`, an `App` serving
+one hardcoded handler over a real socket, and a `Ctx` allocated per request on purpose. Do not
+optimise it. The delta from 11.17 ns/op and 0 allocs is the baseline M6 has to beat.
+
+---
+
 ## 2026-09-02 — M0 — Design phase: docs written, no code
 
 **Did:** Established the design documents in `docs/`: overview and non-goals, nine design

@@ -10,7 +10,7 @@ a retrospective in `docs/milestones/`. That is principle 9, made operational.
 
 ---
 
-### ☐ M0 — Scaffold
+### ☑ M0 — Scaffold
 
 Repository skeleton, nothing that serves traffic.
 

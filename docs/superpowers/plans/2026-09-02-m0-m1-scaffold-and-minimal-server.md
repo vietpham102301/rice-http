@@ -466,13 +466,13 @@ git commit -m "ci: run lint, race tests, and a benchmark smoke run on push"
 - Consumes: the resolved fasthttp version from Task 1 Step 1, and the baseline numbers from Task 2 Step 7.
 - Produces: nothing other tasks depend on.
 
-- [ ] **Step 1: Write the milestone retrospective**
+- [x] **Step 1: Write the milestone retrospective**
 
 Create `docs/milestones/M0-scaffold.md` from `docs/milestones/TEMPLATE.md`. Fill in every section. The Measurements table takes the `BenchmarkFasthttpBaseline` numbers from `bench/results/M0-fasthttp-baseline.txt`, with the hardware line copied from that file's stamp header. Record the resolved fasthttp version in the Design notes section.
 
 The Retrospective section must be written honestly rather than filled with plausible text. If nothing surprised you, write that nothing did and say what you expected to be harder.
 
-- [ ] **Step 2: Mark M0 done in the roadmap**
+- [x] **Step 2: Mark M0 done in the roadmap**
 
 In `docs/04-roadmap.md`, change the M0 heading marker from `☐` to `☑`:
 
@@ -480,13 +480,13 @@ In `docs/04-roadmap.md`, change the M0 heading marker from `☐` to `☑`:
 ### ☑ M0 — Scaffold
 ```
 
-- [ ] **Step 3: Prepend a journal entry**
+- [x] **Step 3: Prepend a journal entry**
 
 In `docs/progress.md`, insert a new entry directly below the `---` separator and above the existing `## 2026-09-02 — M0 — Design phase` entry, using the four-field shape defined at the top of that file: Did, Learned, Measured, Next. The Measured field carries the real baseline number, which is the first real number in the project.
 
 Do not edit the existing entry. The journal is append-only.
 
-- [ ] **Step 4: Verify the links**
+- [x] **Step 4: Verify the links**
 
 ```bash
 grep -n "M0" docs/04-roadmap.md docs/progress.md docs/milestones/M0-scaffold.md
@@ -494,7 +494,7 @@ grep -n "M0" docs/04-roadmap.md docs/progress.md docs/milestones/M0-scaffold.md
 
 Expected: the roadmap shows `☑ M0`, and both the journal and the milestone doc reference the recorded results file.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add docs
