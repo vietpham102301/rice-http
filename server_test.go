@@ -171,3 +171,32 @@ func TestAddrIsEmptyBeforeServing(t *testing.T) {
 		t.Errorf("Addr() = %q before serving, want empty string", got)
 	}
 }
+
+func TestServeReturns404ForAnUnregisteredPath(t *testing.T) {
+	app := rice.New()
+	app.GET("/known", func(c *rice.Ctx) error { return c.String(200, "known") })
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go func() { _ = app.Serve(ln) }()
+
+	addr := waitForAddr(t, app)
+
+	if status, body := get(t, addr, "/known"); status != 200 || body != "known" {
+		t.Errorf("registered route: got %d %q, want 200 %q", status, body, "known")
+	}
+
+	status, body := get(t, addr, "/unknown")
+	if status != 404 {
+		t.Errorf("unregistered route: status = %d, want 404", status)
+	}
+	if body != "Not Found" {
+		t.Errorf("unregistered route: body = %q, want %q", body, "Not Found")
+	}
+
+	if err := app.Shutdown(context.Background()); err != nil {
+		t.Errorf("Shutdown returned %v, want nil", err)
+	}
+}

@@ -1,6 +1,7 @@
 package rice
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/valyala/fasthttp"
@@ -49,4 +50,57 @@ func TestAllocBudgetMethodAndPath(t *testing.T) {
 
 	budget(t, "Ctx.Method", 0, func() { _ = c.Method() })
 	budget(t, "Ctx.Path", 0, func() { _ = c.Path() })
+}
+
+func TestAllocBudgetLookupHit(t *testing.T) {
+	app := New()
+	app.GET("/users", func(c *Ctx) error { return nil })
+
+	method := []byte("GET")
+	path := []byte("/users")
+
+	if _, ok := app.lookup(method, path); !ok {
+		t.Fatal("route not registered; the budget below would be measuring the miss path")
+	}
+
+	budget(t, "App.lookup hit", 0, func() {
+		_, _ = app.lookup(method, path)
+	})
+}
+
+func TestAllocBudgetLookupMiss(t *testing.T) {
+	app := New()
+	app.GET("/users", func(c *Ctx) error { return nil })
+
+	method := []byte("GET")
+	path := []byte("/absent")
+
+	if _, ok := app.lookup(method, path); ok {
+		t.Fatal("route unexpectedly found; the budget below would be measuring a hit")
+	}
+
+	budget(t, "App.lookup miss", 0, func() {
+		_, _ = app.lookup(method, path)
+	})
+}
+
+// TestAllocBudgetLookupAtScale guards the map probe specifically. If someone
+// rewrites Tree.Lookup as key := string(path) the optimisation is lost and this
+// fails, while every behavioural test keeps passing.
+func TestAllocBudgetLookupAtScale(t *testing.T) {
+	app := New()
+	for i := 0; i < 1000; i++ {
+		app.GET("/route/"+strconv.Itoa(i), func(c *Ctx) error { return nil })
+	}
+
+	method := []byte("GET")
+	path := []byte("/route/500")
+
+	if _, ok := app.lookup(method, path); !ok {
+		t.Fatal("route not registered")
+	}
+
+	budget(t, "App.lookup with 1000 routes", 0, func() {
+		_, _ = app.lookup(method, path)
+	})
 }
