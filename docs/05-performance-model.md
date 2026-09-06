@@ -37,14 +37,18 @@ test, not a benchmark, so a regression fails CI rather than merely looking worse
 | Router lookup, 5 parameters | 0 | TARGET (M6, needs slot sizing) |
 | Chain call, 0 middleware | 0 | TARGET (M4) |
 | Chain call, 5 middleware | 0 | TARGET (M4) |
-| `c.Method`, `c.Path` | 0 | TARGET (M1) |
-| `c.String`, `c.Bytes` | 0 | TARGET (M1) |
+| **End to end: single handler, unpooled Ctx (M1 baseline)** | 1 | MEASURED M1 |
+| `c.Method`, `c.Path` | 0 | MEASURED M1 |
+| `c.String`, `c.Bytes` | 0 | MEASURED M1 |
 | `c.Param`, `c.Query`, `c.Header` | 0 | TARGET (M3) |
 | `c.ParamString` | 1 | TARGET (M3) |
 | `c.Set` / `c.Get`, up to inline capacity | 0 | TARGET (M6) |
 | **End to end: static route, no middleware, plaintext** | **0** | TARGET (M6) |
 | **End to end: `/users/:id`, 3 middleware, plaintext** | **0** | TARGET (M6) |
 | `c.JSON` of a small struct | documented, not bounded | TARGET (M8) |
+
+Measured values come from `bench/results/M1-minimal-server.txt`. Re-run
+`make bench-record` on your own machine before comparing.
 
 Raising a budget is a design change. It requires a note in the pull request explaining what
 was bought with the allocation, and if the reasoning is interesting, an ADR.

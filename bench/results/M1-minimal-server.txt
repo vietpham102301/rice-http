@@ -1,0 +1,52 @@
+# rice benchmark results: M1-minimal-server
+# date: 2026-09-06T04:13:32Z
+# go:   go version go1.25.6 darwin/arm64
+# os:   Darwin 25.6.0 arm64
+# cpu:  Apple M2 Pro
+
+goos: darwin
+goarch: arm64
+pkg: github.com/vietpham102301/rice-http/bench
+cpu: Apple M2 Pro
+BenchmarkFasthttpBaseline-12        	106079418	        11.35 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFasthttpBaseline-12        	91404196	        11.51 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFasthttpBaseline-12        	100000000	        10.99 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFasthttpBaseline-12        	100000000	        11.05 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFasthttpBaseline-12        	100000000	        11.07 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFasthttpBaseline-12        	100000000	        11.06 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFasthttpBaseline-12        	100000000	        11.00 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFasthttpBaseline-12        	100000000	        11.04 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFasthttpBaseline-12        	100000000	        11.09 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFasthttpBaseline-12        	100000000	        11.04 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRiceDispatch-12            	46706388	        25.44 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRiceDispatch-12            	47559362	        25.29 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRiceDispatch-12            	47248279	        25.45 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRiceDispatch-12            	45558518	        25.66 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRiceDispatch-12            	46461578	        25.35 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRiceDispatch-12            	45348402	        25.69 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRiceDispatch-12            	47350119	        25.54 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRiceDispatch-12            	47387592	        25.47 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRiceDispatch-12            	47084517	        25.91 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRiceDispatch-12            	48054139	        25.51 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRiceDispatchNotFound-12    	87468337	        13.93 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRiceDispatchNotFound-12    	86880186	        13.93 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRiceDispatchNotFound-12    	86460258	        13.94 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRiceDispatchNotFound-12    	85502056	        13.93 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRiceDispatchNotFound-12    	86600917	        13.94 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRiceDispatchNotFound-12    	81874237	        13.98 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRiceDispatchNotFound-12    	87156254	        14.01 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRiceDispatchNotFound-12    	87711552	        13.97 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRiceDispatchNotFound-12    	87275107	        13.97 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRiceDispatchNotFound-12    	83496900	        14.02 ns/op	      16 B/op	       1 allocs/op
+BenchmarkCtxSetHeader-12            	17483101	        68.35 ns/op	      16 B/op	       1 allocs/op
+BenchmarkCtxSetHeader-12            	17557388	        67.81 ns/op	      16 B/op	       1 allocs/op
+BenchmarkCtxSetHeader-12            	17797002	        68.36 ns/op	      16 B/op	       1 allocs/op
+BenchmarkCtxSetHeader-12            	17653840	        68.19 ns/op	      16 B/op	       1 allocs/op
+BenchmarkCtxSetHeader-12            	17495516	        68.57 ns/op	      16 B/op	       1 allocs/op
+BenchmarkCtxSetHeader-12            	17518684	        67.88 ns/op	      16 B/op	       1 allocs/op
+BenchmarkCtxSetHeader-12            	17612739	        68.36 ns/op	      16 B/op	       1 allocs/op
+BenchmarkCtxSetHeader-12            	17705066	        68.46 ns/op	      16 B/op	       1 allocs/op
+BenchmarkCtxSetHeader-12            	17369047	        68.15 ns/op	      16 B/op	       1 allocs/op
+BenchmarkCtxSetHeader-12            	17580946	        68.64 ns/op	      16 B/op	       1 allocs/op
+PASS
+ok  	github.com/vietpham102301/rice-http/bench	49.251s
