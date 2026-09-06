@@ -1,0 +1,22 @@
+# rice benchmark results: M0-fasthttp-baseline
+# date: 2026-09-05T10:25:54Z
+# go:   go version go1.25.6 darwin/arm64
+# os:   Darwin 25.6.0 arm64
+# cpu:  Apple M2 Pro
+
+goos: darwin
+goarch: arm64
+pkg: github.com/vietpham102301/rice-http/bench
+cpu: Apple M2 Pro
+BenchmarkFasthttpBaseline-12    	105125317	        11.21 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFasthttpBaseline-12    	100000000	        11.16 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFasthttpBaseline-12    	100000000	        11.25 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFasthttpBaseline-12    	100000000	        11.18 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFasthttpBaseline-12    	100000000	        11.15 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFasthttpBaseline-12    	100000000	        11.12 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFasthttpBaseline-12    	100000000	        11.06 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFasthttpBaseline-12    	100000000	        11.20 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFasthttpBaseline-12    	100000000	        11.12 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFasthttpBaseline-12    	100000000	        11.26 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/vietpham102301/rice-http/bench	12.331s

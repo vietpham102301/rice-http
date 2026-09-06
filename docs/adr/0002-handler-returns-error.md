@@ -48,3 +48,8 @@ committed it may only be able to log). This case needs a documented rule and a t
 
 **Costs:** developers arriving from Gin have to unlearn `c.Abort`. Accepted; the alternative
 is inheriting the bug class.
+
+**Resolved in M1:** the ambiguous case above is settled. A handler that writes a
+response and then returns an error has its body discarded and receives the error
+handler's response. The rule is enforced by
+`TestHandleDiscardsAPartialBodyWhenTheHandlerErrors` in `app_test.go`.

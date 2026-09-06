@@ -72,7 +72,7 @@ Files created by this plan, and what each is responsible for.
 - Consumes: nothing.
 - Produces: the module path `github.com/vietpham102301/rice-http` and package name `rice`, which every later task imports. The make targets `test`, `bench`, `bench-record`, `cover`, `lint`, `tidy`.
 
-- [ ] **Step 1: Initialise the module and pin fasthttp**
+- [x] **Step 1: Initialise the module and pin fasthttp**
 
 ```bash
 cd /Users/vietpham1023/dev/rice-http
@@ -88,7 +88,7 @@ grep fasthttp go.mod
 
 Do not hand-write a version number. Whatever `@latest` resolves to is the pin, and `go.sum` locks it.
 
-- [ ] **Step 2: Confirm the Go directive**
+- [x] **Step 2: Confirm the Go directive**
 
 Open `go.mod` and ensure the directive line reads exactly:
 
@@ -98,7 +98,7 @@ go 1.25
 
 If `go mod init` wrote a more specific version such as `go 1.25.6`, change it to `go 1.25`. A patch-level directive forces every contributor onto that exact patch for no benefit.
 
-- [ ] **Step 3: Write the package doc**
+- [x] **Step 3: Write the package doc**
 
 Create `doc.go`:
 
@@ -124,7 +124,7 @@ Create `doc.go`:
 package rice
 ```
 
-- [ ] **Step 4: Write the Makefile**
+- [x] **Step 4: Write the Makefile**
 
 Create `Makefile`. Note that recipe lines must be indented with a real tab character, and that `$` is escaped as `$$` so make passes a literal dollar sign to the shell:
 
@@ -161,7 +161,7 @@ tidy:
 	$(GO) mod tidy
 ```
 
-- [ ] **Step 5: Add coverage output to .gitignore**
+- [x] **Step 5: Add coverage output to .gitignore**
 
 Append to the existing `.gitignore`:
 
@@ -169,7 +169,7 @@ Append to the existing `.gitignore`:
 coverage.out
 ```
 
-- [ ] **Step 6: Verify**
+- [x] **Step 6: Verify**
 
 ```bash
 make lint
@@ -178,7 +178,7 @@ make test
 
 Expected: `make lint` produces no output and exits 0. `make test` prints `?   github.com/vietpham102301/rice-http  [no test files]` and exits 0. `make bench` will fail at this point because `bench/` does not exist yet; that is Task 2.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add go.mod go.sum doc.go Makefile .gitignore
@@ -202,7 +202,7 @@ git commit -m "chore: initialise go module, package doc, and make targets"
 
 This task answers M0's question: what does the measurement rig look like, before there is anything to measure? The answer is that the rig's first job is to measure the transport with no framework on top, so that M1 has something honest to be compared against.
 
-- [ ] **Step 1: Write the bench package doc**
+- [x] **Step 1: Write the bench package doc**
 
 Create `bench/doc.go`:
 
@@ -231,7 +231,7 @@ Create `bench/doc.go`:
 package bench
 ```
 
-- [ ] **Step 2: Write the shared helper**
+- [x] **Step 2: Write the shared helper**
 
 Create `bench/helpers_test.go`:
 
@@ -251,7 +251,7 @@ func newRequestCtx(method, uri string) *fasthttp.RequestCtx {
 }
 ```
 
-- [ ] **Step 3: Write the baseline benchmark**
+- [x] **Step 3: Write the baseline benchmark**
 
 Create `bench/fasthttp_baseline_test.go`:
 
@@ -285,7 +285,7 @@ func BenchmarkFasthttpBaseline(b *testing.B) {
 }
 ```
 
-- [ ] **Step 4: Run it and confirm the rig works**
+- [x] **Step 4: Run it and confirm the rig works**
 
 ```bash
 go test ./bench/... -run '^$' -bench . -benchmem -count=1
@@ -293,7 +293,7 @@ go test ./bench/... -run '^$' -bench . -benchmem -count=1
 
 Expected: one benchmark line for `BenchmarkFasthttpBaseline`, reporting `0 B/op` and `0 allocs/op`. If it reports allocations, the warm-up call in Step 3 is missing or the response buffer is being reset inside the loop. Investigate before continuing, because every later number depends on this one being trustworthy.
 
-- [ ] **Step 5: Write the recording script**
+- [x] **Step 5: Write the recording script**
 
 Create `scripts/bench.sh`:
 
@@ -330,7 +330,7 @@ Make it executable:
 chmod +x scripts/bench.sh
 ```
 
-- [ ] **Step 6: Write the results README**
+- [x] **Step 6: Write the results README**
 
 Create `bench/results/README.md`:
 
@@ -357,7 +357,7 @@ Install benchstat with:
     go install golang.org/x/perf/cmd/benchstat@latest
 ```
 
-- [ ] **Step 7: Record the M0 baseline**
+- [x] **Step 7: Record the M0 baseline**
 
 ```bash
 make bench-record LABEL=M0-fasthttp-baseline
@@ -365,7 +365,7 @@ make bench-record LABEL=M0-fasthttp-baseline
 
 Expected: `bench/results/M0-fasthttp-baseline.txt` exists, has the stamp header, and contains ten runs of `BenchmarkFasthttpBaseline`.
 
-- [ ] **Step 8: Verify the make targets**
+- [x] **Step 8: Verify the make targets**
 
 ```bash
 make lint
@@ -375,7 +375,7 @@ make bench
 
 Expected: all three exit 0. M0's exit criterion is now met.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add bench scripts
@@ -393,7 +393,7 @@ git commit -m "bench: add benchmark harness and raw fasthttp baseline"
 - Consumes: the make targets from Task 1.
 - Produces: nothing other tasks depend on.
 
-- [ ] **Step 1: Write the workflow**
+- [x] **Step 1: Write the workflow**
 
 Create `.github/workflows/ci.yml`:
 
@@ -433,7 +433,7 @@ jobs:
 
 The benchmark step runs with `-count=1` and is a smoke test only. Its job is to prove the benchmarks still compile and run, not to produce numbers. CI hardware is too noisy to compare timings across runs, which is why recorded results come from `make bench-record` on a known machine.
 
-- [ ] **Step 2: Verify locally**
+- [x] **Step 2: Verify locally**
 
 The workflow cannot be run locally, so run what it runs:
 
@@ -446,7 +446,7 @@ make bench
 
 Expected: all exit 0.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add .github/workflows/ci.yml
@@ -466,13 +466,13 @@ git commit -m "ci: run lint, race tests, and a benchmark smoke run on push"
 - Consumes: the resolved fasthttp version from Task 1 Step 1, and the baseline numbers from Task 2 Step 7.
 - Produces: nothing other tasks depend on.
 
-- [ ] **Step 1: Write the milestone retrospective**
+- [x] **Step 1: Write the milestone retrospective**
 
 Create `docs/milestones/M0-scaffold.md` from `docs/milestones/TEMPLATE.md`. Fill in every section. The Measurements table takes the `BenchmarkFasthttpBaseline` numbers from `bench/results/M0-fasthttp-baseline.txt`, with the hardware line copied from that file's stamp header. Record the resolved fasthttp version in the Design notes section.
 
 The Retrospective section must be written honestly rather than filled with plausible text. If nothing surprised you, write that nothing did and say what you expected to be harder.
 
-- [ ] **Step 2: Mark M0 done in the roadmap**
+- [x] **Step 2: Mark M0 done in the roadmap**
 
 In `docs/04-roadmap.md`, change the M0 heading marker from `☐` to `☑`:
 
@@ -480,13 +480,13 @@ In `docs/04-roadmap.md`, change the M0 heading marker from `☐` to `☑`:
 ### ☑ M0 — Scaffold
 ```
 
-- [ ] **Step 3: Prepend a journal entry**
+- [x] **Step 3: Prepend a journal entry**
 
 In `docs/progress.md`, insert a new entry directly below the `---` separator and above the existing `## 2026-09-02 — M0 — Design phase` entry, using the four-field shape defined at the top of that file: Did, Learned, Measured, Next. The Measured field carries the real baseline number, which is the first real number in the project.
 
 Do not edit the existing entry. The journal is append-only.
 
-- [ ] **Step 4: Verify the links**
+- [x] **Step 4: Verify the links**
 
 ```bash
 grep -n "M0" docs/04-roadmap.md docs/progress.md docs/milestones/M0-scaffold.md
@@ -494,7 +494,7 @@ grep -n "M0" docs/04-roadmap.md docs/progress.md docs/milestones/M0-scaffold.md
 
 Expected: the roadmap shows `☑ M0`, and both the journal and the milestone doc reference the recorded results file.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add docs
@@ -526,7 +526,7 @@ M1 has no router. The `App` serves exactly one handler, and it allocates a `Ctx`
 
 The `app` field is unused in M1 and exists because Task 7's `handle` sets it and M5's error funnel reads it. It is set now so that the `reset` signature does not change under later tasks.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `ctx_test.go`:
 
@@ -583,13 +583,13 @@ func TestCtxResetRebindsToANewRequest(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `go test ./... -run TestCtx -v`
 
 Expected: FAIL to compile, with `undefined: Ctx`.
 
-- [ ] **Step 3: Write the handler type**
+- [x] **Step 3: Write the handler type**
 
 Create `handler.go`:
 
@@ -607,7 +607,7 @@ package rice
 type Handler func(c *Ctx) error
 ```
 
-- [ ] **Step 4: Write the context**
+- [x] **Step 4: Write the context**
 
 Create `ctx.go`:
 
@@ -652,13 +652,13 @@ func (c *Ctx) Method() []byte { return c.fctx.Method() }
 func (c *Ctx) Path() []byte { return c.fctx.Path() }
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `go test ./... -run TestCtx -v`
 
 Expected: PASS for all three tests.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add handler.go ctx.go ctx_test.go
@@ -686,7 +686,7 @@ git commit -m "feat: add Handler type and the Ctx read side"
 
 `String` and `Bytes` return `error` although they cannot currently fail. The signature matches the `Handler` return type so that `return c.String(200, "ok")` is the idiomatic last line of a handler, and it leaves room for a streaming write to report a failure later without an API break.
 
-- [ ] **Step 1: Write the failing behaviour tests**
+- [x] **Step 1: Write the failing behaviour tests**
 
 Create `ctx_response_test.go`:
 
@@ -779,13 +779,13 @@ func TestBodyIsOverwrittenNotAppendedOnSecondWrite(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `go test ./... -run 'TestString|TestBytes|TestStatus|TestSetHeader|TestBody' -v`
 
 Expected: FAIL to compile, with `undefined: MIMETextPlainUTF8` and undefined methods.
 
-- [ ] **Step 3: Write the response side**
+- [x] **Step 3: Write the response side**
 
 Create `ctx_response.go`:
 
@@ -834,13 +834,13 @@ func (c *Ctx) Bytes(code int, b []byte) error {
 }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `go test ./... -run 'TestString|TestBytes|TestStatus|TestSetHeader|TestBody' -v`
 
 Expected: PASS for all five tests.
 
-- [ ] **Step 5: Write the allocation budget tests**
+- [x] **Step 5: Write the allocation budget tests**
 
 These are the contract from `docs/05-performance-model.md`, enforced as tests so a regression fails CI rather than merely looking worse in a benchmark.
 
@@ -901,7 +901,7 @@ func TestAllocBudgetMethodAndPath(t *testing.T) {
 }
 ```
 
-- [ ] **Step 6: Run the budget tests**
+- [x] **Step 6: Run the budget tests**
 
 Run: `go test ./... -run TestAllocBudget -v`
 
@@ -914,13 +914,13 @@ go test -run TestAllocBudgetString -memprofile mem.out .
 go tool pprof -top -alloc_objects mem.out
 ```
 
-- [ ] **Step 7: Run the full suite with the race detector**
+- [x] **Step 7: Run the full suite with the race detector**
 
 Run: `make test`
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add ctx_response.go ctx_response_test.go alloc_test.go
@@ -951,7 +951,7 @@ Two shape decisions worth stating, because a reviewer will ask.
 
 `FasthttpHandler` is exported so that benchmarks in package `bench` can call the dispatch path directly, without a socket. It is also the supported way to mount rice inside an existing fasthttp server, so it is real API rather than a test hook.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `app_test.go`:
 
@@ -1072,13 +1072,13 @@ func TestNewAppliesOptions(t *testing.T) {
 
 The fourth test resolves the ambiguity ADR-0002 flagged: a handler that writes a response and then returns an error. The rule is that the error wins and the partial body is discarded. Encoding it as a test now means M5 cannot quietly change it.
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `go test ./... -run 'TestHandle|TestFasthttpHandler|TestNewApplies' -v`
 
 Expected: FAIL to compile, with `undefined: New`.
 
-- [ ] **Step 3: Write the App**
+- [x] **Step 3: Write the App**
 
 Create `app.go`:
 
@@ -1168,19 +1168,19 @@ func (a *App) handleError(c *Ctx, err error) {
 }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `go test ./... -run 'TestHandle|TestFasthttpHandler|TestNewApplies' -v`
 
 Expected: PASS for all six tests.
 
-- [ ] **Step 5: Verify vet is happy with the unused parameter**
+- [x] **Step 5: Verify vet is happy with the unused parameter**
 
 Run: `make lint`
 
 Expected: exit 0. `go vet` does not flag unused function parameters. If a future linter does, keep the parameter and silence the linter rather than dropping it, because M5 needs it.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add app.go app_test.go
@@ -1208,7 +1208,7 @@ git commit -m "feat: add App with request dispatch and a minimal error funnel"
 
 `Shutdown` takes a `context.Context` to match the signature committed in `docs/03-core-concepts.md`. fasthttp's own `Shutdown` takes no deadline, so it runs in a goroutine and the deadline is enforced by selecting against `ctx.Done()`. That is honest but blunt: on timeout the server keeps draining in the background. M7 refines it.
 
-- [ ] **Step 1: Write the failing integration tests**
+- [x] **Step 1: Write the failing integration tests**
 
 Create `server_test.go`. Note the package clause: these are black-box tests in `rice_test`, exercising only exported API, which is how a user would use it.
 
@@ -1388,13 +1388,13 @@ func TestAddrIsEmptyBeforeServing(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `go test ./... -run 'TestServe|TestRun|TestShutdown|TestAddr' -v`
 
 Expected: FAIL to compile, with `undefined: app.Serve` and `undefined: rice.ErrShutdownTimeout`.
 
-- [ ] **Step 3: Write the server**
+- [x] **Step 3: Write the server**
 
 Create `server.go`:
 
@@ -1463,7 +1463,7 @@ func (a *App) Shutdown(ctx context.Context) error {
 }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `go test ./... -run 'TestServe|TestRun|TestShutdown|TestAddr' -v`
 
@@ -1471,13 +1471,13 @@ Expected: PASS for all six tests.
 
 If `TestRunReturnsAnErrorOnAnUnbindableAddress` passes on a machine where the test runs as root, port 1 will bind. In that case change the address to `"256.0.0.1:80"`, which cannot be parsed as an IP and fails on any machine.
 
-- [ ] **Step 5: Run the full suite with the race detector**
+- [x] **Step 5: Run the full suite with the race detector**
 
 Run: `make test`
 
 Expected: PASS with no race reports. The race detector matters here specifically: `Addr` reads `a.ln` from the test goroutine while `Serve` writes it from another, which is why both take the mutex.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add server.go server_test.go
@@ -1497,7 +1497,7 @@ git commit -m "feat: add Run, Serve, Addr, and deadline-aware Shutdown"
 - Consumes: `newRequestCtx` from Task 2, `rice.New`, `SetHandler`, `FasthttpHandler`, `Ctx.String` from Tasks 6 to 8.
 - Produces: the recorded numbers that Task 10 writes into the milestone retrospective, and that M6 is compared against.
 
-- [ ] **Step 1: Write the rice benchmarks**
+- [x] **Step 1: Write the rice benchmarks**
 
 Create `bench/rice_bench_test.go`:
 
@@ -1573,7 +1573,7 @@ func BenchmarkCtxSetHeader(b *testing.B) {
 }
 ```
 
-- [ ] **Step 2: Run the benchmarks and read the numbers**
+- [x] **Step 2: Run the benchmarks and read the numbers**
 
 ```bash
 go test ./bench/... -run '^$' -bench . -benchmem -count=1
@@ -1588,7 +1588,7 @@ go test ./bench/... -run '^$' -bench BenchmarkRiceDispatch -memprofile mem.out -
 go tool pprof -top -alloc_objects mem.out
 ```
 
-- [ ] **Step 3: Record the results**
+- [x] **Step 3: Record the results**
 
 ```bash
 make bench-record LABEL=M1-minimal-server
@@ -1596,7 +1596,7 @@ make bench-record LABEL=M1-minimal-server
 
 Expected: `bench/results/M1-minimal-server.txt` exists with the stamp header and ten runs of each benchmark.
 
-- [ ] **Step 4: Compare against the M0 baseline**
+- [x] **Step 4: Compare against the M0 baseline**
 
 ```bash
 go install golang.org/x/perf/cmd/benchstat@latest
@@ -1605,7 +1605,7 @@ benchstat bench/results/M0-fasthttp-baseline.txt bench/results/M1-minimal-server
 
 The two files contain different benchmark names, so benchstat will not pair them automatically. Read the two `BenchmarkFasthttpBaseline` figures against `BenchmarkRiceDispatch` by hand and write the delta into the milestone doc in Task 10. That delta, in nanoseconds and in allocations, is what M1 exists to produce.
 
-- [ ] **Step 5: Update the performance model with measured values**
+- [x] **Step 5: Update the performance model with measured values**
 
 In `docs/05-performance-model.md`, in the allocation budget table, change the Status column from `TARGET (M1)` to `MEASURED M1` on exactly the two rows carrying that label, and no others:
 
@@ -1631,7 +1631,7 @@ Measured values come from `bench/results/M1-minimal-server.txt`. Re-run
 `make bench-record` on your own machine before comparing.
 ```
 
-- [ ] **Step 6: Verify**
+- [x] **Step 6: Verify**
 
 ```bash
 make lint
@@ -1641,7 +1641,7 @@ make bench
 
 Expected: all exit 0.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add bench docs/05-performance-model.md
@@ -1662,7 +1662,7 @@ git commit -m "bench: record M1 dispatch baseline and update the performance mod
 - Consumes: the recorded numbers from Task 9.
 - Produces: nothing other tasks depend on.
 
-- [ ] **Step 1: Write the milestone retrospective**
+- [x] **Step 1: Write the milestone retrospective**
 
 Create `docs/milestones/M1-minimal-server.md` from `docs/milestones/TEMPLATE.md`. Fill in every section, including the Measurements table with the `BenchmarkRiceDispatch` numbers and the hardware stamp from `bench/results/M1-minimal-server.txt`.
 
@@ -1673,7 +1673,7 @@ The Design notes section must record the two decisions this milestone forced tha
 
 If either turns out to have had a defensible alternative, promote it to an ADR rather than leaving it in the milestone notes.
 
-- [ ] **Step 2: Resolve the open question in ADR-0002**
+- [x] **Step 2: Resolve the open question in ADR-0002**
 
 ADR-0002 lists as a consequence that a handler which writes a response and then returns an error is ambiguous, and that the case needs a documented rule and a test. Task 7 settled it: the error wins and the partial body is discarded.
 
@@ -1688,7 +1688,7 @@ handler's response. The rule is enforced by
 
 This is an addition, not a rewrite. ADRs are append-only, and adding a resolution to an open consequence does not change the decision.
 
-- [ ] **Step 3: Mark M1 done in the roadmap**
+- [x] **Step 3: Mark M1 done in the roadmap**
 
 In `docs/04-roadmap.md`, change the M1 heading marker from `☐` to `☑`:
 
@@ -1696,7 +1696,7 @@ In `docs/04-roadmap.md`, change the M1 heading marker from `☐` to `☑`:
 ### ☑ M1 — Minimal server
 ```
 
-- [ ] **Step 4: Prepend a journal entry**
+- [x] **Step 4: Prepend a journal entry**
 
 In `docs/progress.md`, insert a new M1 entry at the top of the entry list, above the M0 entry added in Task 4, using the four-field shape: Did, Learned, Measured, Next.
 
@@ -1704,7 +1704,7 @@ The Measured field carries the concrete delta between `BenchmarkFasthttpBaseline
 
 The Next field points at M2: a deliberately naive `map[string]Handler` router, whose purpose is to produce a number for M3's radix tree to beat.
 
-- [ ] **Step 5: Final verification of both milestones**
+- [x] **Step 5: Final verification of both milestones**
 
 ```bash
 make lint
@@ -1716,7 +1716,7 @@ git status --short
 
 Expected: lint, test and bench exit 0. `git status --short` is empty, meaning everything is committed. Confirm by eye that `docs/04-roadmap.md` shows `☑` for M0 and M1 and `☐` for M2 through M8.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add docs

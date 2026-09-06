@@ -5,3 +5,4 @@
 *.test
 *.out
 /bin/
+coverage.out

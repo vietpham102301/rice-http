@@ -10,7 +10,7 @@ a retrospective in `docs/milestones/`. That is principle 9, made operational.
 
 ---
 
-### ☐ M0 — Scaffold
+### ☑ M0 — Scaffold
 
 Repository skeleton, nothing that serves traffic.
 
@@ -25,7 +25,7 @@ Repository skeleton, nothing that serves traffic.
 
 ---
 
-### ☐ M1 — Minimal server
+### ☑ M1 — Minimal server
 
 An `App` that serves one hardcoded handler. No router, no middleware, no pooling.
 

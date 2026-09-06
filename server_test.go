@@ -1,0 +1,173 @@
+package rice_test
+
+import (
+	"context"
+	"io"
+	"net"
+	"net/http"
+	"testing"
+	"time"
+
+	rice "github.com/vietpham102301/rice-http"
+)
+
+// waitForAddr polls until the app has bound a listener, or fails the test.
+func waitForAddr(t *testing.T, app *rice.App) string {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if addr := app.Addr(); addr != "" {
+			return addr
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("server did not bind a listener within 2s")
+	return ""
+}
+
+// get issues a real HTTP request with the standard library client, which proves
+// rice speaks HTTP to something that is not fasthttp.
+func get(t *testing.T, addr, path string) (int, string) {
+	t.Helper()
+	resp, err := http.Get("http://" + addr + path)
+	if err != nil {
+		t.Fatalf("GET %s: %v", path, err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("reading body: %v", err)
+	}
+	return resp.StatusCode, string(body)
+}
+
+func TestServeAnswersARealRequestOnAnEphemeralPort(t *testing.T) {
+	app := rice.New()
+	app.SetHandler(func(c *rice.Ctx) error {
+		return c.String(200, "hello "+string(c.Path()))
+	})
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go func() { _ = app.Serve(ln) }()
+
+	addr := waitForAddr(t, app)
+
+	status, body := get(t, addr, "/world")
+	if status != 200 {
+		t.Errorf("status = %d, want 200", status)
+	}
+	if body != "hello /world" {
+		t.Errorf("body = %q, want %q", body, "hello /world")
+	}
+
+	if err := app.Shutdown(context.Background()); err != nil {
+		t.Errorf("Shutdown returned %v, want nil", err)
+	}
+}
+
+func TestRunBindsTheGivenAddress(t *testing.T) {
+	app := rice.New()
+	app.SetHandler(func(c *rice.Ctx) error { return c.String(200, "up") })
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- app.Run("127.0.0.1:0") }()
+
+	addr := waitForAddr(t, app)
+
+	status, body := get(t, addr, "/")
+	if status != 200 || body != "up" {
+		t.Errorf("got status %d body %q, want 200 %q", status, body, "up")
+	}
+
+	if err := app.Shutdown(context.Background()); err != nil {
+		t.Errorf("Shutdown returned %v, want nil", err)
+	}
+	if err := <-errCh; err != nil {
+		t.Errorf("Run returned %v after shutdown, want nil", err)
+	}
+}
+
+func TestRunReturnsAnErrorOnAnUnbindableAddress(t *testing.T) {
+	app := rice.New()
+
+	// Port 1 requires privileges this test does not have.
+	if err := app.Run("127.0.0.1:1"); err == nil {
+		t.Error("Run returned nil for an unbindable address, want an error")
+	}
+}
+
+func TestShutdownStopsAcceptingNewConnections(t *testing.T) {
+	app := rice.New()
+	app.SetHandler(func(c *rice.Ctx) error { return c.String(200, "up") })
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go func() { _ = app.Serve(ln) }()
+
+	addr := waitForAddr(t, app)
+	if status, _ := get(t, addr, "/"); status != 200 {
+		t.Fatalf("server was not up before shutdown: status %d", status)
+	}
+
+	if err := app.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown returned %v, want nil", err)
+	}
+
+	client := &http.Client{Timeout: time.Second}
+	if _, err := client.Get("http://" + addr + "/"); err == nil {
+		t.Error("a request succeeded after shutdown, want a connection error")
+	}
+}
+
+func TestShutdownReturnsErrShutdownTimeoutWhenTheDeadlinePasses(t *testing.T) {
+	release := make(chan struct{})
+	inFlight := make(chan struct{})
+
+	app := rice.New()
+	app.SetHandler(func(c *rice.Ctx) error {
+		close(inFlight)
+		<-release // hold the request open past the shutdown deadline
+		return c.String(200, "finally")
+	})
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go func() { _ = app.Serve(ln) }()
+
+	addr := waitForAddr(t, app)
+
+	go func() {
+		client := &http.Client{Timeout: 10 * time.Second}
+		resp, err := client.Get("http://" + addr + "/slow")
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+	}()
+
+	<-inFlight // the handler is now blocked
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	err = app.Shutdown(ctx)
+	close(release) // let the handler finish so the goroutine does not leak
+
+	if err != rice.ErrShutdownTimeout {
+		t.Errorf("Shutdown returned %v, want ErrShutdownTimeout", err)
+	}
+}
+
+func TestAddrIsEmptyBeforeServing(t *testing.T) {
+	app := rice.New()
+	if got := app.Addr(); got != "" {
+		t.Errorf("Addr() = %q before serving, want empty string", got)
+	}
+}
