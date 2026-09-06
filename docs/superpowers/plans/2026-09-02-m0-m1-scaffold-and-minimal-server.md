@@ -1208,7 +1208,7 @@ git commit -m "feat: add App with request dispatch and a minimal error funnel"
 
 `Shutdown` takes a `context.Context` to match the signature committed in `docs/03-core-concepts.md`. fasthttp's own `Shutdown` takes no deadline, so it runs in a goroutine and the deadline is enforced by selecting against `ctx.Done()`. That is honest but blunt: on timeout the server keeps draining in the background. M7 refines it.
 
-- [ ] **Step 1: Write the failing integration tests**
+- [x] **Step 1: Write the failing integration tests**
 
 Create `server_test.go`. Note the package clause: these are black-box tests in `rice_test`, exercising only exported API, which is how a user would use it.
 
@@ -1388,13 +1388,13 @@ func TestAddrIsEmptyBeforeServing(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `go test ./... -run 'TestServe|TestRun|TestShutdown|TestAddr' -v`
 
 Expected: FAIL to compile, with `undefined: app.Serve` and `undefined: rice.ErrShutdownTimeout`.
 
-- [ ] **Step 3: Write the server**
+- [x] **Step 3: Write the server**
 
 Create `server.go`:
 
@@ -1463,7 +1463,7 @@ func (a *App) Shutdown(ctx context.Context) error {
 }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `go test ./... -run 'TestServe|TestRun|TestShutdown|TestAddr' -v`
 
@@ -1471,13 +1471,13 @@ Expected: PASS for all six tests.
 
 If `TestRunReturnsAnErrorOnAnUnbindableAddress` passes on a machine where the test runs as root, port 1 will bind. In that case change the address to `"256.0.0.1:80"`, which cannot be parsed as an IP and fails on any machine.
 
-- [ ] **Step 5: Run the full suite with the race detector**
+- [x] **Step 5: Run the full suite with the race detector**
 
 Run: `make test`
 
 Expected: PASS with no race reports. The race detector matters here specifically: `Addr` reads `a.ln` from the test goroutine while `Serve` writes it from another, which is why both take the mutex.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add server.go server_test.go
