@@ -393,7 +393,7 @@ git commit -m "bench: add benchmark harness and raw fasthttp baseline"
 - Consumes: the make targets from Task 1.
 - Produces: nothing other tasks depend on.
 
-- [ ] **Step 1: Write the workflow**
+- [x] **Step 1: Write the workflow**
 
 Create `.github/workflows/ci.yml`:
 
@@ -433,7 +433,7 @@ jobs:
 
 The benchmark step runs with `-count=1` and is a smoke test only. Its job is to prove the benchmarks still compile and run, not to produce numbers. CI hardware is too noisy to compare timings across runs, which is why recorded results come from `make bench-record` on a known machine.
 
-- [ ] **Step 2: Verify locally**
+- [x] **Step 2: Verify locally**
 
 The workflow cannot be run locally, so run what it runs:
 
@@ -446,7 +446,7 @@ make bench
 
 Expected: all exit 0.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add .github/workflows/ci.yml
