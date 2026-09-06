@@ -60,8 +60,18 @@ func (a *App) handle(fctx *fasthttp.RequestCtx) {
 	if !ok {
 		// M1 allocated the Ctx before deciding whether it had a handler, so a
 		// miss paid for a context nobody read. M2 looks up first. The miss path
-		// still allocates one Ctx, because the funnel takes a *Ctx and M5 wants
-		// a real one to build a custom 404 from; M6's pool removes both.
+		// still constructs a Ctx, because the funnel takes a *Ctx and M5 wants
+		// a real one to build a custom 404 from.
+		//
+		// It costs zero allocations today, but only by accident: this Ctx is
+		// passed solely to handleError, a concrete method the compiler can see
+		// through, so escape analysis keeps it on the stack (go build
+		// -gcflags=-m reports "does not escape" here and "escapes to heap" on
+		// the hit path below, where h is a function value). That is a
+		// compiler-visibility effect, not a design guarantee. When M5 turns the
+		// funnel into a configurable ErrorHandler function value, this Ctx will
+		// escape too and the miss path goes back to one allocation. Do not
+		// build anything on the zero.
 		c := &Ctx{}
 		c.reset(a, fctx)
 		a.handleError(c, ErrNotFound)
