@@ -1,6 +1,7 @@
 package rice
 
 import (
+	"errors"
 	"net"
 	"sync"
 
@@ -19,9 +20,6 @@ type Option func(*App)
 // App is the root of a rice application. It owns the routes, the fasthttp
 // server, and the listener.
 type App struct {
-	// h is M1 scaffolding, removed in this milestone's dispatch task.
-	h Handler
-
 	// trees holds one route tree per common verb, indexed by a method constant.
 	// It is an array of values, so every element starts as a zero Tree whose
 	// inner map is nil until its first Insert.
@@ -50,12 +48,6 @@ func New(opts ...Option) *App {
 	return a
 }
 
-// SetHandler installs the single handler this App serves.
-//
-// M1 scaffolding. rice has no router yet, so every request reaches the same
-// handler. M2 replaces this with per-method route registration and removes it.
-func (a *App) SetHandler(h Handler) { a.h = h }
-
 // FasthttpHandler returns the request handler this App installs on its server.
 //
 // Use it to mount rice inside an existing fasthttp server, or to drive the
@@ -64,33 +56,47 @@ func (a *App) FasthttpHandler() fasthttp.RequestHandler { return a.handle }
 
 // handle is the dispatch path: one request in, one response out.
 func (a *App) handle(fctx *fasthttp.RequestCtx) {
-	// M1 allocates a Ctx per request on purpose. This line is the baseline that
-	// M6's sync.Pool is measured against. Do not optimise it here.
-	c := &Ctx{}
-	c.reset(a, fctx)
-
-	if a.h == nil {
-		fctx.SetStatusCode(fasthttp.StatusNotFound)
+	h, ok := a.lookup(fctx.Method(), fctx.Path())
+	if !ok {
+		// M1 allocated the Ctx before deciding whether it had a handler, so a
+		// miss paid for a context nobody read. M2 looks up first. The miss path
+		// still allocates one Ctx, because the funnel takes a *Ctx and M5 wants
+		// a real one to build a custom 404 from; M6's pool removes both.
+		c := &Ctx{}
+		c.reset(a, fctx)
+		a.handleError(c, ErrNotFound)
 		return
 	}
 
-	if err := a.h(c); err != nil {
+	// M2 allocates a Ctx per request on purpose. This is the baseline M6's
+	// sync.Pool is measured against. Do not optimise it here.
+	c := &Ctx{}
+	c.reset(a, fctx)
+
+	if err := h(c); err != nil {
 		a.handleError(c, err)
 	}
 }
 
-// handleError is M1's error funnel.
+// handleError is M2's error funnel.
 //
-// It discards any partially written body, responds 500, and never writes the
-// cause to the response: leaking internal error strings to clients is how
-// databases end up described in HTTP responses.
+// It discards any partially written body and never writes the cause to the
+// response: leaking internal error strings to clients is how databases end up
+// described in HTTP responses. ErrNotFound is the one error it recognises.
 //
-// M5 replaces this with a configurable ErrorHandler and the HTTPError type. The
-// err parameter is unused until then and is present so that the signature does
-// not change.
+// M5 replaces this with a configurable ErrorHandler and the HTTPError type,
+// at which point the errors.Is check below generalises rather than disappears.
 func (a *App) handleError(c *Ctx, err error) {
+	status := fasthttp.StatusInternalServerError
+	body := "Internal Server Error"
+
+	if errors.Is(err, ErrNotFound) {
+		status = fasthttp.StatusNotFound
+		body = "Not Found"
+	}
+
 	c.fctx.ResetBody()
-	c.fctx.SetStatusCode(fasthttp.StatusInternalServerError)
+	c.fctx.SetStatusCode(status)
 	c.fctx.SetContentType(MIMETextPlainUTF8)
-	c.fctx.SetBodyString("Internal Server Error")
+	c.fctx.SetBodyString(body)
 }

@@ -44,7 +44,7 @@ func get(t *testing.T, addr, path string) (int, string) {
 
 func TestServeAnswersARealRequestOnAnEphemeralPort(t *testing.T) {
 	app := rice.New()
-	app.SetHandler(func(c *rice.Ctx) error {
+	app.GET("/world", func(c *rice.Ctx) error {
 		return c.String(200, "hello "+string(c.Path()))
 	})
 
@@ -71,7 +71,7 @@ func TestServeAnswersARealRequestOnAnEphemeralPort(t *testing.T) {
 
 func TestRunBindsTheGivenAddress(t *testing.T) {
 	app := rice.New()
-	app.SetHandler(func(c *rice.Ctx) error { return c.String(200, "up") })
+	app.GET("/", func(c *rice.Ctx) error { return c.String(200, "up") })
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- app.Run("127.0.0.1:0") }()
@@ -102,7 +102,7 @@ func TestRunReturnsAnErrorOnAnUnbindableAddress(t *testing.T) {
 
 func TestShutdownStopsAcceptingNewConnections(t *testing.T) {
 	app := rice.New()
-	app.SetHandler(func(c *rice.Ctx) error { return c.String(200, "up") })
+	app.GET("/", func(c *rice.Ctx) error { return c.String(200, "up") })
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -130,7 +130,7 @@ func TestShutdownReturnsErrShutdownTimeoutWhenTheDeadlinePasses(t *testing.T) {
 	inFlight := make(chan struct{})
 
 	app := rice.New()
-	app.SetHandler(func(c *rice.Ctx) error {
+	app.GET("/slow", func(c *rice.Ctx) error {
 		close(inFlight)
 		<-release // hold the request open past the shutdown deadline
 		return c.String(200, "finally")
