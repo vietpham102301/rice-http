@@ -16,6 +16,58 @@ Each entry uses this shape:
 
 ---
 
+## 2026-09-06 — M1 — Minimal server: rice serves HTTP, and it costs one allocation
+
+**Did:** Built the thinnest framework that can answer a request. `Handler` returns an error
+and nothing else; `Ctx` wraps `*fasthttp.RequestCtx` with `Method`, `Path`, `Status`,
+`SetHeader`, `SetContentType`, `String` and `Bytes`; `App` dispatches one handler through a
+single error funnel; `Run`, `Serve`, `Addr` and a deadline-racing `Shutdown` put it on a real
+socket. 23 tests pass under `-race`, six of them black-box integration tests driving the
+server with `net/http` rather than fasthttp. No router, no middleware, no pooling.
+
+**Learned:** Three things, none of them about fasthttp.
+
+1. *A plan can be correct in every detail and still not execute in the order it names.* Task
+   5 declared a `Ctx` field of type `*App`; `App` arrives in Task 7. The plan was internally
+   consistent and impossible. Tasks 5 to 7 were merged rather than reordered, because the
+   field exists to keep `reset`'s signature stable and that is worth more than the task
+   boundary. The lesson is to cut plan tasks along compilation units, not concepts: a task
+   that cannot end with `go build` succeeding is half a task.
+
+2. *The 404 path allocates a `Ctx` it never uses.* `handle` allocates before checking whether
+   a handler is registered, so the miss path pays for a context nobody reads — visible as
+   `BenchmarkRiceDispatchNotFound` costing 2.9 ns more than the baseline while doing strictly
+   less work. Harmless in M1, where there is one handler. From M2 the miss path is the one
+   hostile traffic hits hardest. Deliberately not fixed here, because moving that line would
+   optimise the exact thing this milestone exists to measure.
+
+3. *The performance model is an allocation model wearing a broader title.* One `SetHeader`
+   call costs 43 ns and zero allocations. Time and allocations are independent axes and
+   [05-performance-model.md](05-performance-model.md) tracks only one, which is a defensible
+   scope but not what the name promises.
+
+**Measured:** The number M1 exists to produce, all medians of ten runs from one recording on
+one machine — Apple M2 Pro, go1.25.6 darwin/arm64,
+[bench/results/M1-minimal-server.txt](../bench/results/M1-minimal-server.txt):
+
+| Benchmark | ns/op | B/op | allocs/op |
+| --- | --- | --- | --- |
+| `BenchmarkFasthttpBaseline` | 11.05 | 0 | 0 |
+| `BenchmarkRiceDispatch` | 25.49 | 16 | 1 |
+| **Framework cost** | **+14.44** | **+16** | **+1** |
+
+Sixteen bytes is the `Ctx`: two pointers. The allocation is deliberate, it is the only one on
+the path, and it is what M6's `sync.Pool` has to remove. Worth expecting now: the 404 path
+suggests the allocation itself is worth roughly 3 ns of the 14.44, so M6's headline is likely
+to be "1 alloc to 0" rather than a large latency win.
+
+**Next:** M2 — a deliberately naive `map[string]Handler` per method, with 404 routed through
+the error funnel. Its purpose is not to be good. It is to produce a lookup number for 10, 100
+and 1000 routes that M3's radix tree has to beat, so that the tree is built on evidence rather
+than on faith.
+
+---
+
 ## 2026-09-06 — M0 — Scaffold: the rig exists, and its floor is a true zero
 
 **Did:** Created the module at `github.com/vietpham102301/rice-http` with fasthttp v1.73.0 as

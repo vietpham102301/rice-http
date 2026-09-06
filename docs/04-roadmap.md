@@ -25,7 +25,7 @@ Repository skeleton, nothing that serves traffic.
 
 ---
 
-### ☐ M1 — Minimal server
+### ☑ M1 — Minimal server
 
 An `App` that serves one hardcoded handler. No router, no middleware, no pooling.
 

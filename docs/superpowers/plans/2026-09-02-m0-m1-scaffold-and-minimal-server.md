@@ -1662,7 +1662,7 @@ git commit -m "bench: record M1 dispatch baseline and update the performance mod
 - Consumes: the recorded numbers from Task 9.
 - Produces: nothing other tasks depend on.
 
-- [ ] **Step 1: Write the milestone retrospective**
+- [x] **Step 1: Write the milestone retrospective**
 
 Create `docs/milestones/M1-minimal-server.md` from `docs/milestones/TEMPLATE.md`. Fill in every section, including the Measurements table with the `BenchmarkRiceDispatch` numbers and the hardware stamp from `bench/results/M1-minimal-server.txt`.
 
@@ -1673,7 +1673,7 @@ The Design notes section must record the two decisions this milestone forced tha
 
 If either turns out to have had a defensible alternative, promote it to an ADR rather than leaving it in the milestone notes.
 
-- [ ] **Step 2: Resolve the open question in ADR-0002**
+- [x] **Step 2: Resolve the open question in ADR-0002**
 
 ADR-0002 lists as a consequence that a handler which writes a response and then returns an error is ambiguous, and that the case needs a documented rule and a test. Task 7 settled it: the error wins and the partial body is discarded.
 
@@ -1688,7 +1688,7 @@ handler's response. The rule is enforced by
 
 This is an addition, not a rewrite. ADRs are append-only, and adding a resolution to an open consequence does not change the decision.
 
-- [ ] **Step 3: Mark M1 done in the roadmap**
+- [x] **Step 3: Mark M1 done in the roadmap**
 
 In `docs/04-roadmap.md`, change the M1 heading marker from `☐` to `☑`:
 
@@ -1696,7 +1696,7 @@ In `docs/04-roadmap.md`, change the M1 heading marker from `☐` to `☑`:
 ### ☑ M1 — Minimal server
 ```
 
-- [ ] **Step 4: Prepend a journal entry**
+- [x] **Step 4: Prepend a journal entry**
 
 In `docs/progress.md`, insert a new M1 entry at the top of the entry list, above the M0 entry added in Task 4, using the four-field shape: Did, Learned, Measured, Next.
 
@@ -1704,7 +1704,7 @@ The Measured field carries the concrete delta between `BenchmarkFasthttpBaseline
 
 The Next field points at M2: a deliberately naive `map[string]Handler` router, whose purpose is to produce a number for M3's radix tree to beat.
 
-- [ ] **Step 5: Final verification of both milestones**
+- [x] **Step 5: Final verification of both milestones**
 
 ```bash
 make lint
@@ -1716,7 +1716,7 @@ git status --short
 
 Expected: lint, test and bench exit 0. `git status --short` is empty, meaning everything is committed. Confirm by eye that `docs/04-roadmap.md` shows `☑` for M0 and M1 and `☐` for M2 through M8.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add docs
