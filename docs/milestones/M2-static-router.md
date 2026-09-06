@@ -60,13 +60,16 @@ registers a thousand and reports 38.34. Between one route and a thousand the dif
 `/route/500`), so even that is not cleanly attributable to route count. Whatever routing
 costs, it is paid on the first route and never again.
 
-**`Lookup` is written on one line for a reason, and a test guards it.** The map probe is
+**`Lookup` is written on one line for a reason.** The map probe is
 `t.routes[string(path)]` as a single expression, which the compiler special-cases so that
-the `[]byte` is not copied. Hoisting the conversion into a local — `key := string(path)` —
-loses the optimisation and costs one allocation on every request. That regression would be
-invisible to every functional test in the package, so `alloc_test.go` asserts zero
-allocations for lookup directly. This is the same class of hazard as M0's `go mod tidy`
-finding: a change that is obviously harmless and quietly is not.
+the `[]byte` is not copied — that is the exact form the optimisation is documented for, and
+writing it any other way risks losing the guarantee by accident later. Final review measured
+the hoisted form directly (`key := string(path)`, `//go:noinline`, a 51-byte path past the
+runtime's 32-byte stack buffer) and found it still allocates zero on go1.25.6: the original
+claim that hoisting costs one allocation per request, and that a named test would catch it,
+turned out to have been asserted rather than measured, and it did not survive measurement.
+`alloc_test.go`'s lookup budget tests still pin the lookup path at zero allocations, which
+protects against a real regression — just not against this specific rewrite.
 
 **The miss path costs zero allocations, and that is an accident.** See the retrospective
 below. It is recorded here because the caveat is load-bearing for M5: the zero is produced
@@ -182,6 +185,19 @@ file and then going to look for the cause. `go build -gcflags=-m` takes two seco
 running it while writing `handle` would have turned a surprise into a design note — and,
 more usefully, would have caught the false claim in D6 before it was committed rather than
 after.
+
+Final review found the same lesson twice more, both in prose this milestone had already
+shipped. D2 asserted that hoisting the map-probe conversion into a local costs an allocation
+today, and named a test that would catch it if it happened; neither half was ever measured,
+and measuring it shows go1.25.6 charges nothing for the hoisted form. `treeFor`'s
+registration-time `[]byte(method)` conversion was asserted to allocate — when
+`-gcflags=-m` actually reports it as a zero-copy conversion that does not escape — so the
+conclusion (fine at registration time) was right but the stated reason was invented rather
+than observed. Three instances of the same failure inside one milestone: writing down what an
+optimisation probably does instead of running the two-second command that says what it
+actually does. The fix is procedural, not a smarter guess — `go build -gcflags=-m`, and for
+allocation claims specifically a standalone `AllocsPerRun` reproduction, before the comment is
+written, not after a reviewer finds it.
 
 I would also have added a benchmark that measures `App.lookup` alone. Every routing number
 in the table is a full dispatch, because that is the smallest thing package `bench` can

@@ -111,6 +111,29 @@ func TestRegistrationPanicsOnAnEmptyPath(t *testing.T) {
 	})
 }
 
+func TestRegistrationPanicsOnAnEmptyMethod(t *testing.T) {
+	app := New()
+	v := mustPanic(t, `Handle("", "/x")`, func() {
+		app.Handle("", "/x", func(c *Ctx) error { return nil })
+	})
+
+	if msg, _ := v.(string); !strings.Contains(msg, "/x") {
+		t.Errorf("panic message %q does not name the offending path", v)
+	}
+}
+
+func TestRegistrationPanicsOnALowercaseMethod(t *testing.T) {
+	app := New()
+	v := mustPanic(t, `Handle("get", "/y")`, func() {
+		app.Handle("get", "/y", func(c *Ctx) error { return nil })
+	})
+
+	msg, _ := v.(string)
+	if !strings.Contains(msg, "get") || !strings.Contains(msg, "/y") {
+		t.Errorf("panic message %q should name both the offending verb and the path", v)
+	}
+}
+
 func TestRegistrationPanicsOnAPathWithoutALeadingSlash(t *testing.T) {
 	app := New()
 	v := mustPanic(t, `GET("users")`, func() {

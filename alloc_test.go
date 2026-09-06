@@ -84,6 +84,28 @@ func TestAllocBudgetLookupMiss(t *testing.T) {
 	})
 }
 
+// TestAllocBudgetHandleDispatch pins the "End to end: single handler, unpooled
+// Ctx (M1 baseline)" row in docs/05-performance-model.md. That row previously
+// existed only as a benchmark number, and a benchmark asserts nothing — it can
+// regress silently forever. M2 allocates a Ctx per request on purpose (see
+// app.go), so the budget here is 1, not 0.
+func TestAllocBudgetHandleDispatch(t *testing.T) {
+	app := New()
+	app.GET("/users", func(c *Ctx) error { return nil })
+
+	fctx := &fasthttp.RequestCtx{}
+	fctx.Request.Header.SetMethod("GET")
+	fctx.Request.SetRequestURI("/users")
+
+	if _, ok := app.lookup(fctx.Method(), fctx.Path()); !ok {
+		t.Fatal("route not registered; the budget below would be measuring the miss path")
+	}
+
+	budget(t, "App.handle dispatch (hit)", 1, func() {
+		app.handle(fctx)
+	})
+}
+
 // TestAllocBudgetLookupAtScale guards the map probe specifically. If someone
 // rewrites Tree.Lookup as key := string(path) the optimisation is lost and this
 // fails, while every behavioural test keeps passing.

@@ -42,10 +42,16 @@ func (t *Tree[H]) Insert(path string, h H) error {
 // backing array as soon as the call returns.
 //
 // The map probe is deliberately written as t.routes[string(path)] on one line.
-// The compiler special-cases that exact form and does not copy the bytes.
-// Hoisting it into a variable — key := string(path) — loses the optimisation
-// and costs one allocation on every request. alloc_test.go pins this down,
-// because the regression would be invisible to every other test.
+// That is the exact form the Go compiler documents this optimisation for: an
+// inline string(path) used directly as a map key does not copy the bytes.
+// Measured on go1.25.6, hoisting the conversion into a variable —
+// key := string(path) — does not currently cost an allocation either; the
+// optimisation survives a single-use local. The one-line form is still the
+// right one to write, because it is the form the guarantee is documented
+// against and it cannot quietly become an escaping conversion later, the way
+// a local can if the code around it grows. alloc_test.go's lookup budget
+// tests keep this path pinned at zero allocations, which still catches a real
+// regression — it just would not have caught this particular rewrite.
 func (t *Tree[H]) Lookup(path []byte) (H, bool) {
 	h, ok := t.routes[string(path)]
 	return h, ok

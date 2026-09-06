@@ -8,16 +8,27 @@ import (
 
 // Handle registers h for the given method and path.
 //
-// It panics on a programmer error: an empty path, a path without a leading
-// slash, a nil handler, or a route already registered for the same method and
-// path. These are mistakes discovered at startup rather than runtime
-// conditions, and a duplicate in particular means one of the two handlers can
-// never run — silent, and expensive to debug. Panicking at the call site puts
-// the mistake in the stack trace.
+// It panics on a programmer error: an empty or non-uppercase method, an empty
+// path, a path without a leading slash, a nil handler, or a route already
+// registered for the same method and path. These are mistakes discovered at
+// startup rather than runtime conditions, and a duplicate in particular means
+// one of the two handlers can never run — silent, and expensive to debug.
+// Panicking at the call site puts the mistake in the stack trace.
+//
+// All routes must be registered before serving begins. trees and rare are
+// mutated here without synchronisation while handle reads them concurrently
+// from request goroutines, so registering a route after Serve has started is
+// a data race, not merely a logic error.
 //
 // M4 appends a variadic mw ...Middleware parameter. Doing so does not break
 // existing calls.
 func (a *App) Handle(method, path string, h Handler) {
+	if method == "" {
+		panic("rice: route method is empty for path " + path)
+	}
+	if hasLowercaseByte(method) {
+		panic("rice: route method " + method + " is not uppercase, for path " + path)
+	}
 	if path == "" {
 		panic("rice: route path is empty for method " + method)
 	}
@@ -31,6 +42,21 @@ func (a *App) Handle(method, path string, h Handler) {
 	if err := a.treeFor(method).Insert(path, h); err != nil {
 		panic(fmt.Sprintf("rice: %v: %s %s", err, method, path))
 	}
+}
+
+// hasLowercaseByte reports whether s contains an ASCII lowercase letter.
+//
+// fasthttp uppercases the request method before Handle's registrations are
+// ever consulted, and method matching is case-sensitive (see App.lookup), so
+// a lowercase or mixed-case method registered here can never match a real
+// request.
+func hasLowercaseByte(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 'a' && s[i] <= 'z' {
+			return true
+		}
+	}
+	return false
 }
 
 // GET registers h for GET requests to path.
@@ -56,8 +82,12 @@ func (a *App) OPTIONS(path string, h Handler) { a.Handle("OPTIONS", path, h) }
 
 // treeFor returns the tree for method, creating one for an uncommon verb.
 //
-// Registration time, not request time: the []byte conversion below allocates,
-// and that is fine here. The request path through lookup does not convert.
+// Registration time, not request time, so an allocation here would be an
+// acceptable price. There isn't one: go build -gcflags=-m reports
+// "([]byte)(method) does not escape" and "zero-copy string->[]byte
+// conversion" for the conversion below. The request path through lookup
+// never even performs the conversion — method arrives there already as a
+// []byte, straight from fctx.Method().
 func (a *App) treeFor(method string) *router.Tree[Handler] {
 	if i, ok := methodIndex([]byte(method)); ok {
 		return &a.trees[i]
