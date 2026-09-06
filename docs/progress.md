@@ -16,6 +16,77 @@ Each entry uses this shape:
 
 ---
 
+## 2026-09-06 — M2 — Static router: the naive map is flat, and hard to beat
+
+**Did:** Replaced `App.SetHandler` with per-verb route registration. `internal/router.Tree[H]`
+is generic — nothing under `internal/` may import package `rice`, so the router cannot name
+`rice.Handler` — and is backed by a `map[string]H` on purpose. Common verbs reach their tree
+through a fixed array indexed by a `method` constant, so dispatching `GET` is an array index
+rather than a string comparison; uncommon verbs fall back to a lazily created map that stays
+nil for applications that never register one. Registration panics on a programmer error
+(empty path, missing leading slash, nil handler, duplicate route); a miss produces
+`ErrNotFound` and travels through the same error funnel a failing handler uses, so 404 is not
+a special case. Exact match only: no parameters, no wildcards, no 405. 53 tests pass under
+`-race`.
+
+**Learned:** Three things.
+
+1. *The map does not care how many routes exist.* Lookup is flat — 38.52, 38.37 and 38.34
+   ns/op at 10, 100 and 1000 routes, a spread of 0.18 ns across a hundredfold change, which is
+   noise. The design doc predicted "close to flat" and predicted the consequence: that a radix
+   tree may well lose on purely static paths, which would mean it earns its keep on parameters
+   and shared prefixes instead. Both halves held. That is a finding, not a failure, but it does
+   narrow M3's case considerably.
+
+2. *The 404 path costs zero allocations, and nobody designed that.* Both the M1 retrospective
+   and D6 of the M2 design doc said the miss path would still allocate one `Ctx`. It does not:
+   `go build -gcflags=-m` reports `&Ctx{} does not escape` on the miss branch against
+   `&Ctx{} escapes to heap` on the hit branch. The miss-path `Ctx` goes only to `handleError`,
+   a concrete method the compiler can see through, so it stays on the stack; the hit-path one
+   goes through `h(c)`, an indirect call through a `Handler` function value the compiler must
+   assume escapes. The caveat outweighs the win and is now recorded in `app.go` and in D6:
+   **this zero is a compiler artifact, not a design guarantee.** M5's configurable
+   `ErrorHandler` turns the funnel into a function value, at which point the miss-path `Ctx`
+   escapes too and the 404 path returns to one allocation. That will be expected behaviour, not
+   a regression.
+
+3. *Routing is not free, and the cost is constant rather than scaling.* Dispatch went from
+   25.49 ns/op in M1 to 37.91 in M2, about **+12.2 ns** after adjusting for 0.19 ns of baseline
+   drift between the two recordings. All of it is paid on the first route: one route costs
+   37.91, a thousand cost 38.34. Roughly 3 ns of the 12 is the map probe itself — the gap
+   between `StaticRouterMiss` (36.45, probes a 1000-entry map) and `StaticRouterWrongVerb`
+   (33.28, hits a nil map and returns). The other ~9 ns is unexplained and unprofiled, which is
+   the second milestone running where an unexplained number has been recorded rather than
+   chased.
+
+**Measured:** Medians of ten runs from one recording — Apple M2 Pro, go1.25.6 darwin/arm64,
+[bench/results/M2-static-router.txt](../bench/results/M2-static-router.txt):
+
+| Benchmark | ns/op | B/op | allocs/op |
+| --- | --- | --- | --- |
+| `BenchmarkFasthttpBaseline` | 11.24 | 0 | 0 |
+| `BenchmarkRiceDispatch` | 37.91 | 16 | 1 |
+| `BenchmarkStaticRouterLookup10` | 38.52 | 16 | 1 |
+| `BenchmarkStaticRouterLookup100` | 38.37 | 16 | 1 |
+| `BenchmarkStaticRouterLookup1000` | 38.34 | 16 | 1 |
+| `BenchmarkStaticRouterMiss` | 36.45 | 0 | 0 |
+| `BenchmarkStaticRouterWrongVerb` | 33.28 | 0 | 0 |
+| **Framework cost** | **+26.67** | **+16** | **+1** |
+| **Lookup scaling, 10 → 1000 routes** | **−0.18** | **0** | **0** |
+
+The one allocation on every hit is still the `Ctx`, still 16 bytes, still M6's to remove.
+`BenchmarkRiceDispatchNotFound` moved from 13.96 ns/op in M1 to 33.15 here; that is not a
+regression, it is the funnel now writing a real 404 body where M1 wrote only a status code.
+
+**Next:** M3 — the radix tree, with static, parameter and wildcard nodes, common-prefix
+splitting, and a `Lookup` that fills a caller-supplied `Params` without allocating. These
+numbers mean the tree cannot justify itself on static routes, where it is up against a flat
+38 ns that does not degrade with route count; it has to prove its worth on parameters,
+wildcards and shared prefixes — the things the map cannot do at any price — and M3 should be
+judged on exactly those cases.
+
+---
+
 ## 2026-09-06 — M1 — Minimal server: rice serves HTTP, and it costs one allocation
 
 **Did:** Built the thinnest framework that can answer a request. `Handler` returns an error

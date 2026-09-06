@@ -34,6 +34,12 @@ Explicitly out of scope, each with the milestone that owns it.
 - `HTTPError`, a configurable `ErrorHandler`, panic recovery — M5
 - Context pooling — M6
 - `405 Method Not Allowed` and the `Allow` header — deferred, see below
+- Path normalisation. `/a//b`, `/a/./b` and percent-encoded paths all register
+  successfully today but can never match a real request, because
+  `fctx.Path()` returns the path already collapsed and decoded by fasthttp
+  before it reaches lookup. Registration does not run it through the same
+  normalisation, so the two disagree. Known gap, not yet guarded against — M3
+  owns it.
 
 ## Decisions
 
@@ -83,6 +89,25 @@ refactor away from silently costing an allocation on every request, and the cost
 would not show up as a test failure — only as a worse number in a benchmark
 nobody reads that week. It is therefore pinned by an `AllocsPerRun` test, not
 merely observed in a benchmark.
+
+> **Corrected during final review (2026-09-06).** As designed, this section
+> claimed that hoisting the conversion into a local — `key := string(path)` —
+> "loses the optimisation and costs one allocation on every request." Applying
+> that exact edit and measuring it does not confirm that: all three lookup
+> budget tests still pass, and a standalone reproduction with `//go:noinline`
+> and a 51-byte path (past the runtime's 32-byte stack buffer) still measures
+> zero allocations, on go1.25.6. The map-index conversion optimisation
+> survives a single-use local; only a conversion that genuinely escapes costs
+> an allocation.
+>
+> The decision recorded above is unchanged: the map probe should still be
+> written as `t.routes[string(path)]` on one line, because that is the exact
+> form the optimisation is documented for and it cannot quietly become an
+> escaping conversion later. What was wrong is the claim that today's compiler
+> charges for the alternative, and the claim that a named test would catch the
+> regression if it ever did — `alloc_test.go`'s lookup budget tests still pin
+> the outcome (zero allocations) and still guard against a real regression,
+> just not against this specific rewrite.
 
 ### D3: Method dispatch is a fixed array with a map fallback
 
@@ -188,10 +213,28 @@ func (a *App) handle(fctx *fasthttp.RequestCtx) {
 }
 ```
 
-The miss path still allocates one `Ctx`, because the funnel takes a `*Ctx` and
+The miss path still constructs a `Ctx`, because the funnel takes a `*Ctx` and
 M5 will want a real context there to build a custom 404. What changes is that the
-allocation now happens after a decision instead of before one, and it can be
+construction now happens after a decision instead of before one, and it can be
 removed wholesale by M6's pool rather than needing a special case.
+
+> **Corrected after M2's measurements (2026-09-06).** As designed, this section
+> claimed the miss path "still allocates one `Ctx`". It does not. The
+> construction is real, but the allocation is not: `BenchmarkRiceDispatchNotFound`
+> and `BenchmarkStaticRouterMiss` both record 0 B/op and 0 allocs/op, and
+> `go build -gcflags=-m` explains why — `&Ctx{} does not escape` on the miss
+> path against `&Ctx{} escapes to heap` on the hit
+> path. The miss-path `Ctx` reaches only `handleError`, a concrete method the
+> compiler can see through, so it lands on the stack; the hit-path `Ctx` goes
+> through `h(c)`, an indirect call through a `Handler` function value, which the
+> compiler must assume escapes.
+>
+> This zero is a compiler artifact, not a design guarantee. When D5's successor
+> in M5 replaces `handleError` with a configurable `ErrorHandler` — a function
+> value rather than a concrete method — the miss-path `Ctx` will escape too and
+> the 404 path returns to one allocation. That is expected behaviour, not a
+> regression. The decision recorded above is unchanged; only the claim about its
+> cost was wrong.
 
 ### D7: Registration ships without the middleware parameter
 

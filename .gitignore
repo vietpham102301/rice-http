@@ -6,3 +6,6 @@
 *.out
 /bin/
 coverage.out
+
+# Superpowers SDD scratch
+.superpowers/

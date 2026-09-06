@@ -1,0 +1,102 @@
+# rice benchmark results: M2-static-router
+# date: 2026-09-06T06:41:03Z
+# go:   go version go1.25.6 darwin/arm64
+# os:   Darwin 25.6.0 arm64
+# cpu:  Apple M2 Pro
+
+goos: darwin
+goarch: arm64
+pkg: github.com/vietpham102301/rice-http/bench
+cpu: Apple M2 Pro
+BenchmarkFasthttpBaseline-12          	104913585	        11.11 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFasthttpBaseline-12          	100000000	        11.20 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFasthttpBaseline-12          	100000000	        11.23 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFasthttpBaseline-12          	100000000	        11.20 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFasthttpBaseline-12          	100000000	        11.41 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFasthttpBaseline-12          	100000000	        11.34 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFasthttpBaseline-12          	100000000	        11.25 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFasthttpBaseline-12          	100000000	        11.28 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFasthttpBaseline-12          	100000000	        11.32 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFasthttpBaseline-12          	100000000	        11.23 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRiceDispatch-12              	31305810	        37.72 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRiceDispatch-12              	31647794	        37.86 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRiceDispatch-12              	32507293	        37.74 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRiceDispatch-12              	31561194	        38.06 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRiceDispatch-12              	31621940	        37.81 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRiceDispatch-12              	31629616	        37.75 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRiceDispatch-12              	31780782	        37.96 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRiceDispatch-12              	32087133	        37.95 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRiceDispatch-12              	31491206	        38.02 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRiceDispatch-12              	31848120	        37.98 ns/op	      16 B/op	       1 allocs/op
+BenchmarkRiceDispatchNotFound-12      	36160507	        33.13 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRiceDispatchNotFound-12      	35991766	        33.04 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRiceDispatchNotFound-12      	36353905	        33.19 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRiceDispatchNotFound-12      	36036531	        33.15 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRiceDispatchNotFound-12      	35846977	        33.24 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRiceDispatchNotFound-12      	35922720	        33.13 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRiceDispatchNotFound-12      	36128390	        33.15 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRiceDispatchNotFound-12      	36779870	        33.23 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRiceDispatchNotFound-12      	36531255	        33.10 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRiceDispatchNotFound-12      	36023865	        33.67 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCtxSetHeader-12              	14879076	        80.55 ns/op	      16 B/op	       1 allocs/op
+BenchmarkCtxSetHeader-12              	14812627	        80.45 ns/op	      16 B/op	       1 allocs/op
+BenchmarkCtxSetHeader-12              	14977003	        80.63 ns/op	      16 B/op	       1 allocs/op
+BenchmarkCtxSetHeader-12              	14767791	        80.37 ns/op	      16 B/op	       1 allocs/op
+BenchmarkCtxSetHeader-12              	15048357	        80.28 ns/op	      16 B/op	       1 allocs/op
+BenchmarkCtxSetHeader-12              	15038920	        80.14 ns/op	      16 B/op	       1 allocs/op
+BenchmarkCtxSetHeader-12              	15091815	        80.64 ns/op	      16 B/op	       1 allocs/op
+BenchmarkCtxSetHeader-12              	14909486	        80.64 ns/op	      16 B/op	       1 allocs/op
+BenchmarkCtxSetHeader-12              	14766746	        81.49 ns/op	      16 B/op	       1 allocs/op
+BenchmarkCtxSetHeader-12              	14854226	        80.66 ns/op	      16 B/op	       1 allocs/op
+BenchmarkStaticRouterLookup10-12      	31355026	        38.64 ns/op	      16 B/op	       1 allocs/op
+BenchmarkStaticRouterLookup10-12      	30541572	        38.49 ns/op	      16 B/op	       1 allocs/op
+BenchmarkStaticRouterLookup10-12      	30596601	        38.42 ns/op	      16 B/op	       1 allocs/op
+BenchmarkStaticRouterLookup10-12      	30604339	        38.51 ns/op	      16 B/op	       1 allocs/op
+BenchmarkStaticRouterLookup10-12      	31301931	        38.61 ns/op	      16 B/op	       1 allocs/op
+BenchmarkStaticRouterLookup10-12      	30598551	        38.41 ns/op	      16 B/op	       1 allocs/op
+BenchmarkStaticRouterLookup10-12      	30741018	        38.44 ns/op	      16 B/op	       1 allocs/op
+BenchmarkStaticRouterLookup10-12      	30956424	        38.54 ns/op	      16 B/op	       1 allocs/op
+BenchmarkStaticRouterLookup10-12      	31423311	        38.70 ns/op	      16 B/op	       1 allocs/op
+BenchmarkStaticRouterLookup10-12      	31029566	        38.69 ns/op	      16 B/op	       1 allocs/op
+BenchmarkStaticRouterLookup100-12     	31179898	        38.23 ns/op	      16 B/op	       1 allocs/op
+BenchmarkStaticRouterLookup100-12     	31229565	        38.36 ns/op	      16 B/op	       1 allocs/op
+BenchmarkStaticRouterLookup100-12     	31625066	        38.23 ns/op	      16 B/op	       1 allocs/op
+BenchmarkStaticRouterLookup100-12     	31333058	        38.29 ns/op	      16 B/op	       1 allocs/op
+BenchmarkStaticRouterLookup100-12     	31350999	        38.51 ns/op	      16 B/op	       1 allocs/op
+BenchmarkStaticRouterLookup100-12     	31298325	        38.36 ns/op	      16 B/op	       1 allocs/op
+BenchmarkStaticRouterLookup100-12     	31298394	        38.47 ns/op	      16 B/op	       1 allocs/op
+BenchmarkStaticRouterLookup100-12     	31044518	        38.38 ns/op	      16 B/op	       1 allocs/op
+BenchmarkStaticRouterLookup100-12     	31162354	        38.39 ns/op	      16 B/op	       1 allocs/op
+BenchmarkStaticRouterLookup100-12     	31108263	        38.43 ns/op	      16 B/op	       1 allocs/op
+BenchmarkStaticRouterLookup1000-12    	29075812	        38.35 ns/op	      16 B/op	       1 allocs/op
+BenchmarkStaticRouterLookup1000-12    	31292782	        38.38 ns/op	      16 B/op	       1 allocs/op
+BenchmarkStaticRouterLookup1000-12    	31937650	        38.05 ns/op	      16 B/op	       1 allocs/op
+BenchmarkStaticRouterLookup1000-12    	31259733	        38.27 ns/op	      16 B/op	       1 allocs/op
+BenchmarkStaticRouterLookup1000-12    	31405322	        38.32 ns/op	      16 B/op	       1 allocs/op
+BenchmarkStaticRouterLookup1000-12    	31500885	        38.30 ns/op	      16 B/op	       1 allocs/op
+BenchmarkStaticRouterLookup1000-12    	31744632	        38.89 ns/op	      16 B/op	       1 allocs/op
+BenchmarkStaticRouterLookup1000-12    	31105138	        38.43 ns/op	      16 B/op	       1 allocs/op
+BenchmarkStaticRouterLookup1000-12    	31467190	        38.40 ns/op	      16 B/op	       1 allocs/op
+BenchmarkStaticRouterLookup1000-12    	31101813	        38.33 ns/op	      16 B/op	       1 allocs/op
+BenchmarkStaticRouterMiss-12          	33222705	        36.57 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStaticRouterMiss-12          	32838138	        36.46 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStaticRouterMiss-12          	33046053	        36.29 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStaticRouterMiss-12          	32771140	        36.59 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStaticRouterMiss-12          	32839074	        36.42 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStaticRouterMiss-12          	31277184	        36.41 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStaticRouterMiss-12          	31972290	        36.43 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStaticRouterMiss-12          	32811874	        36.60 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStaticRouterMiss-12          	31134428	        36.74 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStaticRouterMiss-12          	33208188	        36.42 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStaticRouterWrongVerb-12     	35860456	        33.19 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStaticRouterWrongVerb-12     	35916045	        33.30 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStaticRouterWrongVerb-12     	35424745	        33.32 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStaticRouterWrongVerb-12     	35041185	        33.29 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStaticRouterWrongVerb-12     	36379621	        33.19 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStaticRouterWrongVerb-12     	36404637	        33.34 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStaticRouterWrongVerb-12     	36687991	        33.27 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStaticRouterWrongVerb-12     	36410160	        33.44 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStaticRouterWrongVerb-12     	35289014	        33.25 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStaticRouterWrongVerb-12     	36432315	        33.28 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/vietpham102301/rice-http/bench	111.688s

@@ -16,7 +16,7 @@ import (
 // work with no framework.
 func BenchmarkRiceDispatch(b *testing.B) {
 	app := rice.New()
-	app.SetHandler(func(c *rice.Ctx) error {
+	app.GET("/hello", func(c *rice.Ctx) error {
 		return c.String(fasthttp.StatusOK, "hello")
 	})
 
@@ -31,8 +31,9 @@ func BenchmarkRiceDispatch(b *testing.B) {
 	}
 }
 
-// BenchmarkRiceDispatchNotFound measures the path where no handler is
-// registered, which skips the handler call entirely.
+// BenchmarkRiceDispatchNotFound measures the path where no route matches the
+// request, which is rejected by the router lookup before a handler is ever
+// reached.
 func BenchmarkRiceDispatchNotFound(b *testing.B) {
 	app := rice.New()
 
@@ -52,7 +53,7 @@ func BenchmarkRiceDispatchNotFound(b *testing.B) {
 // rather than assumed.
 func BenchmarkCtxSetHeader(b *testing.B) {
 	app := rice.New()
-	app.SetHandler(func(c *rice.Ctx) error {
+	app.GET("/hdr", func(c *rice.Ctx) error {
 		c.SetHeader("X-Trace", "abc123")
 		return c.String(fasthttp.StatusOK, "hello")
 	})

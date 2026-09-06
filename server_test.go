@@ -44,7 +44,7 @@ func get(t *testing.T, addr, path string) (int, string) {
 
 func TestServeAnswersARealRequestOnAnEphemeralPort(t *testing.T) {
 	app := rice.New()
-	app.SetHandler(func(c *rice.Ctx) error {
+	app.GET("/world", func(c *rice.Ctx) error {
 		return c.String(200, "hello "+string(c.Path()))
 	})
 
@@ -71,7 +71,7 @@ func TestServeAnswersARealRequestOnAnEphemeralPort(t *testing.T) {
 
 func TestRunBindsTheGivenAddress(t *testing.T) {
 	app := rice.New()
-	app.SetHandler(func(c *rice.Ctx) error { return c.String(200, "up") })
+	app.GET("/", func(c *rice.Ctx) error { return c.String(200, "up") })
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- app.Run("127.0.0.1:0") }()
@@ -102,7 +102,7 @@ func TestRunReturnsAnErrorOnAnUnbindableAddress(t *testing.T) {
 
 func TestShutdownStopsAcceptingNewConnections(t *testing.T) {
 	app := rice.New()
-	app.SetHandler(func(c *rice.Ctx) error { return c.String(200, "up") })
+	app.GET("/", func(c *rice.Ctx) error { return c.String(200, "up") })
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -130,7 +130,7 @@ func TestShutdownReturnsErrShutdownTimeoutWhenTheDeadlinePasses(t *testing.T) {
 	inFlight := make(chan struct{})
 
 	app := rice.New()
-	app.SetHandler(func(c *rice.Ctx) error {
+	app.GET("/slow", func(c *rice.Ctx) error {
 		close(inFlight)
 		<-release // hold the request open past the shutdown deadline
 		return c.String(200, "finally")
@@ -169,5 +169,34 @@ func TestAddrIsEmptyBeforeServing(t *testing.T) {
 	app := rice.New()
 	if got := app.Addr(); got != "" {
 		t.Errorf("Addr() = %q before serving, want empty string", got)
+	}
+}
+
+func TestServeReturns404ForAnUnregisteredPath(t *testing.T) {
+	app := rice.New()
+	app.GET("/known", func(c *rice.Ctx) error { return c.String(200, "known") })
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go func() { _ = app.Serve(ln) }()
+
+	addr := waitForAddr(t, app)
+
+	if status, body := get(t, addr, "/known"); status != 200 || body != "known" {
+		t.Errorf("registered route: got %d %q, want 200 %q", status, body, "known")
+	}
+
+	status, body := get(t, addr, "/unknown")
+	if status != 404 {
+		t.Errorf("unregistered route: status = %d, want 404", status)
+	}
+	if body != "Not Found" {
+		t.Errorf("unregistered route: body = %q, want %q", body, "Not Found")
+	}
+
+	if err := app.Shutdown(context.Background()); err != nil {
+		t.Errorf("Shutdown returned %v, want nil", err)
 	}
 }

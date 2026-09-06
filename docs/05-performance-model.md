@@ -32,7 +32,7 @@ test, not a benchmark, so a regression fails CI rather than merely looking worse
 | Operation | Budget | Status |
 | --- | --- | --- |
 | Pool acquire + reset + release | 0 | TARGET (M6) |
-| Router lookup, static route | 0 | TARGET (M3) |
+| Router lookup, static route | 0 | MEASURED M2 |
 | Router lookup, 1 parameter | 0 | TARGET (M3) |
 | Router lookup, 5 parameters | 0 | TARGET (M6, needs slot sizing) |
 | Chain call, 0 middleware | 0 | TARGET (M4) |

@@ -42,7 +42,7 @@ measured against.
 
 ---
 
-### ☐ M2 — Static router
+### ☑ M2 — Static router
 
 A `map[string]Handler` per method. Deliberately the naive implementation.
 
