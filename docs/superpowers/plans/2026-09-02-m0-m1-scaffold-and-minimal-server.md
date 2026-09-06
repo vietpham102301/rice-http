@@ -1497,7 +1497,7 @@ git commit -m "feat: add Run, Serve, Addr, and deadline-aware Shutdown"
 - Consumes: `newRequestCtx` from Task 2, `rice.New`, `SetHandler`, `FasthttpHandler`, `Ctx.String` from Tasks 6 to 8.
 - Produces: the recorded numbers that Task 10 writes into the milestone retrospective, and that M6 is compared against.
 
-- [ ] **Step 1: Write the rice benchmarks**
+- [x] **Step 1: Write the rice benchmarks**
 
 Create `bench/rice_bench_test.go`:
 
@@ -1573,7 +1573,7 @@ func BenchmarkCtxSetHeader(b *testing.B) {
 }
 ```
 
-- [ ] **Step 2: Run the benchmarks and read the numbers**
+- [x] **Step 2: Run the benchmarks and read the numbers**
 
 ```bash
 go test ./bench/... -run '^$' -bench . -benchmem -count=1
@@ -1588,7 +1588,7 @@ go test ./bench/... -run '^$' -bench BenchmarkRiceDispatch -memprofile mem.out -
 go tool pprof -top -alloc_objects mem.out
 ```
 
-- [ ] **Step 3: Record the results**
+- [x] **Step 3: Record the results**
 
 ```bash
 make bench-record LABEL=M1-minimal-server
@@ -1596,7 +1596,7 @@ make bench-record LABEL=M1-minimal-server
 
 Expected: `bench/results/M1-minimal-server.txt` exists with the stamp header and ten runs of each benchmark.
 
-- [ ] **Step 4: Compare against the M0 baseline**
+- [x] **Step 4: Compare against the M0 baseline**
 
 ```bash
 go install golang.org/x/perf/cmd/benchstat@latest
@@ -1605,7 +1605,7 @@ benchstat bench/results/M0-fasthttp-baseline.txt bench/results/M1-minimal-server
 
 The two files contain different benchmark names, so benchstat will not pair them automatically. Read the two `BenchmarkFasthttpBaseline` figures against `BenchmarkRiceDispatch` by hand and write the delta into the milestone doc in Task 10. That delta, in nanoseconds and in allocations, is what M1 exists to produce.
 
-- [ ] **Step 5: Update the performance model with measured values**
+- [x] **Step 5: Update the performance model with measured values**
 
 In `docs/05-performance-model.md`, in the allocation budget table, change the Status column from `TARGET (M1)` to `MEASURED M1` on exactly the two rows carrying that label, and no others:
 
@@ -1631,7 +1631,7 @@ Measured values come from `bench/results/M1-minimal-server.txt`. Re-run
 `make bench-record` on your own machine before comparing.
 ```
 
-- [ ] **Step 6: Verify**
+- [x] **Step 6: Verify**
 
 ```bash
 make lint
@@ -1641,7 +1641,7 @@ make bench
 
 Expected: all exit 0.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add bench docs/05-performance-model.md
