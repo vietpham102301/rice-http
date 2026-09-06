@@ -5,6 +5,8 @@ import (
 	"sync"
 
 	"github.com/valyala/fasthttp"
+
+	"github.com/vietpham102301/rice-http/internal/router"
 )
 
 // Option configures an App at construction time.
@@ -14,10 +16,21 @@ import (
 // the signature of New.
 type Option func(*App)
 
-// App is the root of a rice application. It owns the handler, the fasthttp
+// App is the root of a rice application. It owns the routes, the fasthttp
 // server, and the listener.
 type App struct {
-	h   Handler
+	// h is M1 scaffolding, removed in this milestone's dispatch task.
+	h Handler
+
+	// trees holds one route tree per common verb, indexed by a method constant.
+	// It is an array of values, so every element starts as a zero Tree whose
+	// inner map is nil until its first Insert.
+	trees [methodCount]router.Tree[Handler]
+
+	// rare holds trees for verbs without a reserved slot. It stays nil for
+	// applications that never register one.
+	rare map[string]*router.Tree[Handler]
+
 	srv *fasthttp.Server
 
 	mu sync.Mutex
