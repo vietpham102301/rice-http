@@ -76,6 +76,17 @@ func TestLookupOnAnUncommonVerbWithNoneRegistered(t *testing.T) {
 	}
 }
 
+func TestLookupOnAnUncommonVerbNotInTheRareMap(t *testing.T) {
+	app := New()
+	app.Handle("PROPFIND", "/dav", func(c *Ctx) error { return nil })
+
+	// rare now exists and contains PROPFIND. lookup for a different uncommon
+	// verb (TRACE) takes the map-probe branch, not the nil short-circuit.
+	if _, ok := app.lookup([]byte("TRACE"), []byte("/dav")); ok {
+		t.Error("lookup found a route for an uncommon verb that was not registered")
+	}
+}
+
 // mustPanic runs fn and returns the panic value, failing the test if fn returns
 // normally.
 func mustPanic(t *testing.T, name string, fn func()) any {
