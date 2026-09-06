@@ -526,7 +526,7 @@ M1 has no router. The `App` serves exactly one handler, and it allocates a `Ctx`
 
 The `app` field is unused in M1 and exists because Task 7's `handle` sets it and M5's error funnel reads it. It is set now so that the `reset` signature does not change under later tasks.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `ctx_test.go`:
 
@@ -583,13 +583,13 @@ func TestCtxResetRebindsToANewRequest(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `go test ./... -run TestCtx -v`
 
 Expected: FAIL to compile, with `undefined: Ctx`.
 
-- [ ] **Step 3: Write the handler type**
+- [x] **Step 3: Write the handler type**
 
 Create `handler.go`:
 
@@ -607,7 +607,7 @@ package rice
 type Handler func(c *Ctx) error
 ```
 
-- [ ] **Step 4: Write the context**
+- [x] **Step 4: Write the context**
 
 Create `ctx.go`:
 
@@ -652,13 +652,13 @@ func (c *Ctx) Method() []byte { return c.fctx.Method() }
 func (c *Ctx) Path() []byte { return c.fctx.Path() }
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `go test ./... -run TestCtx -v`
 
 Expected: PASS for all three tests.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add handler.go ctx.go ctx_test.go
@@ -686,7 +686,7 @@ git commit -m "feat: add Handler type and the Ctx read side"
 
 `String` and `Bytes` return `error` although they cannot currently fail. The signature matches the `Handler` return type so that `return c.String(200, "ok")` is the idiomatic last line of a handler, and it leaves room for a streaming write to report a failure later without an API break.
 
-- [ ] **Step 1: Write the failing behaviour tests**
+- [x] **Step 1: Write the failing behaviour tests**
 
 Create `ctx_response_test.go`:
 
@@ -779,13 +779,13 @@ func TestBodyIsOverwrittenNotAppendedOnSecondWrite(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `go test ./... -run 'TestString|TestBytes|TestStatus|TestSetHeader|TestBody' -v`
 
 Expected: FAIL to compile, with `undefined: MIMETextPlainUTF8` and undefined methods.
 
-- [ ] **Step 3: Write the response side**
+- [x] **Step 3: Write the response side**
 
 Create `ctx_response.go`:
 
@@ -834,13 +834,13 @@ func (c *Ctx) Bytes(code int, b []byte) error {
 }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `go test ./... -run 'TestString|TestBytes|TestStatus|TestSetHeader|TestBody' -v`
 
 Expected: PASS for all five tests.
 
-- [ ] **Step 5: Write the allocation budget tests**
+- [x] **Step 5: Write the allocation budget tests**
 
 These are the contract from `docs/05-performance-model.md`, enforced as tests so a regression fails CI rather than merely looking worse in a benchmark.
 
@@ -901,7 +901,7 @@ func TestAllocBudgetMethodAndPath(t *testing.T) {
 }
 ```
 
-- [ ] **Step 6: Run the budget tests**
+- [x] **Step 6: Run the budget tests**
 
 Run: `go test ./... -run TestAllocBudget -v`
 
@@ -914,13 +914,13 @@ go test -run TestAllocBudgetString -memprofile mem.out .
 go tool pprof -top -alloc_objects mem.out
 ```
 
-- [ ] **Step 7: Run the full suite with the race detector**
+- [x] **Step 7: Run the full suite with the race detector**
 
 Run: `make test`
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add ctx_response.go ctx_response_test.go alloc_test.go
@@ -951,7 +951,7 @@ Two shape decisions worth stating, because a reviewer will ask.
 
 `FasthttpHandler` is exported so that benchmarks in package `bench` can call the dispatch path directly, without a socket. It is also the supported way to mount rice inside an existing fasthttp server, so it is real API rather than a test hook.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `app_test.go`:
 
@@ -1072,13 +1072,13 @@ func TestNewAppliesOptions(t *testing.T) {
 
 The fourth test resolves the ambiguity ADR-0002 flagged: a handler that writes a response and then returns an error. The rule is that the error wins and the partial body is discarded. Encoding it as a test now means M5 cannot quietly change it.
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `go test ./... -run 'TestHandle|TestFasthttpHandler|TestNewApplies' -v`
 
 Expected: FAIL to compile, with `undefined: New`.
 
-- [ ] **Step 3: Write the App**
+- [x] **Step 3: Write the App**
 
 Create `app.go`:
 
@@ -1168,19 +1168,19 @@ func (a *App) handleError(c *Ctx, err error) {
 }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `go test ./... -run 'TestHandle|TestFasthttpHandler|TestNewApplies' -v`
 
 Expected: PASS for all six tests.
 
-- [ ] **Step 5: Verify vet is happy with the unused parameter**
+- [x] **Step 5: Verify vet is happy with the unused parameter**
 
 Run: `make lint`
 
 Expected: exit 0. `go vet` does not flag unused function parameters. If a future linter does, keep the parameter and silence the linter rather than dropping it, because M5 needs it.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add app.go app_test.go
