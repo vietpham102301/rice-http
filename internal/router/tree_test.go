@@ -429,22 +429,41 @@ func TestDeepNesting(t *testing.T) {
 	}
 }
 
-func TestTreeLookupDoesNotRetainThePathSlice(t *testing.T) {
+// TestTreeLookupBorrowsTheCapturedValue is the borrow contract at the tree
+// level. ADR-0005 requires a captured parameter to be a view into the caller's
+// path, not a copy of it: Ctx.Param hands that view straight to a handler and
+// Ctx.ParamString is the accessor that copies. An implementation that defensively
+// copied here would be safer and wrong, and would break the zero-allocation
+// budget the milestone is built on.
+//
+// It drives tr.lookup directly. The find helper converts its argument with
+// []byte(path), which would hand the tree a fresh copy and make any aliasing
+// assertion vacuous — that is exactly how the test this replaces came to be
+// unfailable.
+func TestTreeLookupBorrowsTheCapturedValue(t *testing.T) {
 	var tr tree[string]
-	mustInsert(t, &tr, "/aaa", "a")
-	mustInsert(t, &tr, "/bbb", "b")
+	mustInsert(t, &tr, "/users/:id", "user")
 
-	buf := []byte("/aaa")
-	if h, _, _ := find(&tr, string(buf)); h != "a" {
-		t.Fatalf("first lookup = %q, want %q", h, "a")
-	}
-
-	copy(buf, "/bbb")
+	buf := []byte("/users/aaa")
 
 	var p Params
 	h, ok := tr.lookup(buf, &p)
-	if !ok || h != "b" {
-		t.Errorf("after overwriting the buffer, lookup = %q ok=%v, want b true", h, ok)
+	if !ok {
+		t.Fatal("lookup did not match")
+	}
+	if h != "user" {
+		t.Fatalf("lookup = %q, want %q", h, "user")
+	}
+	if got := string(p.Get("id")); got != "aaa" {
+		t.Fatalf("captured id = %q, want %q", got, "aaa")
+	}
+
+	// Overwrite the tail of the path in place, the way fasthttp reuses its
+	// request buffer for the next request on the same connection.
+	copy(buf[len("/users/"):], "bbb")
+
+	if got := string(p.Get("id")); got != "bbb" {
+		t.Errorf("captured id = %q after the buffer changed, want %q; the value is expected to alias the caller's path, not copy it", got, "bbb")
 	}
 }
 
