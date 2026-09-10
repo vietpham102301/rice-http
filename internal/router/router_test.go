@@ -7,12 +7,13 @@ import (
 
 func TestInsertAndLookup(t *testing.T) {
 	var tr Tree[string]
+	var p Params
 
 	if err := tr.Insert("/users", "handler-a"); err != nil {
 		t.Fatalf("Insert returned %v, want nil", err)
 	}
 
-	got, ok := tr.Lookup([]byte("/users"))
+	got, ok := tr.Lookup([]byte("/users"), &p)
 	if !ok {
 		t.Fatal("Lookup did not find a route that was just inserted")
 	}
@@ -23,11 +24,12 @@ func TestInsertAndLookup(t *testing.T) {
 
 func TestLookupMissReturnsTheZeroValue(t *testing.T) {
 	var tr Tree[string]
+	var p Params
 	if err := tr.Insert("/users", "handler-a"); err != nil {
 		t.Fatalf("Insert returned %v, want nil", err)
 	}
 
-	got, ok := tr.Lookup([]byte("/absent"))
+	got, ok := tr.Lookup([]byte("/absent"), &p)
 	if ok {
 		t.Error("Lookup found a route that was never inserted")
 	}
@@ -40,14 +42,16 @@ func TestLookupMissReturnsTheZeroValue(t *testing.T) {
 // its zero value, so the map does not exist until the first Insert.
 func TestLookupOnAnEmptyTree(t *testing.T) {
 	var tr Tree[string]
+	var p Params
 
-	if _, ok := tr.Lookup([]byte("/anything")); ok {
+	if _, ok := tr.Lookup([]byte("/anything"), &p); ok {
 		t.Error("Lookup found a route in an empty tree")
 	}
 }
 
 func TestInsertRejectsADuplicate(t *testing.T) {
 	var tr Tree[string]
+	var p Params
 	if err := tr.Insert("/users", "first"); err != nil {
 		t.Fatalf("first Insert returned %v, want nil", err)
 	}
@@ -57,9 +61,20 @@ func TestInsertRejectsADuplicate(t *testing.T) {
 		t.Fatalf("second Insert returned %v, want ErrDuplicate", err)
 	}
 
-	got, _ := tr.Lookup([]byte("/users"))
+	got, _ := tr.Lookup([]byte("/users"), &p)
 	if got != "first" {
 		t.Errorf("a rejected duplicate overwrote the original: got %q, want %q", got, "first")
+	}
+}
+
+func TestInsertRejectsAnUnmatchablePattern(t *testing.T) {
+	var tr Tree[string]
+
+	if err := tr.Insert("/a//b", "h"); err == nil {
+		t.Error("Insert accepted a pattern with an empty segment, want a rejection")
+	}
+	if got := tr.Len(); got != 0 {
+		t.Errorf("Len() = %d after a rejected insert, want 0", got)
 	}
 }
 
@@ -87,21 +102,22 @@ func TestLenReflectsInsertCount(t *testing.T) {
 // request on the same connection, so Lookup must not keep a reference to it.
 func TestLookupDoesNotRetainThePathSlice(t *testing.T) {
 	var tr Tree[string]
+	var p Params
 	_ = tr.Insert("/aaa", "route-a")
 	_ = tr.Insert("/bbb", "route-b")
 
 	buf := []byte("/aaa")
 
-	if got, _ := tr.Lookup(buf); got != "route-a" {
+	if got, _ := tr.Lookup(buf, &p); got != "route-a" {
 		t.Fatalf("first lookup returned %q, want %q", got, "route-a")
 	}
 
 	copy(buf, "/bbb") // overwrite in place, as fasthttp would
 
-	if got, _ := tr.Lookup(buf); got != "route-b" {
+	if got, _ := tr.Lookup(buf, &p); got != "route-b" {
 		t.Errorf("after overwriting the buffer, lookup returned %q, want %q", got, "route-b")
 	}
-	if got, _ := tr.Lookup([]byte("/aaa")); got != "route-a" {
+	if got, _ := tr.Lookup([]byte("/aaa"), &p); got != "route-a" {
 		t.Errorf("overwriting a caller buffer corrupted the tree: /aaa returned %q", got)
 	}
 }
@@ -113,11 +129,12 @@ func TestTreeWorksWithAFuncType(t *testing.T) {
 	type handler func() string
 
 	var tr Tree[handler]
+	var p Params
 	if err := tr.Insert("/x", func() string { return "called" }); err != nil {
 		t.Fatalf("Insert returned %v, want nil", err)
 	}
 
-	h, ok := tr.Lookup([]byte("/x"))
+	h, ok := tr.Lookup([]byte("/x"), &p)
 	if !ok {
 		t.Fatal("Lookup did not find the handler")
 	}

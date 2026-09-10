@@ -3,6 +3,8 @@ package rice
 import (
 	"strings"
 	"testing"
+
+	"github.com/vietpham102301/rice-http/internal/router"
 )
 
 // registeredVerbs pairs each helper with the verb it must register under, so
@@ -30,7 +32,8 @@ func TestEachVerbHelperRegistersUnderItsOwnVerb(t *testing.T) {
 		app := New()
 		c.call(app, "/x", func(ctx *Ctx) error { return nil })
 
-		if _, ok := app.lookup([]byte(c.verb), []byte("/x")); !ok {
+		var p router.Params
+		if _, ok := app.lookup([]byte(c.verb), []byte("/x"), &p); !ok {
 			t.Errorf("%s helper did not register a route reachable by %s", c.verb, c.verb)
 		}
 
@@ -38,7 +41,7 @@ func TestEachVerbHelperRegistersUnderItsOwnVerb(t *testing.T) {
 			if other.verb == c.verb {
 				continue
 			}
-			if _, ok := app.lookup([]byte(other.verb), []byte("/x")); ok {
+			if _, ok := app.lookup([]byte(other.verb), []byte("/x"), &p); ok {
 				t.Errorf("%s helper also registered the route under %s", c.verb, other.verb)
 			}
 		}
@@ -49,7 +52,8 @@ func TestLookupMissesAnUnregisteredPath(t *testing.T) {
 	app := New()
 	app.GET("/users", func(c *Ctx) error { return nil })
 
-	if _, ok := app.lookup([]byte("GET"), []byte("/absent")); ok {
+	var p router.Params
+	if _, ok := app.lookup([]byte("GET"), []byte("/absent"), &p); ok {
 		t.Error("lookup found a path that was never registered")
 	}
 }
@@ -58,10 +62,11 @@ func TestHandleSupportsAnUncommonVerb(t *testing.T) {
 	app := New()
 	app.Handle("PROPFIND", "/dav", func(c *Ctx) error { return nil })
 
-	if _, ok := app.lookup([]byte("PROPFIND"), []byte("/dav")); !ok {
+	var p router.Params
+	if _, ok := app.lookup([]byte("PROPFIND"), []byte("/dav"), &p); !ok {
 		t.Error("an uncommon verb registered with Handle was not reachable")
 	}
-	if _, ok := app.lookup([]byte("GET"), []byte("/dav")); ok {
+	if _, ok := app.lookup([]byte("GET"), []byte("/dav"), &p); ok {
 		t.Error("an uncommon verb's route leaked into a common verb's tree")
 	}
 }
@@ -71,7 +76,8 @@ func TestLookupOnAnUncommonVerbWithNoneRegistered(t *testing.T) {
 	app.GET("/x", func(c *Ctx) error { return nil })
 
 	// rare is still nil here; lookup must not panic on it.
-	if _, ok := app.lookup([]byte("PROPFIND"), []byte("/x")); ok {
+	var p router.Params
+	if _, ok := app.lookup([]byte("PROPFIND"), []byte("/x"), &p); ok {
 		t.Error("lookup found a route for a verb that was never registered")
 	}
 }
@@ -82,7 +88,8 @@ func TestLookupOnAnUncommonVerbNotInTheRareMap(t *testing.T) {
 
 	// rare now exists and contains PROPFIND. lookup for a different uncommon
 	// verb (TRACE) takes the map-probe branch, not the nil short-circuit.
-	if _, ok := app.lookup([]byte("TRACE"), []byte("/dav")); ok {
+	var p router.Params
+	if _, ok := app.lookup([]byte("TRACE"), []byte("/dav"), &p); ok {
 		t.Error("lookup found a route for an uncommon verb that was not registered")
 	}
 }
@@ -174,10 +181,11 @@ func TestTheSamePathUnderDifferentVerbsIsNotADuplicate(t *testing.T) {
 	app.GET("/users", func(c *Ctx) error { return nil })
 	app.POST("/users", func(c *Ctx) error { return nil })
 
-	if _, ok := app.lookup([]byte("GET"), []byte("/users")); !ok {
+	var p router.Params
+	if _, ok := app.lookup([]byte("GET"), []byte("/users"), &p); !ok {
 		t.Error("GET /users disappeared after POST /users was registered")
 	}
-	if _, ok := app.lookup([]byte("POST"), []byte("/users")); !ok {
+	if _, ok := app.lookup([]byte("POST"), []byte("/users"), &p); !ok {
 		t.Error("POST /users was not registered")
 	}
 }
@@ -191,7 +199,8 @@ func TestLookupReturnsTheHandlerThatWasRegistered(t *testing.T) {
 		return nil
 	})
 
-	h, ok := app.lookup([]byte("GET"), []byte("/x"))
+	var p router.Params
+	h, ok := app.lookup([]byte("GET"), []byte("/x"), &p)
 	if !ok {
 		t.Fatal("lookup did not find the route")
 	}
@@ -200,5 +209,45 @@ func TestLookupReturnsTheHandlerThatWasRegistered(t *testing.T) {
 	}
 	if marker != "called" {
 		t.Error("lookup returned a different handler than the one registered")
+	}
+}
+
+func TestAppRoutesAParameterisedPattern(t *testing.T) {
+	app := New()
+	app.GET("/users/:id", func(c *Ctx) error { return nil })
+
+	var p router.Params
+	if _, ok := app.lookup([]byte("GET"), []byte("/users/42"), &p); !ok {
+		t.Fatal("lookup did not match a parameterised route")
+	}
+	if got := string(p.Get("id")); got != "42" {
+		t.Errorf("captured id = %q, want %q", got, "42")
+	}
+}
+
+func TestAppRoutesAWildcardPattern(t *testing.T) {
+	app := New()
+	app.GET("/files/*path", func(c *Ctx) error { return nil })
+
+	var p router.Params
+	if _, ok := app.lookup([]byte("GET"), []byte("/files/a/b.txt"), &p); !ok {
+		t.Fatal("lookup did not match a wildcard route")
+	}
+	if got := string(p.Get("path")); got != "a/b.txt" {
+		t.Errorf("captured path = %q, want %q", got, "a/b.txt")
+	}
+}
+
+func TestRegistrationPanicsOnAnUnmatchablePattern(t *testing.T) {
+	cases := []string{"/a//b", "/a/./b", "/caf%C3%A9", "/users/:", "/files/*p/edit", "/a/:id/b/:id"}
+
+	for _, pattern := range cases {
+		app := New()
+		v := mustPanic(t, "GET("+pattern+")", func() {
+			app.GET(pattern, func(c *Ctx) error { return nil })
+		})
+		if msg, _ := v.(string); !strings.Contains(msg, pattern) {
+			t.Errorf("panic for %q does not name the pattern: %v", pattern, v)
+		}
 	}
 }

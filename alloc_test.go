@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/valyala/fasthttp"
+
+	"github.com/vietpham102301/rice-http/internal/router"
 )
 
 // budget asserts that fn allocates no more than want objects per call.
@@ -59,12 +61,13 @@ func TestAllocBudgetLookupHit(t *testing.T) {
 	method := []byte("GET")
 	path := []byte("/users")
 
-	if _, ok := app.lookup(method, path); !ok {
+	var p router.Params
+	if _, ok := app.lookup(method, path, &p); !ok {
 		t.Fatal("route not registered; the budget below would be measuring the miss path")
 	}
 
 	budget(t, "App.lookup hit", 0, func() {
-		_, _ = app.lookup(method, path)
+		_, _ = app.lookup(method, path, &p)
 	})
 }
 
@@ -75,12 +78,13 @@ func TestAllocBudgetLookupMiss(t *testing.T) {
 	method := []byte("GET")
 	path := []byte("/absent")
 
-	if _, ok := app.lookup(method, path); ok {
+	var p router.Params
+	if _, ok := app.lookup(method, path, &p); ok {
 		t.Fatal("route unexpectedly found; the budget below would be measuring a hit")
 	}
 
 	budget(t, "App.lookup miss", 0, func() {
-		_, _ = app.lookup(method, path)
+		_, _ = app.lookup(method, path, &p)
 	})
 }
 
@@ -97,7 +101,8 @@ func TestAllocBudgetHandleDispatch(t *testing.T) {
 	fctx.Request.Header.SetMethod("GET")
 	fctx.Request.SetRequestURI("/users")
 
-	if _, ok := app.lookup(fctx.Method(), fctx.Path()); !ok {
+	var p router.Params
+	if _, ok := app.lookup(fctx.Method(), fctx.Path(), &p); !ok {
 		t.Fatal("route not registered; the budget below would be measuring the miss path")
 	}
 
@@ -118,11 +123,12 @@ func TestAllocBudgetLookupAtScale(t *testing.T) {
 	method := []byte("GET")
 	path := []byte("/route/500")
 
-	if _, ok := app.lookup(method, path); !ok {
+	var p router.Params
+	if _, ok := app.lookup(method, path, &p); !ok {
 		t.Fatal("route not registered")
 	}
 
 	budget(t, "App.lookup with 1000 routes", 0, func() {
-		_, _ = app.lookup(method, path)
+		_, _ = app.lookup(method, path, &p)
 	})
 }

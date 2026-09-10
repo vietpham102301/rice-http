@@ -56,7 +56,12 @@ func (a *App) FasthttpHandler() fasthttp.RequestHandler { return a.handle }
 
 // handle is the dispatch path: one request in, one response out.
 func (a *App) handle(fctx *fasthttp.RequestCtx) {
-	h, ok := a.lookup(fctx.Method(), fctx.Path())
+	// M3 Task 5 moves this onto the Ctx, which is where it belongs and where the
+	// pool in M6 can reuse it. It is a stack local here only so that Task 4's
+	// change stays confined to the router.
+	var params router.Params
+
+	h, ok := a.lookup(fctx.Method(), fctx.Path(), &params)
 	if !ok {
 		// M1 allocated the Ctx before deciding whether it had a handler, so a
 		// miss paid for a context nobody read. M2 looks up first. The miss path
