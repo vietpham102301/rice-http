@@ -69,7 +69,7 @@ func (p *Params) add(key string, value []byte) bool {
 // Get returns the value captured for name, or nil if there is none.
 //
 // A linear scan over at most MaxParams entries beats a map decisively at this
-// size and allocates nothing.
+// size and allocates nothing. See TestGetAllocatesNothing.
 func (p *Params) Get(name string) []byte {
 	for i := 0; i < p.n; i++ {
 		if p.slots[i].Key == name {

@@ -173,3 +173,30 @@ func TestParamsValueAliasesTheCallerSlice(t *testing.T) {
 		t.Errorf("Get returned %q; Params is expected to alias the caller's slice, not copy it", got)
 	}
 }
+
+// TestGetAllocatesNothing backs the claim Get's doc comment makes. A scan over a
+// fixed array returning a slice header should not allocate, but this project does
+// not take that on faith: an unbacked allocation claim is exactly the defect M2's
+// final review caught twice.
+func TestGetAllocatesNothing(t *testing.T) {
+	var p Params
+	p.add("id", []byte("42"))
+	p.add("slug", []byte("hello"))
+
+	if got := p.Get("slug"); !bytes.Equal(got, []byte("hello")) {
+		t.Fatalf("Get(\"slug\") = %q, want %q; the measurement below would be meaningless", got, "hello")
+	}
+
+	// A miss scans every occupied slot, so it is the more expensive direction.
+	if got := testing.AllocsPerRun(1000, func() {
+		_ = p.Get("absent")
+	}); got != 0 {
+		t.Errorf("Get on a miss allocated %.1f objects per call, want 0", got)
+	}
+
+	if got := testing.AllocsPerRun(1000, func() {
+		_ = p.Get("slug")
+	}); got != 0 {
+		t.Errorf("Get on a hit allocated %.1f objects per call, want 0", got)
+	}
+}
