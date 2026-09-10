@@ -236,6 +236,18 @@ func TestAllocBudgetCtxParam(t *testing.T) {
 	})
 }
 
+// paramStringSink keeps ParamString's result reachable so the compiler cannot
+// elide the conversion as dead code. Without it the measurement below reads 0,
+// and the test would pass while measuring nothing — including if ParamString
+// stopped copying and started aliasing, which would break the borrow contract.
+var paramStringSink string
+
+// TestAllocBudgetCtxParamString asserts exactly one allocation rather than at
+// most one. This is the accessor that deliberately copies out of fasthttp's
+// buffer so a value can outlive the handler, and docs/03-core-concepts.md budgets
+// it at 1. Zero would mean either that the measurement is not reaching the
+// conversion or that the copy is gone; both are defects, and an upper bound
+// cannot tell either from success.
 func TestAllocBudgetCtxParamString(t *testing.T) {
 	app := New()
 	fctx := &fasthttp.RequestCtx{}
@@ -248,11 +260,12 @@ func TestAllocBudgetCtxParamString(t *testing.T) {
 		t.Fatalf("ParamString = %q, want 42", got)
 	}
 
-	// One allocation, on purpose: this accessor copies out of the request buffer
-	// so the value outlives the handler. docs/03-core-concepts.md budgets it at 1.
-	budget(t, "Ctx.ParamString", 1, func() {
-		_ = c.ParamString("id")
+	got := testing.AllocsPerRun(1000, func() {
+		paramStringSink = c.ParamString("id")
 	})
+	if got != 1 {
+		t.Errorf("Ctx.ParamString allocated %.1f objects per call, want exactly 1", got)
+	}
 }
 
 // TestAllocBudgetHandleDispatchParameterised keeps the end-to-end promise honest
