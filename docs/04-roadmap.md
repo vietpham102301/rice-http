@@ -156,3 +156,7 @@ Not scheduled, not promised. Each would need its own brainstorm.
 - Static file serving
 - Content negotiation
 - Streaming and server-sent events
+- `c.Query` and `c.Header`, the remaining borrowed read accessors. Committed in
+  [03-core-concepts.md](03-core-concepts.md) and budgeted in
+  [05-performance-model.md](05-performance-model.md), but owned by no milestone.
+  Noticed while writing M3.

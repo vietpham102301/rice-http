@@ -111,7 +111,8 @@ func TestAllocBudgetHandleDispatch(t *testing.T) {
 	})
 }
 
-// TestAllocBudgetLookupAtScale guards the map probe specifically. If someone
+// TestAllocBudgetLookupAtScale guards a lookup against a large route set,
+// where a per-request string conversion of the path would show up. If someone
 // rewrites Tree.Lookup as key := string(path) the optimisation is lost and this
 // fails, while every behavioural test keeps passing.
 func TestAllocBudgetLookupAtScale(t *testing.T) {
@@ -130,5 +131,146 @@ func TestAllocBudgetLookupAtScale(t *testing.T) {
 
 	budget(t, "App.lookup with 1000 routes", 0, func() {
 		_, _ = app.lookup(method, path, &p)
+	})
+}
+
+func TestAllocBudgetLookupOneParameter(t *testing.T) {
+	app := New()
+	app.GET("/users/:id", func(c *Ctx) error { return nil })
+
+	method := []byte("GET")
+	path := []byte("/users/42")
+
+	var p router.Params
+	if _, ok := app.lookup(method, path, &p); !ok {
+		t.Fatal("route not registered; the budget below would be measuring the miss path")
+	}
+	if got := string(p.Get("id")); got != "42" {
+		t.Fatalf("captured id = %q, want 42; the budget below would not be measuring capture", got)
+	}
+
+	budget(t, "App.lookup with one parameter", 0, func() {
+		p.Reset()
+		_, _ = app.lookup(method, path, &p)
+	})
+}
+
+func TestAllocBudgetLookupFiveParameters(t *testing.T) {
+	app := New()
+	app.GET("/a/:p1/b/:p2/c/:p3/d/:p4/e/:p5", func(c *Ctx) error { return nil })
+
+	method := []byte("GET")
+	path := []byte("/a/1/b/2/c/3/d/4/e/5")
+
+	var p router.Params
+	if _, ok := app.lookup(method, path, &p); !ok {
+		t.Fatal("route not registered")
+	}
+	if p.Len() != 5 {
+		t.Fatalf("captured %d parameters, want 5", p.Len())
+	}
+
+	budget(t, "App.lookup with five parameters", 0, func() {
+		p.Reset()
+		_, _ = app.lookup(method, path, &p)
+	})
+}
+
+func TestAllocBudgetLookupWildcard(t *testing.T) {
+	app := New()
+	app.GET("/files/*path", func(c *Ctx) error { return nil })
+
+	method := []byte("GET")
+	path := []byte("/files/a/b/c.txt")
+
+	var p router.Params
+	if _, ok := app.lookup(method, path, &p); !ok {
+		t.Fatal("route not registered")
+	}
+
+	budget(t, "App.lookup with a wildcard", 0, func() {
+		p.Reset()
+		_, _ = app.lookup(method, path, &p)
+	})
+}
+
+// TestAllocBudgetLookupBacktrack measures the worst case the design admits: a
+// static branch that matches, strands a byte, and forces an unwind to the
+// parameter child. It must still allocate nothing.
+func TestAllocBudgetLookupBacktrack(t *testing.T) {
+	app := New()
+	app.GET("/users/new", func(c *Ctx) error { return nil })
+	app.GET("/users/:id", func(c *Ctx) error { return nil })
+
+	method := []byte("GET")
+	path := []byte("/users/newx")
+
+	var p router.Params
+	if _, ok := app.lookup(method, path, &p); !ok {
+		t.Fatal("the backtracking route did not match; this budget would measure a miss")
+	}
+	if got := string(p.Get("id")); got != "newx" {
+		t.Fatalf("captured id = %q, want newx", got)
+	}
+
+	budget(t, "App.lookup with backtracking", 0, func() {
+		p.Reset()
+		_, _ = app.lookup(method, path, &p)
+	})
+}
+
+func TestAllocBudgetCtxParam(t *testing.T) {
+	app := New()
+	fctx := &fasthttp.RequestCtx{}
+
+	c := &Ctx{}
+	c.reset(app, fctx)
+	c.params.Set("id", []byte("42"))
+
+	if got := string(c.Param("id")); got != "42" {
+		t.Fatalf("Param = %q, want 42", got)
+	}
+
+	budget(t, "Ctx.Param", 0, func() {
+		_ = c.Param("id")
+	})
+}
+
+func TestAllocBudgetCtxParamString(t *testing.T) {
+	app := New()
+	fctx := &fasthttp.RequestCtx{}
+
+	c := &Ctx{}
+	c.reset(app, fctx)
+	c.params.Set("id", []byte("42"))
+
+	if got := c.ParamString("id"); got != "42" {
+		t.Fatalf("ParamString = %q, want 42", got)
+	}
+
+	// One allocation, on purpose: this accessor copies out of the request buffer
+	// so the value outlives the handler. docs/03-core-concepts.md budgets it at 1.
+	budget(t, "Ctx.ParamString", 1, func() {
+		_ = c.ParamString("id")
+	})
+}
+
+// TestAllocBudgetHandleDispatchParameterised keeps the end-to-end promise honest
+// for a parameterised route: still exactly one allocation, the Ctx.
+func TestAllocBudgetHandleDispatchParameterised(t *testing.T) {
+	app := New()
+	app.GET("/users/:id", func(c *Ctx) error { return c.String(200, "ok") })
+
+	fctx := &fasthttp.RequestCtx{}
+	fctx.Request.Header.SetMethod("GET")
+	fctx.Request.SetRequestURI("/users/42")
+
+	app.handle(fctx)
+	if fctx.Response.StatusCode() != 200 {
+		t.Fatalf("status = %d, want 200; this budget would be measuring the 404 path", fctx.Response.StatusCode())
+	}
+
+	budget(t, "App.handle on a parameterised route", 1, func() {
+		app.handle(fctx)
 	})
 }

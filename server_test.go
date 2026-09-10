@@ -200,3 +200,82 @@ func TestServeReturns404ForAnUnregisteredPath(t *testing.T) {
 		t.Errorf("Shutdown returned %v, want nil", err)
 	}
 }
+
+func TestServeAnswersAParameterisedRoute(t *testing.T) {
+	app := rice.New()
+	app.GET("/users/:id", func(c *rice.Ctx) error {
+		return c.String(200, "user "+c.ParamString("id"))
+	})
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go func() { _ = app.Serve(ln) }()
+
+	addr := waitForAddr(t, app)
+
+	status, body := get(t, addr, "/users/42")
+	if status != 200 {
+		t.Errorf("status = %d, want 200", status)
+	}
+	if body != "user 42" {
+		t.Errorf("body = %q, want %q", body, "user 42")
+	}
+
+	if err := app.Shutdown(context.Background()); err != nil {
+		t.Errorf("Shutdown returned %v, want nil", err)
+	}
+}
+
+func TestServeAnswersAWildcardRoute(t *testing.T) {
+	app := rice.New()
+	app.GET("/files/*path", func(c *rice.Ctx) error {
+		return c.String(200, "file "+c.ParamString("path"))
+	})
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go func() { _ = app.Serve(ln) }()
+
+	addr := waitForAddr(t, app)
+
+	status, body := get(t, addr, "/files/a/b/c.txt")
+	if status != 200 {
+		t.Errorf("status = %d, want 200", status)
+	}
+	if body != "file a/b/c.txt" {
+		t.Errorf("body = %q, want %q", body, "file a/b/c.txt")
+	}
+
+	if err := app.Shutdown(context.Background()); err != nil {
+		t.Errorf("Shutdown returned %v, want nil", err)
+	}
+}
+
+// TestServeMatchesAPercentEncodedRequestAgainstADecodedPattern is the request-side
+// half of the rule Task 2 enforces at registration: fasthttp decodes the path
+// before rice sees it, so the decoded pattern is the one that matches.
+func TestServeMatchesAPercentEncodedRequestAgainstADecodedPattern(t *testing.T) {
+	app := rice.New()
+	app.GET("/café", func(c *rice.Ctx) error { return c.String(200, "decoded") })
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go func() { _ = app.Serve(ln) }()
+
+	addr := waitForAddr(t, app)
+
+	status, body := get(t, addr, "/caf%C3%A9")
+	if status != 200 || body != "decoded" {
+		t.Errorf("got %d %q, want 200 %q", status, body, "decoded")
+	}
+
+	if err := app.Shutdown(context.Background()); err != nil {
+		t.Errorf("Shutdown returned %v, want nil", err)
+	}
+}
