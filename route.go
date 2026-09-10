@@ -107,9 +107,12 @@ func (a *App) treeFor(method string) *router.Tree[Handler] {
 // lookup finds the handler for a request, filling params with whatever the
 // matched route captured.
 //
-// This is the hot path. Both method and path stay borrowed byte slices
-// throughout; params is storage the caller already owns, which is why a match
-// costs no allocation. alloc_test.go pins that down.
+// This is the hot path. On the common-verb branch, method and path stay
+// borrowed byte slices and are never converted to strings; params is storage
+// the caller already owns rather than something lookup allocates. That is what
+// makes zero-allocation parameter capture possible, not something already
+// verified: alloc_test.go's budgets today cover static lookup only. The budgets
+// for capture arrive with the rest of this milestone's allocation tests.
 func (a *App) lookup(method, path []byte, params *router.Params) (Handler, bool) {
 	if i, ok := methodIndex(method); ok {
 		return a.trees[i].Lookup(path, params)
