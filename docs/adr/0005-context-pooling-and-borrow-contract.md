@@ -59,3 +59,13 @@ concurrency test under `-race` that hammers the pool.
 
 **Accepted risk:** documentation and a debug build mitigate the footgun; they do not remove
 it. A user who never reads the docs and never runs the debug build can ship the bug.
+
+**Recorded in M3.** M2 measured the 404 path at zero allocations, because escape
+analysis kept the miss-path `Ctx` on the stack, and M2's retrospective predicted
+that M5's configurable `ErrorHandler` would eventually take that zero away. M3
+took it away first, for a different reason: `Lookup` fills a `*Params`, `Params`
+lives on the `Ctx`, so the `Ctx` must be constructed before the lookup and now
+escapes on both paths. The prediction that the zero would not last was correct;
+the mechanism named for it was not the one that arrived. This is the clearest
+available argument for the rule M2 adopted — measure a zero, document why it
+holds, and do not pin it with a test unless the design guarantees it.

@@ -66,6 +66,23 @@ func (p *Params) add(key string, value []byte) bool {
 	return true
 }
 
+// Set records a captured parameter, replacing any earlier capture of the same
+// name. It reports false if storage is full.
+//
+// The tree fills Params through the unexported add, which is append-only because
+// a lookup never revisits a name. Set exists for package rice, which cannot reach
+// add across the internal/ boundary, and for tests that need to stage a Ctx
+// without running a lookup.
+func (p *Params) Set(name string, value []byte) bool {
+	for i := 0; i < p.n; i++ {
+		if p.slots[i].Key == name {
+			p.slots[i].Value = value
+			return true
+		}
+	}
+	return p.add(name, value)
+}
+
 // Get returns the value captured for name, or nil if there is none.
 //
 // A linear scan over at most MaxParams entries beats a map decisively at this

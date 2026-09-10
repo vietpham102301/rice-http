@@ -174,6 +174,33 @@ func TestParamsValueAliasesTheCallerSlice(t *testing.T) {
 	}
 }
 
+func TestSetReplacesAnExistingName(t *testing.T) {
+	var p Params
+	p.Set("id", []byte("first"))
+	p.Set("id", []byte("second"))
+
+	if got := p.Len(); got != 1 {
+		t.Errorf("Len() = %d after setting the same name twice, want 1", got)
+	}
+	if got := p.Get("id"); !bytes.Equal(got, []byte("second")) {
+		t.Errorf("Get(\"id\") = %q, want %q", got, "second")
+	}
+}
+
+func TestSetReportsFalseWhenFull(t *testing.T) {
+	var p Params
+	for i := 0; i < MaxParams; i++ {
+		p.Set("k"+string(rune('0'+i)), []byte("v"))
+	}
+
+	if p.Set("one-too-many", []byte("v")) {
+		t.Error("Set accepted a new name past MaxParams, want false")
+	}
+	if !p.Set("k0", []byte("replaced")) {
+		t.Error("Set refused to replace an existing name in a full Params, want true")
+	}
+}
+
 // TestGetAllocatesNothing backs the claim Get's doc comment makes. A scan over a
 // fixed array returning a slice header should not allocate, but this project does
 // not take that on faith: an unbacked allocation claim is exactly the defect M2's
