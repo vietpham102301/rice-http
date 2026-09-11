@@ -1,6 +1,7 @@
 package rice
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/vietpham102301/rice-http/internal/router"
@@ -8,17 +9,23 @@ import (
 
 // Handle registers h for the given method and path.
 //
-// It panics on a programmer error: an empty or non-uppercase method, an empty
-// path, a path without a leading slash, a nil handler, or a route already
-// registered for the same method and path. These are mistakes discovered at
-// startup rather than runtime conditions, and a duplicate in particular means
-// one of the two handlers can never run — silent, and expensive to debug.
-// Panicking at the call site puts the mistake in the stack trace.
+// All routes must be registered before serving begins. The route trees are
+// mutated here without synchronisation and read on every request, so registering
+// a route after Run or Serve is a data race, not merely a late change.
 //
-// All routes must be registered before serving begins. trees and rare are
-// mutated here without synchronisation while handle reads them concurrently
-// from request goroutines, so registering a route after Serve has started is
-// a data race, not merely a logic error.
+// path may contain ":name" segments, each capturing one path segment under
+// that name, and a trailing "*name" wildcard capturing everything after it. A
+// wildcard requires at least one byte to match, so "/files/*path" matches
+// neither "/files" nor "/files/" — the commonest use of a wildcard is a
+// single-page-app catch-all such as "/*all", and it will not match the bare
+// "/"; register that path separately if it needs its own handler.
+//
+// It panics on a programmer error: an empty or lowercase method, a nil handler,
+// a pattern that is malformed or could never match a request, or a route already
+// registered for the same method and path. These are mistakes discovered at
+// startup rather than runtime conditions, and a duplicate in particular means one
+// of the two handlers can never run — silent, and expensive to debug. Panicking
+// at the call site puts the mistake in the stack trace.
 //
 // M4 appends a variadic mw ...Middleware parameter. Doing so does not break
 // existing calls.
@@ -27,20 +34,25 @@ func (a *App) Handle(method, path string, h Handler) {
 		panic("rice: route method is empty for path " + path)
 	}
 	if hasLowercaseByte(method) {
-		panic("rice: route method " + method + " is not uppercase, for path " + path)
-	}
-	if path == "" {
-		panic("rice: route path is empty for method " + method)
-	}
-	if path[0] != '/' {
-		panic("rice: route path " + path + " does not begin with /")
+		panic("rice: route method " + method + " for path " + path +
+			" is not uppercase; HTTP methods are matched case-sensitively")
 	}
 	if h == nil {
 		panic("rice: nil handler for " + method + " " + path)
 	}
 
 	if err := a.treeFor(method).Insert(path, h); err != nil {
-		panic(fmt.Sprintf("rice: %v: %s %s", err, method, path))
+		if errors.Is(err, router.ErrDuplicate) {
+			// ErrDuplicate carries no path or method of its own (see its doc
+			// comment), so the message is built here, in the same "route path
+			// ..." shape parsePattern's own errors use below — one shape for
+			// every startup panic Handle can raise, none of them naming the
+			// internal router package.
+			panic(fmt.Sprintf("rice: route path %s is already registered for %s", path, method))
+		}
+		// parsePattern's and the tree's errors already name the offending
+		// pattern and say what to write instead, so they are surfaced verbatim.
+		panic("rice: " + err.Error())
 	}
 }
 
@@ -104,14 +116,18 @@ func (a *App) treeFor(method string) *router.Tree[Handler] {
 	return t
 }
 
-// lookup finds the handler for a request.
+// lookup finds the handler for a request, filling params with whatever the
+// matched route captured.
 //
-// This is the hot path. For a common verb it costs one array index and one map
-// probe, and it allocates nothing: both method and path stay as borrowed byte
-// slices throughout.
-func (a *App) lookup(method, path []byte) (Handler, bool) {
+// This is the hot path. On the common-verb branch, method and path stay
+// borrowed byte slices and are never converted to strings; params is storage
+// the caller already owns rather than something lookup allocates. That is what
+// makes zero-allocation parameter capture possible, and alloc_test.go's
+// parameter-capture budgets (TestAllocBudgetLookupOneParameter and its
+// siblings) verify it.
+func (a *App) lookup(method, path []byte, params *router.Params) (Handler, bool) {
 	if i, ok := methodIndex(method); ok {
-		return a.trees[i].Lookup(path)
+		return a.trees[i].Lookup(path, params)
 	}
 
 	if a.rare == nil {
@@ -121,5 +137,5 @@ func (a *App) lookup(method, path []byte) (Handler, bool) {
 	if !ok {
 		return nil, false
 	}
-	return t.Lookup(path)
+	return t.Lookup(path, params)
 }

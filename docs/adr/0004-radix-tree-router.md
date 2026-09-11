@@ -57,3 +57,9 @@ dimension above the method array).
 **Open question for M3:** whether to support trailing-slash redirection and case-insensitive
 fallback matching. Both are conveniences that add branches to the lookup path. Decide with a
 measurement, and record the outcome here as a follow-up ADR.
+
+**Answered in M3:** neither is supported. See
+[ADR-0007](0007-no-trailing-slash-or-case-insensitive-matching.md). The
+measurement this ADR asked for turned out not to be the deciding factor: both
+features sit on the miss path and neither touches a matching request, so the cost
+concern anticipated here did not apply. The decision was made on scope instead.

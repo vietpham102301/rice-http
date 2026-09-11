@@ -16,6 +16,112 @@ Each entry uses this shape:
 
 ---
 
+## 2026-09-11 — M3 — Radix tree router: the tree loses on static routes, and the `Ctx` is what got expensive
+
+**Did:** Replaced the map with a radix tree per verb. Named parameters (`/users/:id`), a
+trailing catch-all (`/files/*path`), insertion that splits nodes on the longest common prefix,
+and a lookup that tries static children, then the parameter child, then the wildcard child, and
+unwinds to the next alternative when a branch strands part of the path — so `/users/newx`
+matches `/users/:id` even though `/users/new` consumed three bytes of it first, the bug
+httprouter carried and Gin inherited. Registration rejects everything ambiguous or unreachable
+at startup: duplicates, two parameter names at one position, a wildcard that is not last, a
+repeated parameter name, more than eight parameters, and any pattern written in a form
+`fctx.Path()` never produces (`/a//b`, `/a/./b`, `/caf%C3%A9`). Captured parameters live in a
+fixed inline array on the `Ctx`, read through `c.Param` (borrowed) and `c.ParamString`
+(copies). ADR-0004's open question is closed by
+[ADR-0007](adr/0007-no-trailing-slash-or-case-insensitive-matching.md): no trailing-slash
+redirection, no case-insensitive fallback, both opt-in later, decided on scope rather than on
+the measurement ADR-0004 asked for — because both sit on the miss path and neither would cost a
+matching request anything. 119 tests pass under `-race`.
+
+**Learned:** Three things.
+
+1. *The tree loses on static routes, exactly as predicted, and the milestone's biggest number
+   is not about the tree at all.* Dispatch roughly doubled — `RiceDispatch` 37.91 → 79.70,
+   `RiceDispatchNotFound` 33.15 → 97.68, `CtxSetHeader` 80.59 → 127.85, against a baseline that
+   barely moved (11.24 → 10.92). The obvious suspect was the tree. It is not the answer. The
+   `Ctx` grew from 16 bytes to 344 because `Params` is eight inline slots, and a throwaway
+   benchmark of the two struct shapes — 11.8 ns/op for the 16-byte one, 72.9 for the 352-byte
+   one — puts **about +61 ns on the allocation alone**, which more than accounts for the whole
+   slowdown. The probe was thrown away rather than committed; it measures a struct shape, not
+   rice. This is the first milestone to account for its own cost instead of recording it
+   unexplained, and the account is mundane: it is the size of the thing being allocated.
+
+2. *A prediction from M1 is now wrong, and M3 is why.* M1 estimated the `Ctx` allocation at
+   roughly 3 ns and concluded M6's pooling would be "1 alloc to 0 rather than a large latency
+   win". M3 made that allocation twenty-two times bigger, so removing it is now worth about
+   61 ns per request — roughly three quarters of everything `RiceDispatch` measures. M6's payoff
+   grew because M3 spent, which is not a credit to M3. Separately, the same probe offers the
+   first candidate for M2's unexplained ~9 ns: M1's 3 ns came from comparing a 404 path that
+   M2 then proved does not allocate, so it was never a measurement of an allocation; a direct
+   probe says a 16-byte allocation costs about 11.8 ns, and the ~9 ns gap in the estimate is the
+   size of the gap in M2's remainder. A coincidence of magnitude, not a profile, and recorded
+   as a candidate.
+
+3. *A guard nobody has broken on purpose is not a guard.* Five times across M2 and M3,
+   something named as a guard did not constrain what it claimed: D2's named allocation test
+   stayed green when the forbidden form was applied; a doc comment cited a test that did not
+   check it; `TestTreeLookupDoesNotRetainThePathSlice` could not fail, because the helper copied
+   the path and both fixtures were static; `App.lookup`'s comment claimed parameter capture
+   allocated nothing and cited static-only budgets; and `ParamString`'s budget measured zero
+   because a discarded result let the compiler elide the copy, with an upper bound that accepted
+   zero. Every one was caught by reading the guard afterwards, never by the guard failing. The
+   habit that closed the last three: break the thing deliberately and confirm the guard goes red
+   — making `ParamString` alias instead of copy, and watching the budget fail, is what turned it
+   into a test.
+
+**Measured:** Medians of ten runs from one recording, map and tree from the same binary on the
+same machine — Apple M2 Pro, go1.25.6 darwin/arm64,
+[bench/results/M3-radix-tree-router.txt](../bench/results/M3-radix-tree-router.txt):
+
+| Benchmark | ns/op | B/op | allocs/op |
+| --- | --- | --- | --- |
+| `BenchmarkFasthttpBaseline` | 10.92 | 0 | 0 |
+| `BenchmarkRiceDispatch` | 79.70 | 352 | 1 |
+| `BenchmarkMapLookup10` | 6.19 | 0 | 0 |
+| `BenchmarkMapLookup100` | 5.96 | 0 | 0 |
+| `BenchmarkMapLookup1000` | 6.23 | 0 | 0 |
+| `BenchmarkTreeLookup10` | 93.47 | 352 | 1 |
+| `BenchmarkTreeLookup100` | 98.87 | 352 | 1 |
+| `BenchmarkTreeLookup1000` | 109.40 | 352 | 1 |
+| `BenchmarkTreeLookup1Param` | 91.32 | 352 | 1 |
+| `BenchmarkTreeLookup5Params` | 110.25 | 352 | 1 |
+| `BenchmarkTreeLookupWildcard` | 89.45 | 352 | 1 |
+| `BenchmarkTreeLookupBacktrack` | 97.09 | 352 | 1 |
+| `BenchmarkTreeMiss` | 111.10 | 352 | 1 |
+| `BenchmarkTreeWrongVerb` | 107.70 | 352 | 1 |
+| **Map scaling, 10 → 1000 routes** | **+0.04** | **0** | **0** |
+| **Tree scaling, 10 → 1000 routes** | **+15.93** | **0** | **0** |
+
+The map and the tree figures must not be divided into each other. `MapLookup*` is a bare
+`map[string]int` probe with no framework around it; `TreeLookup*` is a full dispatch, `Ctx`
+allocation and response write included, because `internal/router` is not reachable from package
+`bench`. Read each series against itself: the map is flat in route count (a 0.27 ns spread
+across a hundredfold change, pointing both ways), the tree's cost rises by 15.93 ns, and since
+everything else in that path is constant across `n` the rise belongs to the lookup. That is the
+design doc's prediction holding in both halves — the tree does not beat the map on static
+routes, so it earns its keep on parameters and shared prefixes instead, and a static-only route
+set is a case where the naive structure was already right. Parameters cost about 4.7 ns each
+(91.32 for one, 110.25 for five) and the backtracking worst case costs about 6 ns over a direct
+parameter match (97.09 against 91.32) — measured, and unremarkable. `unsafe.Sizeof(Ctx{})` is
+exactly 344, the figure the design predicted; the 352 B/op the benchmarks report is the
+allocator rounding it to the next size class, and both numbers are right. The zero-allocation
+404 path is gone: `TreeMiss` and `RiceDispatchNotFound` now allocate one `Ctx`, because the
+lookup fills a `*Params` living on it. M2 predicted M5 would end that zero; M3 ended it first,
+for a different reason, which is the clearest evidence yet for M2's rule — measure a zero,
+document why it holds, and do not pin it with a test unless the design guarantees it. Recorded
+in [ADR-0005](adr/0005-context-pooling-and-borrow-contract.md). One known limitation, recorded
+and not fixed: nothing isolates tree lookup from dispatch, so the tree's absolute per-lookup
+cost is unknown and the hybrid map-in-front-of-tree question M2 asked M3 to settle stays open.
+
+**Next:** M4 — `Middleware` as `func(Handler) Handler`, the `internal/chain` compiler, the
+`build()` phase under `sync.Once`, and `Group` with prefix and middleware inheritance. What M4
+has to prove is that compiling chains at build time actually removes the per-request cost
+rather than trading it for closure indirection that eats the gain — a five-middleware chain at
+zero allocations per request, or an honest explanation of why not.
+
+---
+
 ## 2026-09-06 — M2 — Static router: the naive map is flat, and hard to beat
 
 **Did:** Replaced `App.SetHandler` with per-verb route registration. `internal/router.Tree[H]`
