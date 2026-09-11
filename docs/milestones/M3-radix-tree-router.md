@@ -234,12 +234,21 @@ checkout, and re-ran the same two benchmarks in the same session on the same mac
     BenchmarkRiceDispatch    80.2 -> 37.3 ns/op   (352 B/op -> 64 B/op)
     BenchmarkTreeLookup10    91.4 -> 45.2 ns/op
 
-37.3 ns/op at one parameter slot sits right next to M2's frozen map at 37.91 ns/op. That is
-the stronger claim the tight-loop probe could not make: at a single route, the radix tree
-costs approximately nothing against the map that preceded it, so the tree walk is not where
-M3's slowdown lives. The entire +41.8 ns gap between M2 and M3's `RiceDispatch` is `Ctx`
-growth, measured directly on the real dispatch path rather than inferred from a shape probe
-run in isolation. (The probe was re-run during this fix pass and reproduced within noise:
+The claim this licenses, and the one it does not, are worth separating carefully — the
+final review caught this paragraph overreaching and it is corrected here.
+
+**Established by the bisection:** `MaxParams` is the only variable that changed, so
+80.2 - 37.3 = **42.9 ns is `Ctx` growth**, measured in place on the real dispatch path
+rather than inferred from a shape probe in isolation. That figure matches the +41.79 ns
+observed between M2 and M3, which is what closes the residue.
+
+**Not established by it:** that 37.3 ns/op sits beside M2's frozen map at 37.91 suggests the
+radix tree costs little against the map at a single route, but those two numbers come from
+different sessions and different codebases. That is not a single-variable comparison, and
+stating it as one would be the same mistake as dividing a map probe by a full dispatch. The
+honest form is: the tree walk is not where M3's slowdown lives — the bisection shows that —
+and how the tree's own per-lookup cost compares to the map's remains unmeasured, because
+nothing in the suite isolates lookup from dispatch. That limitation is recorded below. (The probe was re-run during this fix pass and reproduced within noise:
 78.7–80.3 ns/op at `MaxParams = 8`, 36.7–37.0 ns/op at `MaxParams = 1`, for `RiceDispatch`.)
 
 This also closes the residue the tight-loop probe left open. That probe measured +61 ns for

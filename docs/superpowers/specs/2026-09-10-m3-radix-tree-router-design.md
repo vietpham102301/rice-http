@@ -146,8 +146,11 @@ makes the size irrelevant, but M3 records the number rather than hiding it.
 > shrinking `Param` itself. `Key string` plus `Value []byte` is 40 bytes because
 > both fields are independent views with their own pointer and length. Storing
 > `(nameIdx uint16, start, end uint32)` instead — an index into the route's own
-> name list, plus start/end offsets into the request path — is 10 bytes, so eight
-> slots would cost roughly 80 bytes rather than 328. The borrow contract is
+> name list, plus start/end offsets into the request path — is **12 bytes**, not the
+> 10 its fields sum to: Go aligns the two `uint32`s, which pads the `uint16`. So
+> eight slots cost **96 bytes** rather than 328. Both figures were measured with
+> `unsafe.Sizeof`, after the first version of this note stated 10 and 80 from
+> arithmetic that ignored alignment. The borrow contract is
 > unchanged and capture still costs one allocation; nearly all of the ~43 ns this
 > milestone's retrospective attributes to `Ctx` growth would be avoided without
 > waiting for M6's pool.
