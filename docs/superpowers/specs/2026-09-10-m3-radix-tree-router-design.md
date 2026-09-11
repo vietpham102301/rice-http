@@ -141,6 +141,26 @@ grows from 16 bytes to roughly 344. Allocations per request stay at one; bytes
 per request rise about twenty-onefold, and the benchmark will show it. M6's pool
 makes the size irrelevant, but M3 records the number rather than hiding it.
 
+> **Added during the final review (2026-09-11).** This decision weighed a fixed
+> inline array against a pool-sized slice and never considered a third option:
+> shrinking `Param` itself. `Key string` plus `Value []byte` is 40 bytes because
+> both fields are independent views with their own pointer and length. Storing
+> `(nameIdx uint16, start, end uint32)` instead — an index into the route's own
+> name list, plus start/end offsets into the request path — is 10 bytes, so eight
+> slots would cost roughly 80 bytes rather than 328. The borrow contract is
+> unchanged and capture still costs one allocation; nearly all of the ~43 ns this
+> milestone's retrospective attributes to `Ctx` growth would be avoided without
+> waiting for M6's pool.
+>
+> This was not caught in time to change M3, and it should not be: M3's budget was
+> already spent proving the tree works at all, and reopening `Param`'s layout here
+> would have widened scope on the milestone ADR-0004 already called the hardest
+> code in the project. It is recorded here because M6 is unwritten and its stated
+> plan — sizing storage from the observed maximum while keeping 40-byte entries —
+> would spend a pool allocation to remove the fixed-eight limit while leaving most
+> of this win on the table. This belongs to M6's design, not M3's, and the note
+> exists so M6 inherits the option rather than reinventing it.
+
 ### D4: The Ctx is now allocated before the lookup, partially reverting M2's D6
 
 M2's D6 moved the lookup ahead of the `Ctx` allocation so that a request matching

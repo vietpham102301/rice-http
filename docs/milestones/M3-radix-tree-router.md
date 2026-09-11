@@ -222,10 +222,43 @@ shape nothing uses would rot. It was re-run once before this was written and rep
 Two caveats, because the probe is a tight loop doing nothing else. It sees the allocator's
 friendliest possible cache behaviour, and it exceeds the slowdown it is meant to explain —
 61 ns of cause for 42 ns of effect. So this accounts for M3's cost in the sense that it
-identifies the mechanism and shows it is large enough; it is not an exact decomposition, and
-the residue is presumably work the processor overlaps with other work in a real dispatch. The
-404 path's +64.53 ns is the closer fit, and it should be: M2's 404 allocated nothing at all,
-so it absorbs the whole allocation rather than a growth in one.
+identifies the mechanism and shows it is large enough; on its own it is not an exact
+decomposition. The 404 path's +64.53 ns is the closer fit, and it should be: M2's 404
+allocated nothing at all, so it absorbs the whole allocation rather than a growth in one.
+
+**Final-review addition: an in-situ bisection, which is stronger evidence than the tight-loop
+probe above.** Rather than infer the tree's contribution from a standalone allocation probe,
+the final review changed one line — `MaxParams` from 8 to 1 — in an otherwise untouched
+checkout, and re-ran the same two benchmarks in the same session on the same machine:
+
+    BenchmarkRiceDispatch    80.2 -> 37.3 ns/op   (352 B/op -> 64 B/op)
+    BenchmarkTreeLookup10    91.4 -> 45.2 ns/op
+
+37.3 ns/op at one parameter slot sits right next to M2's frozen map at 37.91 ns/op. That is
+the stronger claim the tight-loop probe could not make: at a single route, the radix tree
+costs approximately nothing against the map that preceded it, so the tree walk is not where
+M3's slowdown lives. The entire +41.8 ns gap between M2 and M3's `RiceDispatch` is `Ctx`
+growth, measured directly on the real dispatch path rather than inferred from a shape probe
+run in isolation. (The probe was re-run during this fix pass and reproduced within noise:
+78.7–80.3 ns/op at `MaxParams = 8`, 36.7–37.0 ns/op at `MaxParams = 1`, for `RiceDispatch`.)
+
+This also closes the residue the tight-loop probe left open. That probe measured +61 ns for
+the allocation alone against a +41.79 ns observed effect — 61 ns of cause for 42 ns of effect,
+and unexplained. The in-situ bisection measures the same change in place rather than in a
+tight loop with no other work around it, and it puts the cost at about 80.2 − 37.3 = **42.9
+ns**, which matches the +41.79 ns `RiceDispatch` actually lost. The tight-loop figure was never
+wrong about the mechanism; it was measuring a friendlier cache environment than a real
+dispatch provides, which is exactly the kind of thing a tight allocation loop overstates. Both
+numbers are kept here rather than one replacing the other: the tight-loop probe is what first
+identified the mechanism, and the in-situ bisection is what confirms the number and resolves
+the residue that probe could not close on its own. The probe for this section was run in a
+throwaway worktree, to change one constant and nothing else, and was not committed.
+
+This project has now recorded an unexplained number twice — M1's header write, still open
+below, and M2's ~9 ns routing cost, addressed a few paragraphs down. The tight-loop probe's
+61-versus-42 gap was on its way to becoming a third. Closing it here, with a second
+independent measurement rather than a stronger inference, is worth stating for its own sake:
+it is the difference between a number that is merely plausible and one that is confirmed.
 
 **A prediction from M1 is now wrong, and M3 is the reason.** M1's retrospective, carried
 forward in M1's journal entry, said the `Ctx` allocation was worth roughly 3 ns of the 14.44 ns

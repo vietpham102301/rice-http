@@ -69,6 +69,9 @@ func parsePattern(pattern string) ([]segment, error) {
 			if name == "" {
 				return nil, fmt.Errorf("route path %s has an empty parameter name", pattern)
 			}
+			if !isValidParamName(name) {
+				return nil, fmt.Errorf("route path %s has a parameter name %q with a character outside a-z, A-Z, 0-9 and _; a literal suffix such as an extension cannot follow a parameter directly, so write it as its own static segment, e.g. /files/:name/txt or a route with no parameter in that position", pattern, name)
+			}
 			segs = append(segs, segment{segParam, name})
 		} else {
 			if name == "" {
@@ -76,6 +79,9 @@ func parsePattern(pattern string) ([]segment, error) {
 			}
 			if next != len(pattern) {
 				return nil, fmt.Errorf("route path %s has a wildcard that is not at the end; a wildcard must be the last segment", pattern)
+			}
+			if !isValidParamName(name) {
+				return nil, fmt.Errorf("route path %s has a wildcard name %q with a character outside a-z, A-Z, 0-9 and _; a wildcard consumes the rest of the path, so nothing can follow it, including a literal suffix such as an extension", pattern, name)
 			}
 			segs = append(segs, segment{segWildcard, name})
 		}
@@ -111,6 +117,30 @@ func scanName(pattern string, i int) (string, int) {
 		j++
 	}
 	return pattern[i:j], j
+}
+
+// isValidParamName reports whether name is made up only of letters, digits and
+// underscore.
+//
+// scanName stops at the next '/', not at the first character that could not
+// belong to a Go-style identifier, so ":name.txt" scans a name of
+// "name.txt" rather than treating ".txt" as a literal suffix. Accepting that
+// silently registers a route where c.Param("name") always returns empty and
+// the ".txt" is never required, so the mistake is rejected here instead. See
+// the M3 final review, finding 1.
+func isValidParamName(name string) bool {
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		switch {
+		case c >= 'a' && c <= 'z':
+		case c >= 'A' && c <= 'Z':
+		case c >= '0' && c <= '9':
+		case c == '_':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // checkNormalised rejects patterns that fasthttp's own normalisation would

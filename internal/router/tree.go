@@ -52,7 +52,7 @@ func (t *tree[H]) insert(pattern string, segs []segment, h H) error {
 				cur.param = &node[H]{name: seg.text}
 			} else if cur.param.name != seg.text {
 				return fmt.Errorf(
-					"router: %s declares parameter :%s where :%s is already registered at the same position",
+					"route path %s declares parameter :%s where :%s is already registered at the same position",
 					pattern, seg.text, cur.param.name)
 			}
 			cur = cur.param
@@ -62,7 +62,7 @@ func (t *tree[H]) insert(pattern string, segs []segment, h H) error {
 				cur.wildcard = &node[H]{name: seg.text}
 			} else if cur.wildcard.name != seg.text {
 				return fmt.Errorf(
-					"router: %s declares wildcard *%s where *%s is already registered at the same position",
+					"route path %s declares wildcard *%s where *%s is already registered at the same position",
 					pattern, seg.text, cur.wildcard.name)
 			}
 			cur = cur.wildcard

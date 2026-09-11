@@ -21,6 +21,9 @@ func TestParsePatternSplitsIntoSegments(t *testing.T) {
 		{"/users/:id/edit", []segment{{segStatic, "/users/"}, {segParam, "id"}, {segStatic, "/edit"}}},
 		{"/files/*path", []segment{{segStatic, "/files/"}, {segWildcard, "path"}}},
 		{"/*all", []segment{{segStatic, "/"}, {segWildcard, "all"}}},
+		// A parameter marker need not be preceded by '/': the name is "ver",
+		// terminated by the '/' before "users", not by anything about ":v".
+		{"/v:ver/users", []segment{{segStatic, "/v"}, {segParam, "ver"}, {segStatic, "/users"}}},
 	}
 
 	for _, c := range cases {
@@ -63,6 +66,9 @@ func TestParsePatternRejects(t *testing.T) {
 		{"/files/*path/edit", "must be the last"},
 		{"/a/:id/b/:id", "twice"},
 		{"/a/:x1/:x2/:x3/:x4/:x5/:x6/:x7/:x8/:x9", "at most"},
+		{"/files/:name.txt", "outside a-z, A-Z, 0-9 and _"},
+		{"/u/:id-:name", "outside a-z, A-Z, 0-9 and _"},
+		{"/f/*path.zip", "outside a-z, A-Z, 0-9 and _"},
 	}
 
 	for _, c := range cases {

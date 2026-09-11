@@ -13,6 +13,13 @@ import (
 // mutated here without synchronisation and read on every request, so registering
 // a route after Run or Serve is a data race, not merely a late change.
 //
+// path may contain ":name" segments, each capturing one path segment under
+// that name, and a trailing "*name" wildcard capturing everything after it. A
+// wildcard requires at least one byte to match, so "/files/*path" matches
+// neither "/files" nor "/files/" — the commonest use of a wildcard is a
+// single-page-app catch-all such as "/*all", and it will not match the bare
+// "/"; register that path separately if it needs its own handler.
+//
 // It panics on a programmer error: an empty or lowercase method, a nil handler,
 // a pattern that is malformed or could never match a request, or a route already
 // registered for the same method and path. These are mistakes discovered at
@@ -36,10 +43,15 @@ func (a *App) Handle(method, path string, h Handler) {
 
 	if err := a.treeFor(method).Insert(path, h); err != nil {
 		if errors.Is(err, router.ErrDuplicate) {
-			panic(fmt.Sprintf("rice: %v: %s %s", err, method, path))
+			// ErrDuplicate carries no path or method of its own (see its doc
+			// comment), so the message is built here, in the same "route path
+			// ..." shape parsePattern's own errors use below — one shape for
+			// every startup panic Handle can raise, none of them naming the
+			// internal router package.
+			panic(fmt.Sprintf("rice: route path %s is already registered for %s", path, method))
 		}
-		// parsePattern's errors already name the offending pattern and say what
-		// to write instead, so they are surfaced verbatim.
+		// parsePattern's and the tree's errors already name the offending
+		// pattern and say what to write instead, so they are surfaced verbatim.
 		panic("rice: " + err.Error())
 	}
 }

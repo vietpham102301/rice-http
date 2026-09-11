@@ -219,6 +219,14 @@ func TestAllocBudgetLookupBacktrack(t *testing.T) {
 	})
 }
 
+// paramSink keeps Param's result reachable so the compiler cannot elide the
+// call as dead code. Without it the measurement below would read 0 no matter
+// what Param does — including if Param stopped borrowing and started
+// allocating a copy on every call — because a discarded result is dead code
+// the compiler is free to remove. See TestAllocBudgetCtxParamString, whose
+// string sink is the same fix for the same failure mode.
+var paramSink []byte
+
 func TestAllocBudgetCtxParam(t *testing.T) {
 	app := New()
 	fctx := &fasthttp.RequestCtx{}
@@ -232,7 +240,7 @@ func TestAllocBudgetCtxParam(t *testing.T) {
 	}
 
 	budget(t, "Ctx.Param", 0, func() {
-		_ = c.Param("id")
+		paramSink = c.Param("id")
 	})
 }
 

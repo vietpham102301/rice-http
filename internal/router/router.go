@@ -14,7 +14,12 @@ package router
 import "errors"
 
 // ErrDuplicate is returned by Insert when a pattern is already registered.
-var ErrDuplicate = errors.New("router: duplicate route")
+//
+// Its own message carries no pattern or method, because Insert has no method
+// to report and route.go is the caller that has both; route.go builds the
+// user-facing message from the path and method it already holds rather than
+// from this error's text.
+var ErrDuplicate = errors.New("duplicate route")
 
 // Tree maps route patterns to handlers.
 //

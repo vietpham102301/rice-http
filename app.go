@@ -22,7 +22,7 @@ type Option func(*App)
 type App struct {
 	// trees holds one route tree per common verb, indexed by a method constant.
 	// It is an array of values, so every element starts as a zero Tree whose
-	// inner map is nil until its first Insert.
+	// root node is nil until its first Insert.
 	trees [methodCount]router.Tree[Handler]
 
 	// rare holds trees for verbs without a reserved slot. It stays nil for

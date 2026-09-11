@@ -38,8 +38,8 @@ func TestLookupMissReturnsTheZeroValue(t *testing.T) {
 	}
 }
 
-// TestLookupOnAnEmptyTree exercises the nil-map read path. A Tree is usable as
-// its zero value, so the map does not exist until the first Insert.
+// TestLookupOnAnEmptyTree exercises the nil-root read path. A Tree is usable
+// as its zero value, so the root node does not exist until the first Insert.
 func TestLookupOnAnEmptyTree(t *testing.T) {
 	var tr Tree[string]
 	var p Params
