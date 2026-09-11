@@ -165,3 +165,34 @@ func BenchmarkTreeMiss(b *testing.B) {
 		h(fctx)
 	}
 }
+
+// BenchmarkTreeWrongVerb measures a request whose path is registered, but only
+// under a different HTTP method, with 1000 routes registered.
+//
+// This is a distinct case from BenchmarkTreeMiss: an unregistered path fails
+// inside the tree walk, while a wrong-verb request never reaches the tree at
+// all — it fails at the method-to-tree selection that runs before any walk
+// starts. Its cost is therefore the method dispatch plus the not-found funnel,
+// not the tree lookup, and it is worth its own number if 405 handling is ever
+// added.
+func BenchmarkTreeWrongVerb(b *testing.B) {
+	paths, probe := staticPaths(1000)
+
+	app := rice.New()
+	for _, p := range paths {
+		app.GET(p, func(c *rice.Ctx) error { return c.String(fasthttp.StatusOK, "ok") })
+	}
+
+	h := app.FasthttpHandler()
+	fctx := newRequestCtx("POST", probe)
+	h(fctx)
+	if fctx.Response.StatusCode() != fasthttp.StatusNotFound {
+		b.Fatalf("probe returned %d, want 404", fctx.Response.StatusCode())
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		h(fctx)
+	}
+}
