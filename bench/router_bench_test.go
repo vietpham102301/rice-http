@@ -49,10 +49,20 @@ func BenchmarkMapLookup1000(b *testing.B) { benchmarkMapLookup(b, 1000) }
 // benchmarkMapLookup, through rice's dispatch path, since the tree is not
 // reachable from this package any other way.
 //
-// The two are therefore not measuring identical work: the tree figure includes a
-// Ctx allocation and a response write that the map figure does not. Read the map
-// numbers against each other and the tree numbers against each other for scaling,
-// and read the pair only as "does route count matter" — not as a bare ratio.
+// Do not divide a BenchmarkTreeLookup* figure by a BenchmarkMapLookup* figure.
+// They do not measure comparable work: benchmarkMapLookup times a bare
+// map[string]int probe with no framework around it, while this function times
+// a full dispatch through FasthttpHandler — allocating a Ctx, calling the
+// handler, and writing a response body — of which the lookup is only one part.
+// A ratio between the two numbers is not a router comparison; it is an
+// artifact of comparing a data-structure probe to an end-to-end request.
+//
+// The comparison these two functions support is each series against itself:
+// BenchmarkMapLookup10/100/1000 show whether map cost scales with route count,
+// and BenchmarkTreeLookup10/100/1000 show whether tree dispatch cost scales
+// with route count. Since everything in the tree's dispatch path except the
+// lookup is constant across n, that series' shape is attributable to the
+// lookup even though its absolute value is not comparable to the map's.
 func benchmarkTreeLookup(b *testing.B, n int) {
 	paths, probe := staticPaths(n)
 
