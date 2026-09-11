@@ -8,32 +8,88 @@ import (
 	rice "github.com/vietpham102301/rice-http"
 )
 
-// newRoutedApp registers n distinct static GET routes and returns the app
-// alongside a path that is guaranteed to be registered, taken from the middle
-// of the set so a lookup is not accidentally measuring a best or worst case.
-func newRoutedApp(n int) (*rice.App, string) {
-	app := rice.New()
+// staticPaths builds n distinct static route paths and the one to probe, taken
+// from the middle of the set so a lookup is not measuring a best or worst case.
+func staticPaths(n int) ([]string, string) {
+	paths := make([]string, n)
 	for i := 0; i < n; i++ {
-		app.GET("/route/"+strconv.Itoa(i), func(c *rice.Ctx) error {
-			return c.String(fasthttp.StatusOK, "ok")
-		})
+		paths[i] = "/route/" + strconv.Itoa(i)
 	}
-	return app, "/route/" + strconv.Itoa(n/2)
+	return paths, "/route/" + strconv.Itoa(n/2)
 }
 
-// benchmarkLookup measures a full dispatch against an app with n routes.
+// benchmarkMapLookup measures the frozen M2 map on nothing but the probe, with no
+// framework around it. Paired with benchmarkTreeLookup below, which does the same
+// for the tree, this is the comparison M3 exists to produce.
+func benchmarkMapLookup(b *testing.B, n int) {
+	paths, probe := staticPaths(n)
+
+	var t mapTree
+	for i, p := range paths {
+		t.insert(p, i)
+	}
+
+	path := []byte(probe)
+	if _, ok := t.lookup(path); !ok {
+		b.Fatal("probe path is not registered; this would measure a miss")
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = t.lookup(path)
+	}
+}
+
+func BenchmarkMapLookup10(b *testing.B)   { benchmarkMapLookup(b, 10) }
+func BenchmarkMapLookup100(b *testing.B)  { benchmarkMapLookup(b, 100) }
+func BenchmarkMapLookup1000(b *testing.B) { benchmarkMapLookup(b, 1000) }
+
+// benchmarkTreeLookup measures the radix tree on the same route set as
+// benchmarkMapLookup, through rice's dispatch path, since the tree is not
+// reachable from this package any other way.
 //
-// It includes the Ctx allocation and the response write, not only the lookup,
-// because a socket-free dispatch is the smallest thing package bench can reach
-// through the exported API. Everything except the lookup is constant across n,
-// so the difference between the 10, 100 and 1000 figures is lookup scaling and
-// nothing else. That difference is what M3's radix tree is judged on.
-func benchmarkLookup(b *testing.B, n int) {
-	app, path := newRoutedApp(n)
+// The two are therefore not measuring identical work: the tree figure includes a
+// Ctx allocation and a response write that the map figure does not. Read the map
+// numbers against each other and the tree numbers against each other for scaling,
+// and read the pair only as "does route count matter" — not as a bare ratio.
+func benchmarkTreeLookup(b *testing.B, n int) {
+	paths, probe := staticPaths(n)
+
+	app := rice.New()
+	for _, p := range paths {
+		app.GET(p, func(c *rice.Ctx) error { return c.String(fasthttp.StatusOK, "ok") })
+	}
+
+	h := app.FasthttpHandler()
+	fctx := newRequestCtx("GET", probe)
+	h(fctx)
+	if fctx.Response.StatusCode() != fasthttp.StatusOK {
+		b.Fatalf("probe returned %d; this would measure the 404 path", fctx.Response.StatusCode())
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		h(fctx)
+	}
+}
+
+func BenchmarkTreeLookup10(b *testing.B)   { benchmarkTreeLookup(b, 10) }
+func BenchmarkTreeLookup100(b *testing.B)  { benchmarkTreeLookup(b, 100) }
+func BenchmarkTreeLookup1000(b *testing.B) { benchmarkTreeLookup(b, 1000) }
+
+// benchmarkPattern dispatches one request against one registered pattern.
+func benchmarkPattern(b *testing.B, pattern, path string) {
+	app := rice.New()
+	app.GET(pattern, func(c *rice.Ctx) error { return c.String(fasthttp.StatusOK, "ok") })
 
 	h := app.FasthttpHandler()
 	fctx := newRequestCtx("GET", path)
-	h(fctx) // warm
+	h(fctx)
+	if fctx.Response.StatusCode() != fasthttp.StatusOK {
+		b.Fatalf("%s did not match %s; this would measure the 404 path", pattern, path)
+	}
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -42,36 +98,56 @@ func benchmarkLookup(b *testing.B, n int) {
 	}
 }
 
-func BenchmarkStaticRouterLookup10(b *testing.B)   { benchmarkLookup(b, 10) }
-func BenchmarkStaticRouterLookup100(b *testing.B)  { benchmarkLookup(b, 100) }
-func BenchmarkStaticRouterLookup1000(b *testing.B) { benchmarkLookup(b, 1000) }
+// BenchmarkTreeLookup1Param measures the case the map cannot express at all.
+func BenchmarkTreeLookup1Param(b *testing.B) {
+	benchmarkPattern(b, "/users/:id", "/users/42")
+}
 
-// BenchmarkStaticRouterMiss measures the 404 path with 1000 routes registered.
-// M1's retrospective flagged the miss path as the one hostile traffic hits
-// hardest, so it gets its own number rather than being inferred.
-func BenchmarkStaticRouterMiss(b *testing.B) {
-	app, _ := newRoutedApp(1000)
+func BenchmarkTreeLookup5Params(b *testing.B) {
+	benchmarkPattern(b, "/a/:p1/b/:p2/c/:p3/d/:p4/e/:p5", "/a/1/b/2/c/3/d/4/e/5")
+}
+
+func BenchmarkTreeLookupWildcard(b *testing.B) {
+	benchmarkPattern(b, "/files/*path", "/files/a/b/c.txt")
+}
+
+// BenchmarkTreeLookupBacktrack measures the worst case the design admits: the
+// static branch matches, strands a byte, and lookup unwinds to the parameter
+// child. A worst case nobody measured is a worst case nobody knows.
+func BenchmarkTreeLookupBacktrack(b *testing.B) {
+	app := rice.New()
+	app.GET("/users/new", func(c *rice.Ctx) error { return c.String(fasthttp.StatusOK, "static") })
+	app.GET("/users/:id", func(c *rice.Ctx) error { return c.String(fasthttp.StatusOK, "param") })
+
+	h := app.FasthttpHandler()
+	fctx := newRequestCtx("GET", "/users/newx")
+	h(fctx)
+	if got := string(fctx.Response.Body()); got != "param" {
+		b.Fatalf("body = %q, want param; the backtracking path is not being measured", got)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		h(fctx)
+	}
+}
+
+// BenchmarkTreeMiss measures the 404 path with 1000 routes registered.
+func BenchmarkTreeMiss(b *testing.B) {
+	paths, _ := staticPaths(1000)
+
+	app := rice.New()
+	for _, p := range paths {
+		app.GET(p, func(c *rice.Ctx) error { return c.String(fasthttp.StatusOK, "ok") })
+	}
 
 	h := app.FasthttpHandler()
 	fctx := newRequestCtx("GET", "/not-registered")
-	h(fctx) // warm
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		h(fctx)
+	h(fctx)
+	if fctx.Response.StatusCode() != fasthttp.StatusNotFound {
+		b.Fatalf("probe returned %d, want 404", fctx.Response.StatusCode())
 	}
-}
-
-// BenchmarkStaticRouterWrongVerb measures a request whose path exists under a
-// different verb. In M2 this is an ordinary miss; the benchmark exists so that
-// the cost is already recorded if 405 is ever added.
-func BenchmarkStaticRouterWrongVerb(b *testing.B) {
-	app, path := newRoutedApp(1000)
-
-	h := app.FasthttpHandler()
-	fctx := newRequestCtx("POST", path)
-	h(fctx) // warm
 
 	b.ReportAllocs()
 	b.ResetTimer()
