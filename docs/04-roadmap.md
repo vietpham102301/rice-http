@@ -57,7 +57,7 @@ the clever thing on faith.
 
 ---
 
-### ☐ M3 — Radix tree router
+### ☑ M3 — Radix tree router
 
 Replace the map. This is the algorithmic core.
 
