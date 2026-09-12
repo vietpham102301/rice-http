@@ -274,6 +274,110 @@ func TestGroupUseAfterBuildPanics(t *testing.T) {
 	})
 }
 
+// TestGroupPathWithoutLeadingSlashPanics is Item 1's core regression: before the
+// fix, app.Group("/api") followed by g.GET("users", h) registered "/apiusers"
+// silently, because the prefix's own leading "/" masks the missing one on the
+// path. Table over all eight registration methods so the wiring is covered
+// rather than assumed.
+func TestGroupPathWithoutLeadingSlashPanics(t *testing.T) {
+	verbs := []struct {
+		name string
+		call func(g *Group, path string, h Handler)
+	}{
+		{"Handle", func(g *Group, p string, h Handler) { g.Handle("GET", p, h) }},
+		{"GET", func(g *Group, p string, h Handler) { g.GET(p, h) }},
+		{"POST", func(g *Group, p string, h Handler) { g.POST(p, h) }},
+		{"PUT", func(g *Group, p string, h Handler) { g.PUT(p, h) }},
+		{"PATCH", func(g *Group, p string, h Handler) { g.PATCH(p, h) }},
+		{"DELETE", func(g *Group, p string, h Handler) { g.DELETE(p, h) }},
+		{"HEAD", func(g *Group, p string, h Handler) { g.HEAD(p, h) }},
+		{"OPTIONS", func(g *Group, p string, h Handler) { g.OPTIONS(p, h) }},
+	}
+
+	for _, v := range verbs {
+		app := New()
+		g := app.Group("/api")
+
+		got := mustPanic(t, v.name+`("users")`, func() {
+			v.call(g, "users", func(c *Ctx) error { return nil })
+		})
+
+		msg, _ := got.(string)
+		if !strings.Contains(msg, "users") {
+			t.Errorf("%s panic %q does not name the offending path", v.name, msg)
+		}
+		if !strings.Contains(msg, "/api") {
+			t.Errorf("%s panic %q does not name the group prefix", v.name, msg)
+		}
+	}
+}
+
+// TestGroupEmptyPathRegistersTheBarePrefixWithMiddleware is the reason the empty
+// path is allowed at all: it is the only way to give the group's own root the
+// group's middleware.
+func TestGroupEmptyPathRegistersTheBarePrefixWithMiddleware(t *testing.T) {
+	var log []string
+
+	app := New()
+	g := app.Group("/api", traceMW(&log, "guard"))
+	g.GET("", traceHandler(&log))
+
+	if got := dispatch(app, "/api"); got != 200 {
+		t.Fatalf("GET /api = %d, want 200", got)
+	}
+	if got := strings.Join(log, " "); got != "guard-in handler guard-out" {
+		t.Errorf("trace = %q, want %q; the group's middleware must run", got, "guard-in handler guard-out")
+	}
+}
+
+// TestGroupEmptyPathOnEmptyPrefixPanics: an empty path on an empty-prefix group
+// has no path to register at all.
+func TestGroupEmptyPathOnEmptyPrefixPanics(t *testing.T) {
+	app := New()
+	g := app.Group("")
+
+	got := mustPanic(t, `g.GET("")`, func() {
+		g.GET("", func(c *Ctx) error { return nil })
+	})
+
+	msg, _ := got.(string)
+	if !strings.Contains(msg, "no path to register") {
+		t.Errorf("panic %q does not name the empty-prefix case (an empty path on an empty prefix has no path to register)", msg)
+	}
+}
+
+// TestGroupAllSlashesPrefixNamesTheEmptyPrefixAsRemedy is Item 2: before the
+// fix, strings.TrimRight("/", "/") is "", so the message trails off as
+// "...must not end with /; write " and never names Group("") as the remedy.
+func TestGroupAllSlashesPrefixNamesTheEmptyPrefixAsRemedy(t *testing.T) {
+	for _, prefix := range []string{"/", "//"} {
+		app := New()
+		got := mustPanic(t, "Group("+prefix+")", func() {
+			app.Group(prefix)
+		})
+
+		msg, _ := got.(string)
+		if !strings.Contains(msg, `write ""`) {
+			t.Errorf("Group(%q) panicked with %q, which does not name the empty prefix as the remedy", prefix, msg)
+		}
+	}
+}
+
+// TestGroupTrailingSlashPrefixStillNamesTheTrimmedRemedy is Item 2's
+// regression: Group("/api/") must keep saying "write /api", not the
+// empty-prefix remedy.
+func TestGroupTrailingSlashPrefixStillNamesTheTrimmedRemedy(t *testing.T) {
+	app := New()
+	got := mustPanic(t, `Group("/api/")`, func() {
+		app.Group("/api/")
+	})
+
+	msg, _ := got.(string)
+	if !strings.Contains(msg, "write /api") {
+		t.Errorf("Group(%q) panicked with %q, want it to say %q", "/api/", msg, "write /api")
+	}
+}
+
 func TestEveryGroupVerbHelperRegistersUnderItsOwnVerb(t *testing.T) {
 	verbs := []struct {
 		name string

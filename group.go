@@ -69,41 +69,49 @@ func (g *Group) Use(mw ...Middleware) {
 
 // Handle registers h for method at the group's prefix joined with path.
 func (g *Group) Handle(method, path string, h Handler, mw ...Middleware) {
+	checkGroupPath(g.prefix, path)
 	g.app.register(method, g.prefix+path, h, g, mw)
 }
 
 // GET registers h for GET requests to the group's prefix joined with path.
 func (g *Group) GET(path string, h Handler, mw ...Middleware) {
+	checkGroupPath(g.prefix, path)
 	g.app.register("GET", g.prefix+path, h, g, mw)
 }
 
 // POST registers h for POST requests to the group's prefix joined with path.
 func (g *Group) POST(path string, h Handler, mw ...Middleware) {
+	checkGroupPath(g.prefix, path)
 	g.app.register("POST", g.prefix+path, h, g, mw)
 }
 
 // PUT registers h for PUT requests to the group's prefix joined with path.
 func (g *Group) PUT(path string, h Handler, mw ...Middleware) {
+	checkGroupPath(g.prefix, path)
 	g.app.register("PUT", g.prefix+path, h, g, mw)
 }
 
 // PATCH registers h for PATCH requests to the group's prefix joined with path.
 func (g *Group) PATCH(path string, h Handler, mw ...Middleware) {
+	checkGroupPath(g.prefix, path)
 	g.app.register("PATCH", g.prefix+path, h, g, mw)
 }
 
 // DELETE registers h for DELETE requests to the group's prefix joined with path.
 func (g *Group) DELETE(path string, h Handler, mw ...Middleware) {
+	checkGroupPath(g.prefix, path)
 	g.app.register("DELETE", g.prefix+path, h, g, mw)
 }
 
 // HEAD registers h for HEAD requests to the group's prefix joined with path.
 func (g *Group) HEAD(path string, h Handler, mw ...Middleware) {
+	checkGroupPath(g.prefix, path)
 	g.app.register("HEAD", g.prefix+path, h, g, mw)
 }
 
 // OPTIONS registers h for OPTIONS requests to the group's prefix joined with path.
 func (g *Group) OPTIONS(path string, h Handler, mw ...Middleware) {
+	checkGroupPath(g.prefix, path)
 	g.app.register("OPTIONS", g.prefix+path, h, g, mw)
 }
 
@@ -116,7 +124,30 @@ func checkGroupPrefix(prefix string) {
 		panic("rice: group prefix " + prefix + " must begin with /")
 	}
 	if prefix[len(prefix)-1] == '/' {
-		panic("rice: group prefix " + prefix + " must not end with /; write " +
-			strings.TrimRight(prefix, "/"))
+		trimmed := strings.TrimRight(prefix, "/")
+		if trimmed == "" {
+			// prefix is all slashes, so the trimmed remedy is the empty
+			// string itself. Naming that explicitly matters: Group("/") is a
+			// plausible way to spell "root group", and Group("") is the one
+			// thing a blank remedy fails to say.
+			panic("rice: group prefix " + prefix + ` must not end with /; write "" (an empty prefix)`)
+		}
+		panic("rice: group prefix " + prefix + " must not end with /; write " + trimmed)
+	}
+}
+
+// checkGroupPath rejects a route path that would not join cleanly onto the group's
+// prefix. An empty path means the group's bare prefix, which is the only way to give
+// the group's own root the group's middleware. Anything else must begin with "/", so
+// that prefix and path cannot silently fuse into a third path nobody wrote.
+func checkGroupPath(prefix, path string) {
+	if path == "" {
+		if prefix == "" {
+			panic("rice: group route path must not be empty on a group with an empty prefix; there is no path to register")
+		}
+		return
+	}
+	if path[0] != '/' {
+		panic("rice: group route path " + path + " must begin with /; it is joined onto the group prefix " + prefix)
 	}
 }
