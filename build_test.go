@@ -177,24 +177,55 @@ func TestFasthttpHandlerBuilds(t *testing.T) {
 
 // TestUseDoesNotAliasTheCallersSlice guards a Go hazard that a naive
 // implementation walks straight into: keeping the variadic slice rather than
-// copying into the App's own means a caller appending to theirs can change ours.
+// copying into the App's own means a caller mutating theirs later can change
+// ours.
+//
+// The mutation has to be an in-place overwrite of an element already in range,
+// not a further append: an append past the alias's own length writes into
+// spare capacity the alias's own reads never look beyond, so it would pass
+// whether or not the slice was actually copied — proving nothing.
 func TestUseDoesNotAliasTheCallersSlice(t *testing.T) {
 	var log []string
 
-	callerSlice := make([]Middleware, 0, 4) // spare capacity is the trap
-	callerSlice = append(callerSlice, traceMW(&log, "A"))
+	callerSlice := make([]Middleware, 1)
+	callerSlice[0] = traceMW(&log, "A")
 
 	app := New()
 	app.Use(callerSlice...)
 	app.GET("/x", traceHandler(&log))
 
-	// The caller keeps using their slice after registering.
-	callerSlice = append(callerSlice, traceMW(&log, "INTRUDER"))
-	_ = callerSlice
+	// The caller keeps using their slice after registering, overwriting the
+	// element it already passed in.
+	callerSlice[0] = traceMW(&log, "INTRUDER")
 
 	dispatch(app, "/x")
 
 	if got := strings.Join(log, " "); got != "A-in handler A-out" {
-		t.Errorf("trace = %q; the caller's later append must not reach the App", got)
+		t.Errorf("trace = %q; the caller's later mutation must not reach the App", got)
+	}
+}
+
+// TestRouteMiddlewareDoesNotAliasTheCallersSlice is
+// TestUseDoesNotAliasTheCallersSlice's counterpart for register: a route's own
+// mw ...Middleware is copied the same way Use's is, and that copy is otherwise
+// unguarded. See that test's comment for why the caller mutates in place
+// rather than appending.
+func TestRouteMiddlewareDoesNotAliasTheCallersSlice(t *testing.T) {
+	var log []string
+
+	callerSlice := make([]Middleware, 1)
+	callerSlice[0] = traceMW(&log, "A")
+
+	app := New()
+	app.GET("/x", traceHandler(&log), callerSlice...)
+
+	// The caller keeps using their slice after registering, overwriting the
+	// element it already passed in.
+	callerSlice[0] = traceMW(&log, "INTRUDER")
+
+	dispatch(app, "/x")
+
+	if got := strings.Join(log, " "); got != "A-in handler A-out" {
+		t.Errorf("trace = %q; the caller's later mutation must not reach the route's chain", got)
 	}
 }

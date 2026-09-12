@@ -39,9 +39,13 @@ type App struct {
 
 	buildOnce sync.Once
 
-	// built is read by registration to reject a late route. It is written inside
-	// buildOnce.Do, which establishes the happens-before that makes reading it
-	// without a lock safe: every request is served after Build returns.
+	// built is read by registration to reject a late route, without a lock. That
+	// is safe only because the API is a single-goroutine setup phase — register,
+	// register, ..., Build — followed by serving, never concurrent registration.
+	// sync.Once's happens-before applies between goroutines that both call Do;
+	// register never does, so it gets no guarantee from that alone. It doesn't
+	// need one: a goroutine registering concurrently with another already races
+	// on routes and the trees, so this unlocked read is not the weak link.
 	built bool
 
 	srv *fasthttp.Server
