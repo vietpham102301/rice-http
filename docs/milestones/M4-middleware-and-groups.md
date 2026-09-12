@@ -61,6 +61,14 @@ Then eight counts of exactly the three committed benchmarks, same harness, same 
 The sweep's 1-to-10 leg agreed independently at roughly 1.1 ns each. So the shape is a
 **slope of about 1.1 ns per middleware, roughly linear** — not a step at all.
 
+The 0 → 1 leg does not contradict that slope, though it looks like it might: −0.3 ns against
+an expected +1.1 is a 1.4 ns disagreement, and the run-to-run spread on these benchmarks is
+several times that. The honest statement is that **the 0 → 1 leg is flat within noise**, and
+that the slope is measured over the legs long enough to carry a signal — 1 → 5 and 1 → 10 —
+rather than over a single-middleware difference that no experiment here can resolve. Two
+attempts to read a shape off that one leg produced two wrong answers, which is the practical
+argument for not trying a third time.
+
 **Why reading two was wrong, named rather than buried, and not by the explanation I first
 reached for.** `ChainDispatch1`'s ten recorded samples span 84.20 to 120.10 ns/op, and the
 obvious diagnosis is that the single 120.10 outlier dragged the median up. It did not — that
@@ -330,7 +338,10 @@ report as well as here.
 
 **The lesson this milestone earned is still about guards, and the count is nine.** Across
 M2, M3 and M4, nine separate times something named as a guard turned out not to guard what it
-claimed. M4's implementation and review found three:
+claimed. M3's retrospective enumerated five across M2 and M3; the M4 design doc found a sixth
+while writing its allocation-budget section, which is why that section carries a warning about
+budgets over middleware that do nothing. M4's implementation and review found the remaining
+three — five plus one plus three is the nine:
 
 1. `TestUseDoesNotAliasTheCallersSlice` mutated the caller's slice with an `append`. When a
    variadic slice is kept by reference the callee's header freezes at the length it had at the

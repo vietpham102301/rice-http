@@ -106,7 +106,7 @@ left room for, so `app.GET("/x", h)` compiles unchanged. 160 tests pass under `-
 | `BenchmarkChainDispatch1` | 91.71 | 352 | 1 | 84.20–120.10 |
 | `BenchmarkChainDispatch5` | 92.68 | 352 | 1 | 89.78–105.40 |
 | `BenchmarkChainDispatch5Grouped` | 93.86 | 352 | 1 | 91.04–101.50 |
-| `BenchmarkBuild1000Routes` | ~239000 | 265001 | 7503 | 233777–247313 |
+| `BenchmarkBuild1000Routes` | ~239000 | 265001 | 7503 | 232306–247313 |
 | **Five middleware, recorded medians (`5` − `0`)** | **+8.67** | **0** | **0** | |
 | **Five middleware, eight-count re-run (~91.2 − ~86.6)** | **+4.6** | **0** | **0** | |
 
