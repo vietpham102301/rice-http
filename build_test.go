@@ -205,6 +205,30 @@ func TestUseDoesNotAliasTheCallersSlice(t *testing.T) {
 	}
 }
 
+// TestUseWithNilMiddlewarePanics is Item 3's guard for App.Use: before the fix,
+// app.Use(nil) stores the nil into the App's middleware slice without
+// complaint, and the failure only surfaces later, inside internal/chain during
+// Build, as a bare nil dereference with no rice: prefix and no attribution to
+// the Use call that was wrong.
+func TestUseWithNilMiddlewarePanics(t *testing.T) {
+	var log []string
+	app := New()
+	app.GET("/x", traceHandler(&log))
+
+	v := mustPanic(t, "Use(A, nil)", func() {
+		app.Use(traceMW(&log, "A"), nil)
+		app.Build()
+	})
+
+	msg, _ := v.(string)
+	if !strings.HasPrefix(msg, "rice:") {
+		t.Errorf("panic %v is not rice:-prefixed", v)
+	}
+	if !strings.Contains(msg, "1") {
+		t.Errorf("panic %q does not name the offending index (1)", msg)
+	}
+}
+
 // TestRouteMiddlewareDoesNotAliasTheCallersSlice is
 // TestUseDoesNotAliasTheCallersSlice's counterpart for register: a route's own
 // mw ...Middleware is copied the same way Use's is, and that copy is otherwise

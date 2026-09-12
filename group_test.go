@@ -378,6 +378,68 @@ func TestGroupTrailingSlashPrefixStillNamesTheTrimmedRemedy(t *testing.T) {
 	}
 }
 
+// TestGroupUseWithNilMiddlewarePanics is Item 3's guard for Group.Use: before
+// the fix, the nil reaches internal/chain unnoticed and fails at Build as a
+// bare nil dereference.
+func TestGroupUseWithNilMiddlewarePanics(t *testing.T) {
+	app := New()
+	g := app.Group("/api")
+	g.GET("/x", func(c *Ctx) error { return nil })
+
+	v := mustPanic(t, "group Use(nil)", func() {
+		g.Use(nil)
+		app.Build()
+	})
+
+	msg, _ := v.(string)
+	if !strings.HasPrefix(msg, "rice:") {
+		t.Errorf("panic %v is not rice:-prefixed", v)
+	}
+	if !strings.Contains(msg, "0") {
+		t.Errorf("panic %q does not name the offending index", msg)
+	}
+}
+
+// TestAppGroupWithNilMiddlewarePanics is Item 3's guard for App.Group.
+func TestAppGroupWithNilMiddlewarePanics(t *testing.T) {
+	app := New()
+
+	v := mustPanic(t, `app.Group("/api", nil)`, func() {
+		g := app.Group("/api", nil)
+		g.GET("/x", func(c *Ctx) error { return nil })
+		app.Build()
+	})
+
+	msg, _ := v.(string)
+	if !strings.HasPrefix(msg, "rice:") {
+		t.Errorf("panic %v is not rice:-prefixed", v)
+	}
+	if !strings.Contains(msg, "0") {
+		t.Errorf("panic %q does not name the offending index", msg)
+	}
+}
+
+// TestNestedGroupWithNilMiddlewarePanics is Item 3's guard for Group.Group, a
+// separate copy site from App.Group that a regression could break independently.
+func TestNestedGroupWithNilMiddlewarePanics(t *testing.T) {
+	app := New()
+	parent := app.Group("/api")
+
+	v := mustPanic(t, `parent.Group("/v1", nil)`, func() {
+		g := parent.Group("/v1", nil)
+		g.GET("/x", func(c *Ctx) error { return nil })
+		app.Build()
+	})
+
+	msg, _ := v.(string)
+	if !strings.HasPrefix(msg, "rice:") {
+		t.Errorf("panic %v is not rice:-prefixed", v)
+	}
+	if !strings.Contains(msg, "0") {
+		t.Errorf("panic %q does not name the offending index", msg)
+	}
+}
+
 func TestEveryGroupVerbHelperRegistersUnderItsOwnVerb(t *testing.T) {
 	verbs := []struct {
 		name string

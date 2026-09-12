@@ -1,6 +1,9 @@
 package rice
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 // Group is a route prefix plus middleware, and a convenience that exists only at
 // registration time. By the time a request arrives, every route holds one flat
@@ -27,6 +30,7 @@ type Group struct {
 // that fails later naming a string nobody wrote.
 func (a *App) Group(prefix string, mw ...Middleware) *Group {
 	checkGroupPrefix(prefix)
+	checkMiddleware(mw)
 	if a.built {
 		panic("rice: cannot create a group after Build; all routes must be registered before serving begins")
 	}
@@ -43,6 +47,7 @@ func (a *App) Group(prefix string, mw ...Middleware) *Group {
 // Group creates a nested group, concatenating prefixes and inheriting middleware.
 func (g *Group) Group(prefix string, mw ...Middleware) *Group {
 	checkGroupPrefix(prefix)
+	checkMiddleware(mw)
 	if g.app.built {
 		panic("rice: cannot create a group after Build; all routes must be registered before serving begins")
 	}
@@ -61,6 +66,7 @@ func (g *Group) Group(prefix string, mw ...Middleware) *Group {
 // Order does not matter: chains are compiled in Build, so Use written after a
 // route — or after a nested group was created — still applies to it.
 func (g *Group) Use(mw ...Middleware) {
+	checkMiddleware(mw)
 	if g.app.built {
 		panic("rice: cannot call Use after Build; all middleware must be registered before serving begins")
 	}
@@ -149,5 +155,16 @@ func checkGroupPath(prefix, path string) {
 	}
 	if path[0] != '/' {
 		panic("rice: group route path " + path + " must begin with /; it is joined onto the group prefix " + prefix)
+	}
+}
+
+// checkMiddleware rejects a nil middleware at the call that supplied it. Without this
+// the failure surfaces as a nil dereference inside internal/chain during Build, naming
+// neither rice nor the registration that was wrong.
+func checkMiddleware(mws []Middleware) {
+	for i, mw := range mws {
+		if mw == nil {
+			panic("rice: middleware at index " + strconv.Itoa(i) + " is nil")
+		}
 	}
 }

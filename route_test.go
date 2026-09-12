@@ -238,6 +238,27 @@ func TestAppRoutesAWildcardPattern(t *testing.T) {
 	}
 }
 
+// TestRegistrationPanicsOnANilMiddleware is Item 3's guard for App.register (the
+// single path all sixteen verb helpers funnel through): a nil middleware in the
+// route's own mw slice must panic here, named rice: and by index, rather than
+// surfacing as a bare nil dereference inside internal/chain at Build.
+func TestRegistrationPanicsOnANilMiddleware(t *testing.T) {
+	app := New()
+
+	v := mustPanic(t, "GET with a nil middleware", func() {
+		app.GET("/x", func(c *Ctx) error { return nil }, nil)
+		app.Build()
+	})
+
+	msg, _ := v.(string)
+	if !strings.HasPrefix(msg, "rice:") {
+		t.Errorf("panic %v is not rice:-prefixed", v)
+	}
+	if !strings.Contains(msg, "0") {
+		t.Errorf("panic %q does not name the offending index", msg)
+	}
+}
+
 func TestRegistrationPanicsOnAnUnmatchablePattern(t *testing.T) {
 	cases := []string{"/a//b", "/a/./b", "/caf%C3%A9", "/users/:", "/files/*p/edit", "/a/:id/b/:id"}
 

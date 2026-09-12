@@ -69,6 +69,7 @@ func (a *App) OPTIONS(path string, h Handler, mw ...Middleware) {
 // silently drops middleware added late, and middleware added late is usually
 // authentication.
 func (a *App) Use(mw ...Middleware) {
+	checkMiddleware(mw)
 	if a.built {
 		panic("rice: cannot call Use after Build; all middleware must be registered before serving begins")
 	}
@@ -80,6 +81,7 @@ func (a *App) Use(mw ...Middleware) {
 // register is the single path every registration takes, from the App and from any
 // Group. g is nil for a route registered directly on the App.
 func (a *App) register(method, path string, h Handler, g *Group, mw []Middleware) {
+	checkMiddleware(mw)
 	if a.built {
 		panic("rice: cannot register " + method + " " + path +
 			" after Build; all routes must be registered before serving begins")
