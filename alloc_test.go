@@ -369,6 +369,11 @@ func TestAllocBudgetChainCompile(t *testing.T) {
 	// the result, which is what a request does.
 	compiled := chainCompileForTest(h, mws)
 
+	// nil is deliberate: this chain's middleware only counts, and the terminal
+	// handler above only returns, so nothing here dereferences the *Ctx. If a
+	// future edit adds a Ctx access to either, this will panic rather than
+	// silently start allocating — that failure mode is preferable to this test
+	// quietly measuring something other than allocations.
 	chainSink = 0
 	if err := compiled(nil); err != nil {
 		t.Fatalf("compiled chain returned %v, want nil", err)

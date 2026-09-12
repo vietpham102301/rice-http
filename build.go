@@ -66,12 +66,6 @@ func (a *App) middlewareFor(r *route) []Middleware {
 	return append(mws, r.mws...)
 }
 
-// chainCompileForTest exposes the chain compiler to this package's tests. It is
-// not used by production code; the build phase calls chain.Compile directly.
-func chainCompileForTest(h Handler, mws []Middleware) Handler {
-	return chain.Compile(h, mws)
-}
-
 // groupChain returns g and its ancestors ordered outermost first.
 //
 // A Group points at its parent rather than holding a copy of the parent's
