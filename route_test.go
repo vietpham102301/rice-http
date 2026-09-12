@@ -11,11 +11,11 @@ import (
 // that a copy-paste error in one helper is caught rather than assumed absent.
 func registeredVerbs() []struct {
 	verb string
-	call func(a *App, path string, h Handler)
+	call func(a *App, path string, h Handler, mw ...Middleware)
 } {
 	return []struct {
 		verb string
-		call func(a *App, path string, h Handler)
+		call func(a *App, path string, h Handler, mw ...Middleware)
 	}{
 		{"GET", (*App).GET},
 		{"POST", (*App).POST},

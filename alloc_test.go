@@ -106,6 +106,7 @@ func TestAllocBudgetHandleDispatch(t *testing.T) {
 		t.Fatal("route not registered; the budget below would be measuring the miss path")
 	}
 
+	app.Build()
 	budget(t, "App.handle dispatch (hit)", 1, func() {
 		app.handle(fctx)
 	})
@@ -286,6 +287,7 @@ func TestAllocBudgetHandleDispatchParameterised(t *testing.T) {
 	fctx.Request.Header.SetMethod("GET")
 	fctx.Request.SetRequestURI("/users/42")
 
+	app.Build()
 	app.handle(fctx)
 	if fctx.Response.StatusCode() != 200 {
 		t.Fatalf("status = %d, want 200; this budget would be measuring the 404 path", fctx.Response.StatusCode())
