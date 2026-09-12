@@ -220,6 +220,34 @@ func TestGroupDoesNotAliasTheCallersSlice(t *testing.T) {
 	}
 }
 
+// TestNestedGroupDoesNotAliasTheCallersSlice is
+// TestGroupDoesNotAliasTheCallersSlice's counterpart for the nested Group.Group
+// constructor: it has its own append([]Middleware(nil), mw...) copy, a separate
+// call site that a regression could break independently of the App-level one.
+// See that test's comment for why the caller mutates in place rather than
+// appending.
+func TestNestedGroupDoesNotAliasTheCallersSlice(t *testing.T) {
+	var log []string
+
+	callerSlice := make([]Middleware, 1)
+	callerSlice[0] = traceMW(&log, "A")
+
+	app := New()
+	parent := app.Group("/api")
+	g := parent.Group("/v1", callerSlice...)
+	g.GET("/x", traceHandler(&log))
+
+	// The caller keeps using their slice after registering, overwriting the
+	// element it already passed in.
+	callerSlice[0] = traceMW(&log, "INTRUDER")
+
+	dispatch(app, "/api/v1/x")
+
+	if got := strings.Join(log, " "); got != "A-in handler A-out" {
+		t.Errorf("trace = %q; the caller's later mutation must not reach the nested group", got)
+	}
+}
+
 func TestGroupRegistrationAfterBuildPanics(t *testing.T) {
 	app := New()
 	g := app.Group("/api")
