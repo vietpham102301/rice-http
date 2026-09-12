@@ -29,10 +29,10 @@ rather than a copy of the parent's middleware, so `parent.Use(auth)` written aft
 created still reaches the child's routes — the same footgun ADR-0003 exists to prevent, moved
 down one level. Group prefixes must be empty or begin with `/` and not end with one, which
 makes joining total. Every registration method gained the trailing `mw ...Middleware` M2's D7
-left room for, so `app.GET("/x", h)` compiles unchanged. 159 tests pass under `-race` — 105 in
-`rice`, 47 in `internal/router`, 7 in `internal/chain`.
+left room for, so `app.GET("/x", h)` compiles unchanged. 160 tests pass under `-race` — 105 in
+`rice`, 47 in `internal/router`, 8 in `internal/chain`.
 
-**Learned:** Three things.
+**Learned:** Four things, the last of them about how the third was nearly overcounted.
 
 1. *Compiling at build time does remove the per-request cost, and the milestone's real
    difficulty was saying by how much.* Five middleware add zero allocations and about 4.6 ns
@@ -64,7 +64,7 @@ left room for, so `app.GET("/x", h)` compiles unchanged. 159 tests pass under `-
    reading. It joins M1's 43 ns header write, M2's ~9 ns and M3's 15.93 ns on the unexplained
    list rather than getting a plausible cause attached to it.
 
-3. *Ten for ten, a guard nobody broke on purpose was not a guard.* M3 counted five across M2
+3. *Nine for nine, a guard nobody broke on purpose was not a guard.* M3 counted five across M2
    and M3; the M4 design found a sixth; M4 itself found three more. Two were slice-aliasing
    tests that mutated the caller's slice with an `append` — which writes past the length the
    alias's header froze at, so it cannot detect aliasing at all, and one of the two had been
@@ -76,14 +76,26 @@ left room for, so `app.GET("/x", h)` compiles unchanged. 159 tests pass under `-
    `callerSlice[0]` in place, and each of the four copy sites (`App.Use`, `register`,
    `App.Group`, `Group.Group`) was then broken to `mws: mw` and watched to fail. The
    five-middleware allocation budget got the same treatment and failed on its precondition
-   ("3 middleware ran, want 5") rather than quietly measuring a shorter chain. A tenth turned
-   up while this entry's retrospective was being written:
-   `TestCompileWithNoMiddlewareReturnsTheHandlerItself` cannot check what its name says —
-   its only real assertion is that the original handler ran, which an identity wrapper also
-   satisfies, and its `if &got == &h` compares the addresses of two locals, so the `t.Skip`
-   inside is dead code. Confirmed by making `Compile` always wrap and watching it still pass.
-   The property is checkable through `reflect.ValueOf(...).Pointer()`; it is recorded, not
-   fixed, because that task changed documents only, and it is the first open item for M5.
+   ("3 middleware ran, want 5") rather than quietly measuring a shorter chain.
+
+4. *An experiment that cannot fail proves nothing, and it looks exactly like an experiment
+   that passed.* A tenth false guard was claimed while the retrospective was being written and
+   it was a false alarm — worth recording for how it happened rather than as a tally.
+   `TestCompileWithNoMiddlewareReturnsTheHandlerItself` did contain a dead branch,
+   `if &got == &h`, comparing two locals' addresses; a review had flagged it Minor and it was
+   deferred, and a dead branch beside a live one invites the reading that the live one does
+   more than it does. Both the retrospective's author and the controller then concluded the
+   test could not detect a wrapping `Compile`, and both "confirmed" it with the same injection:
+   an identity middleware, which returns the handler unchanged and wraps nothing. A genuinely
+   wrapping `Compile` is not expressible — inside `Compile[H any, M ~func(H) H]` the handler is
+   an opaque `H` that cannot be called, so the body can return `h`, a zero value, or the result
+   of applying an `M`, and nothing else. The property is enforced by the signature, not by the
+   test. This is the guard discipline failing one level up, in the fault injection meant to
+   validate the guard: "break it and watch it go red" is worth nothing unless the break is
+   real. The rewrite landed anyway and the suite is better for it — the dead branch is gone,
+   identity is compared through `reflect.Value.Pointer`, and the new
+   `TestCompileWithMiddlewareWrapsTheHandler` guards the complement and was confirmed red when
+   `Compile` drops its middleware. The count of genuine false guards stays at **nine**.
 
 **Measured:** Medians of ten runs from one recording — Apple M2 Pro, go1.25.6 darwin/arm64,
 [bench/results/M4-middleware-and-groups.txt](../bench/results/M4-middleware-and-groups.txt):

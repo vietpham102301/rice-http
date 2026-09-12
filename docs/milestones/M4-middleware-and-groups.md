@@ -178,8 +178,14 @@ optimising, not because the extrapolation is trustworthy.
 **`middlewareFor` returns `nil` for a route with no middleware at all**, so an application
 that uses none allocates nothing for chains at build either. `Compile` over an empty slice
 returns the handler itself, unwrapped, which D5 states as a requirement — an identity wrapper
-would behave identically and cost a call per request forever. That property is **not** pinned
-by a test; see the tenth entry in the retrospective's guard list.
+would behave identically and cost a call per request forever. The requirement turns out to be
+enforced by the signature rather than by vigilance: inside `Compile[H any, M ~func(H) H]` the
+handler is an opaque `H`, so it cannot be called and no wrapper around it can be constructed.
+`return h`, a zero value, or the result of applying an `M` are the only things the body can
+produce. `TestCompileWithNoMiddlewareReturnsTheHandlerItself` now compares function identity
+through `reflect.Value.Pointer`, which pins the property that *is* live — that the empty case
+returns the handler rather than a zero value — and `TestCompileWithMiddlewareWrapsTheHandler`
+pins its complement, that a non-empty slice is not silently dropped.
 
 **Four places copy a caller's variadic slice, and all four are now guarded.** `App.Use`,
 `App.register`, `App.Group` and `Group.Group` each do `append([]Middleware(nil), mw...)`.
@@ -222,7 +228,7 @@ decisions taken below that level, and none of them reopened.
       same recording so the whole table stays comparable on one machine
 - [x] Both `Chain call` rows in [`05-performance-model.md`](../05-performance-model.md) moved
       from `TARGET (M4)` to `MEASURED M4`; no other row touched
-- [x] 159 tests pass under `-race` — 105 in `rice`, 47 in `internal/router`, 7 in
+- [x] 160 tests pass under `-race` — 105 in `rice`, 47 in `internal/router`, 8 in
       `internal/chain`
 - [x] Retrospective section below filled in
 - [x] Journal entry appended to [`progress.md`](../progress.md)
@@ -322,10 +328,9 @@ whose ordering was the informative part and was thrown away first. Ranges alongs
 which the table above now carries, are the cheap version of that habit and belong in the task
 report as well as here.
 
-**The lesson this milestone earned is still about guards, and the count is now ten.** Across
+**The lesson this milestone earned is still about guards, and the count is nine.** Across
 M2, M3 and M4, nine separate times something named as a guard turned out not to guard what it
-claimed — and a tenth turned up while this document was being written, which is its own data
-point. M4's implementation and review found three:
+claimed. M4's implementation and review found three:
 
 1. `TestUseDoesNotAliasTheCallersSlice` mutated the caller's slice with an `append`. When a
    variadic slice is kept by reference the callee's header freezes at the length it had at the
@@ -340,27 +345,46 @@ point. M4's implementation and review found three:
    setup phase, and a program registering concurrently is already racing on the trees, so this
    unlocked read is not the weak link.
 
-The tenth was found in this task, while looking for a test to cite in the design notes above.
-`internal/chain`'s `TestCompileWithNoMiddlewareReturnsTheHandlerItself` asserts, by its name,
-D5's requirement that `Compile` over an empty slice returns the handler *itself* rather than
-an identity wrapper. It cannot. Its body calls the compiled handler and checks the original
-ran — which an identity wrapper also satisfies — and then reads:
+**A tenth was claimed while this document was being written, and it was a false alarm — which
+is the more interesting finding.** `internal/chain`'s
+`TestCompileWithNoMiddlewareReturnsTheHandlerItself` contained a genuinely dead branch,
+`if &got == &h { t.Skip(...) }`, comparing the addresses of two distinct local variables and
+therefore never true. A task review had flagged it as a Minor and the controller had deferred
+it. That deferral looked harmless and was not: a dead branch sitting beside a live one invites
+the reading that the live one is doing more than it is, and this document's author and the
+controller in turn both concluded the test could not detect a wrapping `Compile`.
 
-    if &got == &h {
-        t.Skip("cannot compare func values directly; ...")
-    }
+Both of us "confirmed" it by fault injection. Both injections were `M(func(x H) H { return x })`
+— an identity middleware, which returns the handler unchanged and wraps nothing. **We each ran
+an experiment that could not fail and read its passing as evidence.**
 
-`&got` and `&h` are the addresses of two distinct local variables, so that condition is
-always false and the `Skip` is dead code. The test was confirmed non-guarding the same way
-the others were: a deliberately always-wrapping `Compile` passes every assertion in it. The
-property *is* checkable — `reflect.ValueOf(got).Pointer()` against
-`reflect.ValueOf(h).Pointer()` — so this is a fixable gap, not an inherent one. It is recorded
-rather than fixed here because this task changes documents only; **it is the first open item
-for M5.** The consequence if it were ever violated is a permanent extra indirect call on every
-request of every middleware-free route, which is precisely the cost this milestone exists to
-measure.
+A `Compile` that genuinely wraps an empty chain turns out not to be expressible. Inside
+`Compile[H any, M ~func(H) H]`, `H` is opaque: `return M(func(next H) H { return next(h) })(h)`
+does not compile —
 
-None of the ten was found by a guard failing. What closed M4's three was the same habit
+    invalid operation: cannot call next (variable of type H constrained by any):
+    no specific type
+
+— and neither does assigning a closure to an `H`. The body can return `h`, a zero value, or
+the result of applying an `M`, and nothing else. So the property the test is named for is
+enforced by the generic signature, not by the test, and the test's live assertion guards a
+real if smaller thing: that the empty case returns the handler rather than a zero value.
+
+The rewrite landed anyway and improved the suite: the dead branch is gone, identity is now
+compared through `reflect.Value.Pointer`, and a new
+`TestCompileWithMiddlewareWrapsTheHandler` guards the complement — confirmed red when
+`Compile` drops its middleware, reporting "Compile returned the original handler instead of
+wrapping it; middleware was silently dropped". A false alarm that leaves the suite stronger
+is a cheap outcome; the reasoning that produced it is the expensive part.
+
+The lesson is the milestone's own discipline turned on itself. **An experiment that cannot
+fail proves nothing, and it looks exactly like an experiment that passed.** That is precisely
+the failure mode of a guard that cannot fail, one level up — in the fault injection meant to
+validate the guard rather than in the guard. "Break it and watch it go red" is only worth
+anything if the break is real, and neither of us checked that ours was. The count stays at
+nine.
+
+None of the nine was found by a guard failing. What closed M4's three was the same habit
 M3 arrived at: break the guarded property on purpose and confirm the guard goes red. The
 append-based aliasing tests were rewritten to overwrite `callerSlice[0]` in place — an index
 inside the alias's own length, which is the only mutation an alias can observe — and each of
@@ -371,10 +395,11 @@ measuring a shorter chain.
 
 The generalisation worth keeping is narrow. A guard is not a test that describes a property;
 it is a test that has been observed to fail when the property is violated. Everything else is
-a comment with a `func` keyword. Ten for ten, the ones that turned out to be comments were
-written by people who believed they were writing guards, and two of them had been through
-review, which is why reading them harder was never going to be the fix. The tenth is the
-sharpest illustration: it contains a comparison, so it looks like it checks something.
+a comment with a `func` keyword. Nine for nine, the ones that turned out to be comments were
+written by people who believed they were writing guards, and one of them had been through
+review, which is why reading them harder was never going to be the fix. The false alarm above
+extends the rule rather than denting it: the observation has to be of a real break, and
+"I broke it and it still passed" is a claim that itself needs checking.
 
 **What I still do not understand:**
 
