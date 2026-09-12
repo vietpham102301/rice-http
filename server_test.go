@@ -228,6 +228,63 @@ func TestServeAnswersAParameterisedRoute(t *testing.T) {
 	}
 }
 
+func TestServeAnswersAGroupedMiddlewaredRoute(t *testing.T) {
+	app := rice.New()
+
+	app.Use(func(next rice.Handler) rice.Handler {
+		return func(c *rice.Ctx) error {
+			c.SetHeader("X-App", "1")
+			return next(c)
+		}
+	})
+
+	g := app.Group("/api", func(next rice.Handler) rice.Handler {
+		return func(c *rice.Ctx) error {
+			c.SetHeader("X-Group", "1")
+			return next(c)
+		}
+	})
+	g.GET("/users/:id", func(c *rice.Ctx) error {
+		return c.String(200, "user "+c.ParamString("id"))
+	})
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go func() { _ = app.Serve(ln) }()
+
+	addr := waitForAddr(t, app)
+
+	resp, err := http.Get("http://" + addr + "/api/users/42")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("reading body: %v", err)
+	}
+
+	if resp.StatusCode != 200 {
+		t.Errorf("status = %d, want 200", resp.StatusCode)
+	}
+	if got := string(body); got != "user 42" {
+		t.Errorf("body = %q, want %q", got, "user 42")
+	}
+	if got := resp.Header.Get("X-App"); got != "1" {
+		t.Errorf("X-App = %q; application middleware did not run over a socket", got)
+	}
+	if got := resp.Header.Get("X-Group"); got != "1" {
+		t.Errorf("X-Group = %q; group middleware did not run over a socket", got)
+	}
+
+	if err := app.Shutdown(context.Background()); err != nil {
+		t.Errorf("Shutdown returned %v, want nil", err)
+	}
+}
+
 func TestServeAnswersAWildcardRoute(t *testing.T) {
 	app := rice.New()
 	app.GET("/files/*path", func(c *rice.Ctx) error {
