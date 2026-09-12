@@ -45,10 +45,16 @@ func TestCompileWithNoMiddleware(t *testing.T) {
 // does not wrap. A wrapper that only forwards would be invisible to the trace
 // above but would cost a closure call on every request of every route that has
 // no middleware, which is most of them.
-// Uses reflect.ValueOf().Pointer() to compare function identity because Go
-// does not allow direct comparison of func values with ==. This test is in
-// internal/chain, a test file, so ADR-0006's prohibition on reflect in core
-// does not apply.
+// Uses reflect.ValueOf().Pointer() because Go does not allow direct comparison
+// of func values with ==. This is in internal/chain, a test file, so ADR-0006's
+// prohibition on reflect in core does not apply.
+//
+// Pointer() returns a *code* pointer, not an identity for the closure value: it
+// cannot tell apart two distinct closures created from the same function
+// literal. That is fine at both call sites in this file — each compares a
+// single handler value, h, against itself — but the comparison is not a
+// general function-identity check, and must not be extended to a case where
+// two different closures could share the same underlying code.
 func TestCompileWithNoMiddlewareReturnsTheHandlerItself(t *testing.T) {
 	called := false
 	h := handler(func(log *[]string) { called = true })
@@ -60,8 +66,10 @@ func TestCompileWithNoMiddlewareReturnsTheHandlerItself(t *testing.T) {
 		t.Fatal("the compiled handler did not call the original")
 	}
 
-	// Check function identity: the compiled result must be the exact same handler,
-	// not a wrapper, to avoid the closure overhead on every request.
+	// Compare code pointers: the compiled result must be the exact same handler
+	// value, not a wrapper, to avoid the closure overhead on every request. This
+	// only works because both sides are the same variable h — see the doc
+	// comment above on what Pointer() can and cannot distinguish.
 	if reflect.ValueOf(got).Pointer() != reflect.ValueOf(h).Pointer() {
 		t.Fatal("Compile returned a wrapped handler instead of the original; this defeats the optimization")
 	}
@@ -88,8 +96,9 @@ func TestCompileWithMiddlewareWrapsTheHandler(t *testing.T) {
 
 // TestCompileOrder is the test this package exists for. The first middleware
 // given is outermost: it runs first on the way in and last on the way out. A
-// fold from the wrong end produces "B-in A-in handler A-out B-out", which is
-// still a working chain and still passes any test that does not look at order.
+// fold from the wrong end produces "C-in B-in A-in handler A-out B-out C-out",
+// which is still a working chain and still passes any test that does not look
+// at order.
 func TestCompileOrder(t *testing.T) {
 	got := run(base(), mark("A"), mark("B"), mark("C"))
 	want := "A-in B-in C-in handler C-out B-out A-out"
