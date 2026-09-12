@@ -1,6 +1,7 @@
 package chain
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -44,6 +45,10 @@ func TestCompileWithNoMiddleware(t *testing.T) {
 // does not wrap. A wrapper that only forwards would be invisible to the trace
 // above but would cost a closure call on every request of every route that has
 // no middleware, which is most of them.
+// Uses reflect.ValueOf().Pointer() to compare function identity because Go
+// does not allow direct comparison of func values with ==. This test is in
+// internal/chain, a test file, so ADR-0006's prohibition on reflect in core
+// does not apply.
 func TestCompileWithNoMiddlewareReturnsTheHandlerItself(t *testing.T) {
 	called := false
 	h := handler(func(log *[]string) { called = true })
@@ -54,14 +59,30 @@ func TestCompileWithNoMiddlewareReturnsTheHandlerItself(t *testing.T) {
 	if !called {
 		t.Fatal("the compiled handler did not call the original")
 	}
-	if &got == &h {
-		t.Skip("cannot compare func values directly; the behavioural check above is the real assertion")
+
+	// Check function identity: the compiled result must be the exact same handler,
+	// not a wrapper, to avoid the closure overhead on every request.
+	if reflect.ValueOf(got).Pointer() != reflect.ValueOf(h).Pointer() {
+		t.Fatal("Compile returned a wrapped handler instead of the original; this defeats the optimization")
 	}
 }
 
 func TestCompileWithOneMiddleware(t *testing.T) {
 	if got := run(base(), mark("A")); got != "A-in handler A-out" {
 		t.Errorf("run() = %q, want %q", got, "A-in handler A-out")
+	}
+}
+
+// TestCompileWithMiddlewareWrapsTheHandler asserts that when middleware is
+// present, Compile returns a wrapped handler, not the original. This catches
+// a Compile that silently dropped its middleware.
+func TestCompileWithMiddlewareWrapsTheHandler(t *testing.T) {
+	h := base()
+	mws := []middleware{mark("A")}
+	got := Compile(h, mws)
+
+	if reflect.ValueOf(got).Pointer() == reflect.ValueOf(h).Pointer() {
+		t.Fatal("Compile returned the original handler instead of wrapping it; middleware was silently dropped")
 	}
 }
 
