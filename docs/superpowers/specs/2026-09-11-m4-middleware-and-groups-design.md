@@ -179,8 +179,19 @@ that is actually wrong.
 A consequence worth stating because it will surprise someone: with prefix `/api`,
 `g.GET("/")` registers `/api/`, which is a different route from `/api`. ADR-0007
 declined trailing-slash equivalence, so the two do not collide and neither implies
-the other. There is no way to register the group's bare prefix from inside the
-group; register it on the `App`.
+the other. An empty path registers the group's bare prefix, carrying the group's
+middleware, and every non-empty path must begin with `/` or the `Group` verb
+panics.
+
+**The prefix's own leading slash was not enough; the path needs its own check
+too.** A group's prefix always begins with `/` (or is empty), so
+`g.prefix + path` looks like it begins with `/` no matter what `path` is —
+which is exactly the trap: `app.Group("/api")` followed by `g.GET("users", h)`
+joins to `/apiusers`, a pattern that satisfies `parsePattern`'s "must begin
+with /" check and registers silently. Joining is only total if the path is
+validated too: empty is allowed (it means the bare prefix), and anything else
+must begin with `/`, so prefix and path can never fuse into a third path
+nobody wrote.
 
 ### D5: The chain compiler lives in `internal/chain` and is generic
 

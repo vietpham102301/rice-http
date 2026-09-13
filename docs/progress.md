@@ -65,11 +65,13 @@ left room for, so `app.GET("/x", h)` compiles unchanged. 160 tests pass under `-
    list rather than getting a plausible cause attached to it.
 
 3. *Nine for nine, a guard nobody broke on purpose was not a guard.* M3 counted five across M2
-   and M3; the M4 design found a sixth; M4 itself found three more. Two were slice-aliasing
-   tests that mutated the caller's slice with an `append` — which writes past the length the
-   alias's header froze at, so it cannot detect aliasing at all, and one of the two had been
-   praised by a task reviewer as exercising exactly that trap. The third was a comment claiming
-   `sync.Once` gives `App.built`'s unlocked reader a happens-before guarantee; `Once` orders
+   and M3; the M4 design found a sixth; M4 itself found three more. One was a shipped
+   slice-aliasing test that mutated the caller's slice with an `append` — which writes past the
+   length the alias's header froze at, so it cannot detect aliasing at all — and had been
+   praised by a task reviewer as exercising exactly that trap. A second was the Task 3 brief,
+   which specified the same append-based shape for `Group`'s guard and would have shipped a
+   second blind test beside the first, but was caught before it shipped. The third was a
+   comment claiming `sync.Once` gives `App.built`'s unlocked reader a happens-before guarantee; `Once` orders
    goroutines that both call `Do`, and `register` never does. What closed all three was not
    review — review had already passed one of them. It was breaking the guarded property and
    confirming the guard went red: the aliasing tests were rewritten to overwrite

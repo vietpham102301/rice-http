@@ -190,10 +190,13 @@ would behave identically and cost a call per request forever. The requirement tu
 enforced by the signature rather than by vigilance: inside `Compile[H any, M ~func(H) H]` the
 handler is an opaque `H`, so it cannot be called and no wrapper around it can be constructed.
 `return h`, a zero value, or the result of applying an `M` are the only things the body can
-produce. `TestCompileWithNoMiddlewareReturnsTheHandlerItself` now compares function identity
-through `reflect.Value.Pointer`, which pins the property that *is* live — that the empty case
-returns the handler rather than a zero value — and `TestCompileWithMiddlewareWrapsTheHandler`
-pins its complement, that a non-empty slice is not silently dropped.
+produce. `TestCompileWithNoMiddlewareReturnsTheHandlerItself` now compares code pointers
+through `reflect.Value.Pointer` — not a general function-identity check, since `Pointer`
+cannot distinguish two closures built from the same function literal, but enough here because
+both sides are the same handler value — which pins the property that *is* live — that the
+empty case returns the handler rather than a zero value — and
+`TestCompileWithMiddlewareWrapsTheHandler` pins its complement, that a non-empty slice is not
+silently dropped.
 
 **Four places copy a caller's variadic slice, and all four are now guarded.** `App.Use`,
 `App.register`, `App.Group` and `Group.Group` each do `append([]Middleware(nil), mw...)`.
@@ -411,6 +414,17 @@ written by people who believed they were writing guards, and one of them had bee
 review, which is why reading them harder was never going to be the fix. The false alarm above
 extends the rule rather than denting it: the observation has to be of a real break, and
 "I broke it and it still passed" is a claim that itself needs checking.
+
+**The final whole-branch review found one more mismatch, of a different shape: not a guard
+that could not fail, but a design claim the code had already outgrown.** D4 said "There is no
+way to register the group's bare prefix from inside the group; register it on the `App`" —
+but `g.GET("")` already registered the bare prefix, carrying the group's own middleware, and
+had done so since groups were added. The review's fix was not to make the sentence true by
+outlawing the empty path; `g.GET("")` is the only way to give a group's own root the group's
+middleware, which is worth keeping. Instead the design doc was corrected to say what the code
+does, and the review's real finding — that the prefix's leading `/` was doing all the work and
+the path was never checked, so `g.GET("users")` joined onto `/api` into `/apiusers` silently —
+became the path validation D4 was missing.
 
 **What I still do not understand:**
 

@@ -159,9 +159,15 @@ func (a *App) GET(path string, h Handler, mw ...Middleware)
 // POST, PUT, PATCH, DELETE, HEAD, OPTIONS, and Handle(method, ...)
 func (a *App) Group(prefix string, mw ...Middleware) *Group
 
+func (a *App) Build()
+
 func (a *App) Run(addr string) error
 func (a *App) Shutdown(ctx context.Context) error
 ```
+
+`Build` compiles every route's middleware chain once and is called automatically by `Run`,
+`Serve` and `FasthttpHandler`; calling it early is only useful to make a configuration error
+surface before the listener opens. Registration after `Build` panics.
 
 The root object. It owns the route trees, the global middleware list, the context pool, the
 error handler and the fasthttp server. It has the two phases described in
