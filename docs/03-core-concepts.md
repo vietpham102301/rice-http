@@ -196,6 +196,14 @@ not exist at request time, because by then every route holds one flat compiled c
 nested group concatenates prefixes and appends middleware, so ordering is
 `app middleware → outer group → inner group → route middleware → handler`.
 
+**Prefix and path rules.** A prefix must be empty, or begin with `/` and not end with `/`.
+A route path registered on a group must begin with `/`, or be empty — an empty path
+registers the group's bare prefix, which is the only way to give the group's own root the
+group's middleware. Both rules panic at the offending call rather than at `Build`, because
+a prefix already begins with `/`, so `prefix + path` looks well-formed however malformed
+`path` is: `Group("/api")` with `GET("users", h)` would otherwise register `/apiusers`
+silently.
+
 ---
 
 ## 6. Router

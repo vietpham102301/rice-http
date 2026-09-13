@@ -51,10 +51,13 @@ func TestCompileWithNoMiddleware(t *testing.T) {
 //
 // Pointer() returns a *code* pointer, not an identity for the closure value: it
 // cannot tell apart two distinct closures created from the same function
-// literal. That is fine at both call sites in this file — each compares a
-// single handler value, h, against itself — but the comparison is not a
-// general function-identity check, and must not be extended to a case where
-// two different closures could share the same underlying code.
+// literal. Both call sites in this file are sound, but for different reasons.
+// Here the two sides are the same variable, h, so equality is exact. In
+// TestCompileWithMiddlewareWrapsTheHandler the two sides are h and Compile's
+// wrapper, which come from different function literals, so inequality is
+// exact. Neither is a general function-identity check, and the pattern must
+// not be extended to a case where two different closures could share the same
+// underlying code.
 func TestCompileWithNoMiddlewareReturnsTheHandlerItself(t *testing.T) {
 	called := false
 	h := handler(func(log *[]string) { called = true })

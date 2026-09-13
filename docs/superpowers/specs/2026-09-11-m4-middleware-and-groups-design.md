@@ -180,8 +180,10 @@ A consequence worth stating because it will surprise someone: with prefix `/api`
 `g.GET("/")` registers `/api/`, which is a different route from `/api`. ADR-0007
 declined trailing-slash equivalence, so the two do not collide and neither implies
 the other. An empty path registers the group's bare prefix, carrying the group's
-middleware, and every non-empty path must begin with `/` or the `Group` verb
-panics.
+middleware — the only way to give the group's own root the group's middleware —
+and every non-empty path must begin with `/` or the `Group` verb panics. An
+empty path on a group whose prefix is also empty panics: there is no path there
+to register.
 
 **The prefix's own leading slash was not enough; the path needs its own check
 too.** A group's prefix always begins with `/` (or is empty), so
