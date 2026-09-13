@@ -21,18 +21,46 @@ type Option func(*App)
 // server, and the listener.
 type App struct {
 	// trees holds one route tree per common verb, indexed by a method constant.
-	// It is an array of values, so every element starts as a zero Tree whose
-	// root node is nil until its first Insert.
+	// Registration inserts raw handlers here so that a bad configuration panics
+	// at the call site that caused it; Build discards these and rebuilds from
+	// routes with compiled chains. See the M4 design doc, D1.
 	trees [methodCount]router.Tree[Handler]
 
 	// rare holds trees for verbs without a reserved slot. It stays nil for
 	// applications that never register one.
 	rare map[string]*router.Tree[Handler]
 
+	// mws is the application-level middleware, outermost in every chain.
+	mws []Middleware
+
+	// routes records every registration in the order it happened. It is what
+	// Build compiles from; the registration-time trees are only a validator.
+	routes []route
+
+	buildOnce sync.Once
+
+	// built is read by registration to reject a late route, without a lock. That
+	// is safe only because the API is a single-goroutine setup phase — register,
+	// register, ..., Build — followed by serving, never concurrent registration.
+	// sync.Once's happens-before applies between goroutines that both call Do;
+	// register never does, so it gets no guarantee from that alone. It doesn't
+	// need one: a goroutine registering concurrently with another already races
+	// on routes and the trees, so this unlocked read is not the weak link.
+	built bool
+
 	srv *fasthttp.Server
 
 	mu sync.Mutex
 	ln net.Listener
+}
+
+// route is one registration, recorded for Build to compile.
+type route struct {
+	method string
+	path   string // already joined with any group prefix
+	h      Handler
+	group  *Group // nil when registered directly on the App
+	mws    []Middleware
 }
 
 // New creates an App.
@@ -50,9 +78,14 @@ func New(opts ...Option) *App {
 
 // FasthttpHandler returns the request handler this App installs on its server.
 //
-// Use it to mount rice inside an existing fasthttp server, or to drive the
-// dispatch path directly in benchmarks without opening a socket.
-func (a *App) FasthttpHandler() fasthttp.RequestHandler { return a.handle }
+// It calls Build, because a handler that dispatched uncompiled routes would skip
+// every middleware silently. Use it to mount rice inside an existing fasthttp
+// server, or to drive the dispatch path directly in benchmarks without opening a
+// socket.
+func (a *App) FasthttpHandler() fasthttp.RequestHandler {
+	a.Build()
+	return a.handle
+}
 
 // handle is the dispatch path: one request in, one response out.
 func (a *App) handle(fctx *fasthttp.RequestCtx) {

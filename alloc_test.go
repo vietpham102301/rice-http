@@ -106,6 +106,7 @@ func TestAllocBudgetHandleDispatch(t *testing.T) {
 		t.Fatal("route not registered; the budget below would be measuring the miss path")
 	}
 
+	app.Build()
 	budget(t, "App.handle dispatch (hit)", 1, func() {
 		app.handle(fctx)
 	})
@@ -286,6 +287,7 @@ func TestAllocBudgetHandleDispatchParameterised(t *testing.T) {
 	fctx.Request.Header.SetMethod("GET")
 	fctx.Request.SetRequestURI("/users/42")
 
+	app.Build()
 	app.handle(fctx)
 	if fctx.Response.StatusCode() != 200 {
 		t.Fatalf("status = %d, want 200; this budget would be measuring the 404 path", fctx.Response.StatusCode())
@@ -293,5 +295,94 @@ func TestAllocBudgetHandleDispatchParameterised(t *testing.T) {
 
 	budget(t, "App.handle on a parameterised route", 1, func() {
 		app.handle(fctx)
+	})
+}
+
+// chainSink counts middleware invocations. It is a package-level variable so the
+// compiler cannot discard the increments as dead code, which would let these
+// budgets measure a chain that was optimised away.
+var chainSink int
+
+// countingMW returns a middleware that increments chainSink on the way through.
+func countingMW() Middleware {
+	return func(next Handler) Handler {
+		return func(c *Ctx) error {
+			chainSink++
+			return next(c)
+		}
+	}
+}
+
+func TestAllocBudgetDispatchNoMiddleware(t *testing.T) {
+	app := New()
+	app.GET("/x", func(c *Ctx) error { return c.String(200, "ok") })
+	app.Build()
+
+	fctx := &fasthttp.RequestCtx{}
+	fctx.Request.Header.SetMethod("GET")
+	fctx.Request.SetRequestURI("/x")
+
+	app.handle(fctx)
+	if fctx.Response.StatusCode() != 200 {
+		t.Fatalf("status = %d, want 200; this budget would be measuring the 404 path", fctx.Response.StatusCode())
+	}
+
+	budget(t, "App.handle with no middleware", 1, func() {
+		app.handle(fctx)
+	})
+}
+
+// TestAllocBudgetDispatchFiveMiddleware is the milestone's central claim as a
+// test: five middleware cost no allocations beyond the one Ctx.
+func TestAllocBudgetDispatchFiveMiddleware(t *testing.T) {
+	app := New()
+	app.Use(countingMW(), countingMW(), countingMW())
+	g := app.Group("/api", countingMW())
+	g.GET("/x", func(c *Ctx) error { return c.String(200, "ok") }, countingMW())
+	app.Build()
+
+	fctx := &fasthttp.RequestCtx{}
+	fctx.Request.Header.SetMethod("GET")
+	fctx.Request.SetRequestURI("/api/x")
+
+	chainSink = 0
+	app.handle(fctx)
+
+	if fctx.Response.StatusCode() != 200 {
+		t.Fatalf("status = %d, want 200", fctx.Response.StatusCode())
+	}
+	if chainSink != 5 {
+		t.Fatalf("%d middleware ran, want 5; this budget would be measuring a shorter chain than it claims", chainSink)
+	}
+
+	budget(t, "App.handle with five middleware", 1, func() {
+		app.handle(fctx)
+	})
+}
+
+// TestAllocBudgetChainCompile pins the compiler itself, separately from dispatch.
+func TestAllocBudgetChainCompile(t *testing.T) {
+	h := Handler(func(c *Ctx) error { return nil })
+	mws := []Middleware{countingMW(), countingMW(), countingMW(), countingMW(), countingMW()}
+
+	// Compiling allocates — it builds closures. What must not allocate is calling
+	// the result, which is what a request does.
+	compiled := chainCompileForTest(h, mws)
+
+	// nil is deliberate: this chain's middleware only counts, and the terminal
+	// handler above only returns, so nothing here dereferences the *Ctx. If a
+	// future edit adds a Ctx access to either, this will panic rather than
+	// silently start allocating — that failure mode is preferable to this test
+	// quietly measuring something other than allocations.
+	chainSink = 0
+	if err := compiled(nil); err != nil {
+		t.Fatalf("compiled chain returned %v, want nil", err)
+	}
+	if chainSink != 5 {
+		t.Fatalf("%d middleware ran, want 5", chainSink)
+	}
+
+	budget(t, "compiled five-middleware chain call", 0, func() {
+		_ = compiled(nil)
 	})
 }

@@ -126,6 +126,7 @@ func TestDispatchExposesCapturedParametersToTheHandler(t *testing.T) {
 	fctx.Request.Header.SetMethod("GET")
 	fctx.Request.SetRequestURI("/users/42/posts/7")
 
+	app.Build()
 	app.handle(fctx)
 
 	if fctx.Response.StatusCode() != 200 {
@@ -152,6 +153,7 @@ func TestDispatchExposesAWildcardToTheHandler(t *testing.T) {
 	fctx.Request.Header.SetMethod("GET")
 	fctx.Request.SetRequestURI("/files/a/b.txt")
 
+	app.Build()
 	app.handle(fctx)
 
 	if got != "a/b.txt" {

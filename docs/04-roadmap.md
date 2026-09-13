@@ -73,7 +73,7 @@ lookup. Benchmark compared directly against M2's recorded numbers.
 
 ---
 
-### ☐ M4 — Middleware and groups
+### ☑ M4 — Middleware and groups
 
 - `Middleware` as `func(Handler) Handler`
 - `internal/chain` compiler and the `build()` phase

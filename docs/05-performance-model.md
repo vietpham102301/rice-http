@@ -35,8 +35,8 @@ test, not a benchmark, so a regression fails CI rather than merely looking worse
 | Router lookup, static route | 0 | MEASURED M2 |
 | Router lookup, 1 parameter | 0 | MEASURED M3 |
 | Router lookup, 5 parameters | 0 | TARGET (M6, needs slot sizing) |
-| Chain call, 0 middleware | 0 | TARGET (M4) |
-| Chain call, 5 middleware | 0 | TARGET (M4) |
+| Chain call, 0 middleware | 0 | MEASURED M4 |
+| Chain call, 5 middleware | 0 | MEASURED M4 |
 | **End to end: single handler, unpooled Ctx (M1 baseline)** | 1 | MEASURED M1 |
 | `c.Method`, `c.Path` | 0 | MEASURED M1 |
 | `c.String`, `c.Bytes` | 0 | MEASURED M1 |

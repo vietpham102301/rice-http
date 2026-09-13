@@ -7,29 +7,85 @@ import (
 	"github.com/vietpham102301/rice-http/internal/router"
 )
 
-// Handle registers h for the given method and path.
+// Handle registers h for the given method and path, wrapped in mw.
 //
-// All routes must be registered before serving begins. The route trees are
-// mutated here without synchronisation and read on every request, so registering
-// a route after Run or Serve is a data race, not merely a late change.
+// All routes must be registered before serving begins. The route trees and
+// middleware lists are mutated here and read on every request without
+// synchronisation, so registering after Build is a data race rather than merely a
+// late change — and it panics rather than racing.
 //
-// path may contain ":name" segments, each capturing one path segment under
-// that name, and a trailing "*name" wildcard capturing everything after it. A
-// wildcard requires at least one byte to match, so "/files/*path" matches
-// neither "/files" nor "/files/" — the commonest use of a wildcard is a
-// single-page-app catch-all such as "/*all", and it will not match the bare
-// "/"; register that path separately if it needs its own handler.
+// It panics on a programmer error: an empty or lowercase method, a nil handler, a
+// pattern that is malformed or could never match a request, or a route already
+// registered for the same method and path.
 //
-// It panics on a programmer error: an empty or lowercase method, a nil handler,
-// a pattern that is malformed or could never match a request, or a route already
-// registered for the same method and path. These are mistakes discovered at
-// startup rather than runtime conditions, and a duplicate in particular means one
-// of the two handlers can never run — silent, and expensive to debug. Panicking
-// at the call site puts the mistake in the stack trace.
+// Pattern syntax: a segment beginning with ':' captures one path segment by name,
+// and a final segment beginning with '*' captures the remainder. A wildcard must
+// capture at least one byte, so /files/*path matches /files/a but not /files/ or
+// /files.
+func (a *App) Handle(method, path string, h Handler, mw ...Middleware) {
+	a.register(method, path, h, nil, mw)
+}
+
+// GET registers h for GET requests to path, wrapped in mw.
+func (a *App) GET(path string, h Handler, mw ...Middleware) {
+	a.register("GET", path, h, nil, mw)
+}
+
+// POST registers h for POST requests to path, wrapped in mw.
+func (a *App) POST(path string, h Handler, mw ...Middleware) {
+	a.register("POST", path, h, nil, mw)
+}
+
+// PUT registers h for PUT requests to path, wrapped in mw.
+func (a *App) PUT(path string, h Handler, mw ...Middleware) {
+	a.register("PUT", path, h, nil, mw)
+}
+
+// PATCH registers h for PATCH requests to path, wrapped in mw.
+func (a *App) PATCH(path string, h Handler, mw ...Middleware) {
+	a.register("PATCH", path, h, nil, mw)
+}
+
+// DELETE registers h for DELETE requests to path, wrapped in mw.
+func (a *App) DELETE(path string, h Handler, mw ...Middleware) {
+	a.register("DELETE", path, h, nil, mw)
+}
+
+// HEAD registers h for HEAD requests to path, wrapped in mw.
+func (a *App) HEAD(path string, h Handler, mw ...Middleware) {
+	a.register("HEAD", path, h, nil, mw)
+}
+
+// OPTIONS registers h for OPTIONS requests to path, wrapped in mw.
+func (a *App) OPTIONS(path string, h Handler, mw ...Middleware) {
+	a.register("OPTIONS", path, h, nil, mw)
+}
+
+// Use adds application-level middleware, which wraps every route.
 //
-// M4 appends a variadic mw ...Middleware parameter. Doing so does not break
-// existing calls.
-func (a *App) Handle(method, path string, h Handler) {
+// Order of calls does not matter relative to route registration: chains are
+// compiled in Build, so Use written after a route still applies to it. That is
+// ADR-0003's central reason for having a build phase at all — the alternative
+// silently drops middleware added late, and middleware added late is usually
+// authentication.
+func (a *App) Use(mw ...Middleware) {
+	checkMiddleware(mw)
+	if a.built {
+		panic("rice: cannot call Use after Build; all middleware must be registered before serving begins")
+	}
+	// append into the App's own slice rather than keeping mw, so the caller's
+	// slice is never aliased and cannot be changed underneath us.
+	a.mws = append(a.mws, mw...)
+}
+
+// register is the single path every registration takes, from the App and from any
+// Group. g is nil for a route registered directly on the App.
+func (a *App) register(method, path string, h Handler, g *Group, mw []Middleware) {
+	checkMiddleware(mw)
+	if a.built {
+		panic("rice: cannot register " + method + " " + path +
+			" after Build; all routes must be registered before serving begins")
+	}
 	if method == "" {
 		panic("rice: route method is empty for path " + path)
 	}
@@ -41,19 +97,32 @@ func (a *App) Handle(method, path string, h Handler) {
 		panic("rice: nil handler for " + method + " " + path)
 	}
 
+	// Insert the raw handler now, so a malformed pattern or a conflicting route
+	// panics from the call that wrote it. Build discards this tree and rebuilds
+	// with the compiled chain.
 	if err := a.treeFor(method).Insert(path, h); err != nil {
 		if errors.Is(err, router.ErrDuplicate) {
 			// ErrDuplicate carries no path or method of its own (see its doc
 			// comment), so the message is built here, in the same "route path
 			// ..." shape parsePattern's own errors use below — one shape for
-			// every startup panic Handle can raise, none of them naming the
-			// internal router package.
+			// every startup panic registration can raise, none of them naming
+			// the internal router package.
 			panic(fmt.Sprintf("rice: route path %s is already registered for %s", path, method))
 		}
 		// parsePattern's and the tree's errors already name the offending
 		// pattern and say what to write instead, so they are surfaced verbatim.
 		panic("rice: " + err.Error())
 	}
+
+	a.routes = append(a.routes, route{
+		method: method,
+		path:   path,
+		h:      h,
+		group:  g,
+		// Copy rather than keep mw: it may be a caller's slice with spare
+		// capacity, and an append on their side must not reach into ours.
+		mws: append([]Middleware(nil), mw...),
+	})
 }
 
 // hasLowercaseByte reports whether s contains an ASCII lowercase letter.
@@ -70,27 +139,6 @@ func hasLowercaseByte(s string) bool {
 	}
 	return false
 }
-
-// GET registers h for GET requests to path.
-func (a *App) GET(path string, h Handler) { a.Handle("GET", path, h) }
-
-// POST registers h for POST requests to path.
-func (a *App) POST(path string, h Handler) { a.Handle("POST", path, h) }
-
-// PUT registers h for PUT requests to path.
-func (a *App) PUT(path string, h Handler) { a.Handle("PUT", path, h) }
-
-// PATCH registers h for PATCH requests to path.
-func (a *App) PATCH(path string, h Handler) { a.Handle("PATCH", path, h) }
-
-// DELETE registers h for DELETE requests to path.
-func (a *App) DELETE(path string, h Handler) { a.Handle("DELETE", path, h) }
-
-// HEAD registers h for HEAD requests to path.
-func (a *App) HEAD(path string, h Handler) { a.Handle("HEAD", path, h) }
-
-// OPTIONS registers h for OPTIONS requests to path.
-func (a *App) OPTIONS(path string, h Handler) { a.Handle("OPTIONS", path, h) }
 
 // treeFor returns the tree for method, creating one for an uncommon verb.
 //

@@ -159,9 +159,15 @@ func (a *App) GET(path string, h Handler, mw ...Middleware)
 // POST, PUT, PATCH, DELETE, HEAD, OPTIONS, and Handle(method, ...)
 func (a *App) Group(prefix string, mw ...Middleware) *Group
 
+func (a *App) Build()
+
 func (a *App) Run(addr string) error
 func (a *App) Shutdown(ctx context.Context) error
 ```
+
+`Build` compiles every route's middleware chain once and is called automatically by `Run`,
+`Serve` and `FasthttpHandler`; calling it early is only useful to make a configuration error
+surface before the listener opens. Registration after `Build` panics.
 
 The root object. It owns the route trees, the global middleware list, the context pool, the
 error handler and the fasthttp server. It has the two phases described in
@@ -189,6 +195,14 @@ A prefix plus a middleware list. It is purely a registration-time convenience: g
 not exist at request time, because by then every route holds one flat compiled chain. A
 nested group concatenates prefixes and appends middleware, so ordering is
 `app middleware → outer group → inner group → route middleware → handler`.
+
+**Prefix and path rules.** A prefix must be empty, or begin with `/` and not end with `/`.
+A route path registered on a group must begin with `/`, or be empty — an empty path
+registers the group's bare prefix, which is the only way to give the group's own root the
+group's middleware. Both rules panic at the offending call rather than at `Build`, because
+a prefix already begins with `/`, so `prefix + path` looks well-formed however malformed
+`path` is: `Group("/api")` with `GET("users", h)` would otherwise register `/apiusers`
+silently.
 
 ---
 

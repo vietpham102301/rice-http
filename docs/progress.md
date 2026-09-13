@@ -16,6 +16,133 @@ Each entry uses this shape:
 
 ---
 
+## 2026-09-12 — M4 — Middleware and groups: the chain is free, and it took four readings to say what "free" costs
+
+**Did:** Added `Middleware` as `func(next Handler) Handler`, the `internal/chain.Compile`
+fold, the one-time build phase, and `Group`. `Build` runs once under `sync.Once`, discards the
+trees registration built, folds each route's chain — application, then each group outermost
+first, then the route's own — and inserts the compiled `Handler` into fresh trees; `Run`,
+`Serve` and `FasthttpHandler` all trigger it, and registering or calling `Use` afterwards
+panics. Registration still inserts eagerly, so a duplicate route or a parameter-name conflict
+still panics from the `app.GET` line that wrote it. A `Group` holds a pointer to its parent
+rather than a copy of the parent's middleware, so `parent.Use(auth)` written after a child was
+created still reaches the child's routes — the same footgun ADR-0003 exists to prevent, moved
+down one level. Group prefixes must be empty or begin with `/` and not end with one, which
+makes joining total. Every registration method gained the trailing `mw ...Middleware` M2's D7
+left room for, so `app.GET("/x", h)` compiles unchanged. 160 tests pass under `-race` — 105 in
+`rice`, 47 in `internal/router`, 8 in `internal/chain`.
+
+**Learned:** Four things, the last of them about how the third was nearly overcounted.
+
+1. *Compiling at build time does remove the per-request cost, and the milestone's real
+   difficulty was saying by how much.* Five middleware add zero allocations and about 4.6 ns
+   to an ~86 ns dispatch — a slope of roughly 1.1 ns per middleware, roughly linear. That
+   number is the fourth reading of the same data. The first was a flat per-call average
+   (2.3 ns each, about double). The second was mine as controller: a step at the first
+   middleware then flat, read off the recorded medians, reviewed and agreed with, and wrong in
+   shape as well as size. The third came from actually re-running — eight counts of the three
+   committed benchmarks plus a 0/1/2/10 sweep — which put 0 → 1 at −0.3 ns and 1 → 5 at
+   +4.9 ns, and which also produced zero measuring *slower* than one, an impossibility that is
+   what first showed the comparison was unstable. The fourth correction is to the explanation:
+   both earlier accounts blamed `ChainDispatch1`'s single 120.10 ns outlier, and deleting that
+   sample moves its median only 0.77 ns. Reading the ten samples in *recording order* instead
+   of sorted shows the real cause — a contiguous slow window in the session that inflated the
+   tail of `ChainDispatch1` and the head of `ChainDispatch5` together, which is also why the
+   recorded 5 − 0 delta of +8.67 ns is nearly twice the re-run's +4.6. The recorded file is not
+   being re-run; the drift is real data and naming it beats hiding it behind a cleaner
+   recording.
+
+2. *A mechanism refuted is worth recording; a mechanism guessed is not.* The step was blamed
+   on inlining — `Compile` returns the handler unwrapped for an empty slice, so perhaps the
+   dispatch site inlines at zero middleware and not at one. `go build -gcflags=-m` says
+   `cannot inline (*App).handle: function too complex: cost 390 exceeds budget 80`, and `h(c)`
+   is an indirect call identically at every middleware count, because `h` is a value read out
+   of the tree at run time and inlining is decided once over source text. That is a measured
+   negative result and it is in the retrospective as one. Why the ~1.1 ns slope exists is
+   **left unexplained**: one more indirect call per middleware is the obvious account and
+   roughly a nanosecond each is unremarkable on this hardware, but nobody took a counter
+   reading. It joins M1's 43 ns header write, M2's ~9 ns and M3's 15.93 ns on the unexplained
+   list rather than getting a plausible cause attached to it.
+
+3. *Nine for nine, a guard nobody broke on purpose was not a guard.* M3 counted five across M2
+   and M3; the M4 design found a sixth; M4 itself found three more. One was a shipped
+   slice-aliasing test that mutated the caller's slice with an `append` — which writes past the
+   length the alias's header froze at, so it cannot detect aliasing at all — and had been
+   praised by a task reviewer as exercising exactly that trap. A second was the Task 3 brief,
+   which specified the same append-based shape for `Group`'s guard and would have shipped a
+   second blind test beside the first, but was caught before it shipped. The third was a
+   comment claiming `sync.Once` gives `App.built`'s unlocked reader a happens-before guarantee; `Once` orders
+   goroutines that both call `Do`, and `register` never does. What closed all three was not
+   review — review had already passed one of them. It was breaking the guarded property and
+   confirming the guard went red: the aliasing tests were rewritten to overwrite
+   `callerSlice[0]` in place, and each of the four copy sites (`App.Use`, `register`,
+   `App.Group`, `Group.Group`) was then broken to `mws: mw` and watched to fail. The
+   five-middleware allocation budget got the same treatment and failed on its precondition
+   ("3 middleware ran, want 5") rather than quietly measuring a shorter chain.
+
+4. *An experiment that cannot fail proves nothing, and it looks exactly like an experiment
+   that passed.* A tenth false guard was claimed while the retrospective was being written and
+   it was a false alarm — worth recording for how it happened rather than as a tally.
+   `TestCompileWithNoMiddlewareReturnsTheHandlerItself` did contain a dead branch,
+   `if &got == &h`, comparing two locals' addresses; a review had flagged it Minor and it was
+   deferred, and a dead branch beside a live one invites the reading that the live one does
+   more than it does. Both the retrospective's author and the controller then concluded the
+   test could not detect a wrapping `Compile`, and both "confirmed" it with the same injection:
+   an identity middleware, which returns the handler unchanged and wraps nothing. A genuinely
+   wrapping `Compile` is not expressible — inside `Compile[H any, M ~func(H) H]` the handler is
+   an opaque `H` that cannot be called, so the body can return `h`, a zero value, or the result
+   of applying an `M`, and nothing else. The property is enforced by the signature, not by the
+   test. This is the guard discipline failing one level up, in the fault injection meant to
+   validate the guard: "break it and watch it go red" is worth nothing unless the break is
+   real. The rewrite landed anyway and the suite is better for it — the dead branch is gone,
+   identity is compared through `reflect.Value.Pointer`, and the new
+   `TestCompileWithMiddlewareWrapsTheHandler` guards the complement and was confirmed red when
+   `Compile` drops its middleware. The count of genuine false guards stays at **nine**.
+
+**Measured:** Medians of ten runs from one recording — Apple M2 Pro, go1.25.6 darwin/arm64,
+[bench/results/M4-middleware-and-groups.txt](../bench/results/M4-middleware-and-groups.txt):
+
+| Benchmark | ns/op | B/op | allocs/op | range |
+| --- | --- | --- | --- | --- |
+| `BenchmarkChainDispatch0` | 84.01 | 352 | 1 | 83.00–85.60 |
+| `BenchmarkChainDispatch1` | 91.71 | 352 | 1 | 84.20–120.10 |
+| `BenchmarkChainDispatch5` | 92.68 | 352 | 1 | 89.78–105.40 |
+| `BenchmarkChainDispatch5Grouped` | 93.86 | 352 | 1 | 91.04–101.50 |
+| `BenchmarkBuild1000Routes` | ~239000 | 265001 | 7503 | 232306–247313 |
+| **Five middleware, recorded medians (`5` − `0`)** | **+8.67** | **0** | **0** | |
+| **Five middleware, eight-count re-run (~91.2 − ~86.6)** | **+4.6** | **0** | **0** | |
+
+The two five-middleware figures are both correct and are not the same quantity: +8.67 is what
+the committed recording's medians say, inflated by the slow window that straddles
+`ChainDispatch1` and `ChainDispatch5`; +4.6 is what a dedicated eight-count re-run of the same
+three benchmarks on the same binary says, and it is the figure the 0/1/2/10 sweep's
+~1.1 ns/middleware slope independently agrees with. **Groups cost nothing at request time:**
+`ChainDispatch5Grouped` against `ChainDispatch5` is +1.18 ns by median and −0.18 ns by mean of
+the same ten runs, and a difference whose sign flips between the two summaries of one
+recording is zero. The design says a group exists only at registration time and the numbers
+agree. **The per-request allocation is still one, and M4 is not why it is 352 bytes** — M3 grew
+the `Ctx` to 344 (352 after the allocator's size class), M4 adds no field to it and no
+per-request state, which is why ADR-0003 chose the decorator over an index walk with a cursor.
+`AllocsPerRun` pins it: `App.handle` costs 1 allocation with 0 middleware and 1 with 5, and a
+compiled five-middleware chain called directly costs 0. **The double insertion costs about
+239 µs per 1000 routes** — 239 ns per route, once, before the socket opens, in exchange for
+call-site panics. That benchmark times the build pass only, with registration's own insertion
+outside the timer; it is still the right number, because every alternative D1 considered
+inserts once somewhere and what D1 bought is exactly one extra pass over the route set. Its
+7503 allocs/op decompose exactly, measured rather than attributed: 1.000 for
+`middlewareFor`'s slice, 3.000 for `chain.Compile`'s closures and 3.503 for `tree.Insert`'s
+nodes, totalling 7.503 per route. The M3 suite was re-run in the same recording and drifted up
+a couple of percent, floor included — session drift, not a regression, and no M4 code runs in
+those paths.
+
+**Next:** M5 — `HTTPError`, a configurable `ErrorHandler`, the fasthttp panic hook mapped into
+the funnel, and `middleware.Recover` as an opt-in package. What M5 has to prove is that one
+error funnel can absorb every failure mode — a route miss, a middleware that returns early, a
+handler that fails, a handler that panics — without any of them becoming a special case, and
+that the cause string never reaches the response body.
+
+---
+
 ## 2026-09-11 — M3 — Radix tree router: the tree loses on static routes, and the `Ctx` is what got expensive
 
 **Did:** Replaced the map with a radix tree per verb. Named parameters (`/users/:id`), a

@@ -15,8 +15,11 @@ var ErrShutdownTimeout = errors.New("rice: shutdown timed out")
 // Run binds addr and serves until Shutdown is called.
 //
 // It blocks. Use "127.0.0.1:0" to bind an ephemeral port and read the result
-// back with Addr.
+// back with Addr. It builds before binding, so a bad configuration fails before
+// a port is taken.
 func (a *App) Run(addr string) error {
+	a.Build()
+
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
@@ -24,8 +27,11 @@ func (a *App) Run(addr string) error {
 	return a.Serve(ln)
 }
 
-// Serve serves on an existing listener and blocks until Shutdown is called.
+// Serve serves on an existing listener and blocks until Shutdown is called. It
+// builds first, so it is safe to call directly without going through Run.
 func (a *App) Serve(ln net.Listener) error {
+	a.Build()
+
 	a.mu.Lock()
 	a.ln = ln
 	a.mu.Unlock()

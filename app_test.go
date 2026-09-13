@@ -21,6 +21,7 @@ func TestHandleInvokesTheRegisteredHandler(t *testing.T) {
 	fctx.Request.Header.SetMethod("GET")
 	fctx.Request.SetRequestURI("/anything")
 
+	app.Build()
 	app.handle(fctx)
 
 	if !called {
@@ -40,6 +41,7 @@ func TestHandleWithNoRegisteredHandlerReturns404(t *testing.T) {
 	fctx := &fasthttp.RequestCtx{}
 	fctx.Request.SetRequestURI("/anything")
 
+	app.Build()
 	app.handle(fctx)
 
 	if got := fctx.Response.StatusCode(); got != fasthttp.StatusNotFound {
@@ -56,6 +58,7 @@ func TestHandleConvertsAReturnedErrorInto500(t *testing.T) {
 	fctx := &fasthttp.RequestCtx{}
 	fctx.Request.SetRequestURI("/boom")
 
+	app.Build()
 	app.handle(fctx)
 
 	if got := fctx.Response.StatusCode(); got != fasthttp.StatusInternalServerError {
@@ -76,6 +79,7 @@ func TestHandleDiscardsAPartialBodyWhenTheHandlerErrors(t *testing.T) {
 	fctx := &fasthttp.RequestCtx{}
 	fctx.Request.SetRequestURI("/partial")
 
+	app.Build()
 	app.handle(fctx)
 
 	if got := string(fctx.Response.Body()); got == "partial output" {
@@ -120,6 +124,7 @@ func TestHandleReturns404ForAnUnregisteredPath(t *testing.T) {
 	fctx.Request.Header.SetMethod("GET")
 	fctx.Request.SetRequestURI("/not-registered")
 
+	app.Build()
 	app.handle(fctx)
 
 	if got := fctx.Response.StatusCode(); got != fasthttp.StatusNotFound {
@@ -135,6 +140,7 @@ func TestHandleReturns404ForTheRightPathUnderTheWrongVerb(t *testing.T) {
 	fctx.Request.Header.SetMethod("POST")
 	fctx.Request.SetRequestURI("/users")
 
+	app.Build()
 	app.handle(fctx)
 
 	// M2 deliberately answers 404 rather than 405: computing Allow would cost a
@@ -150,6 +156,7 @@ func TestThe404BodyDoesNotLeakTheSentinelMessage(t *testing.T) {
 	fctx := &fasthttp.RequestCtx{}
 	fctx.Request.SetRequestURI("/missing")
 
+	app.Build()
 	app.handle(fctx)
 
 	body := string(fctx.Response.Body())
@@ -169,6 +176,7 @@ func TestAHandlerErrorStillProduces500AfterTheFunnelLearnedAbout404(t *testing.T
 	fctx.Request.Header.SetMethod("GET")
 	fctx.Request.SetRequestURI("/boom2")
 
+	app.Build()
 	app.handle(fctx)
 
 	if got := fctx.Response.StatusCode(); got != fasthttp.StatusInternalServerError {
@@ -189,6 +197,7 @@ func TestAHandlerMayReturnErrNotFoundToGetA404(t *testing.T) {
 	fctx.Request.Header.SetMethod("GET")
 	fctx.Request.SetRequestURI("/maybe")
 
+	app.Build()
 	app.handle(fctx)
 
 	if got := fctx.Response.StatusCode(); got != fasthttp.StatusNotFound {
