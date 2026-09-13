@@ -426,6 +426,18 @@ does, and the review's real finding — that the prefix's leading `/` was doing 
 the path was never checked, so `g.GET("users")` joined onto `/api` into `/apiusers` silently —
 became the path validation D4 was missing.
 
+**And the scoped re-review of that fix found the pattern once more, in the note explaining
+the fix.** The comment added to `chain_test.go` justified its `reflect.Value.Pointer`
+comparison by saying both call sites compare a handler value against itself. That is true of
+the equality test and false of the inequality one, which compares the handler against
+`Compile`'s wrapper; that site is sound for a different reason, because the two closures come
+from different function literals. The guard held either way — only its stated rationale was
+wrong. Worth recording because it is the same failure one layer out from where this milestone
+kept finding it: first tests that named a property they could not detect, then a fault
+injection that injected no fault, then a design sentence the code had outgrown, and now an
+explanation that was right about the conclusion and wrong about half the reason. Each was
+caught by someone checking the claim against the thing rather than reading the claim.
+
 **What I still do not understand:**
 
 Why the chain costs about 1.1 ns per middleware. Inlining is ruled out — measured, with
