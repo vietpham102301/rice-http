@@ -8,10 +8,10 @@ it. The design decisions are written down in [ADRs](docs/adr/) before they are i
 and each milestone ends with a [retrospective](docs/milestones/) naming what the
 measurements changed.
 
-> **Status: not production ready.** Four of nine milestones are done (M0–M4). There is no
-> error-handling funnel yet and no context pooling, and `Shutdown` is blunt — it races
-> fasthttp's own shutdown against your context rather than draining in-flight requests
-> against a deadline. The API will change. See the [roadmap](docs/04-roadmap.md).
+> **Status: not production ready.** Five of nine milestones are done (M0–M5). There is no
+> context pooling, and `Shutdown` is blunt — it races fasthttp's own shutdown against your
+> context rather than draining in-flight requests against a deadline. The API will change.
+> See the [roadmap](docs/04-roadmap.md).
 
 ## Install
 
@@ -74,6 +74,39 @@ Order is fixed and does not depend on registration order: **app → outer group 
 → route → handler** on the way in, and the reverse on the way out. `app.Use` written after
 a route still applies to it, because chains are compiled once at build time rather than
 walked per request ([ADR-0003](docs/adr/0003-middleware-as-prebuilt-closure-chain.md)).
+
+## Error handling
+
+A handler returns an error, and every error — from routing, from middleware, from the
+handler itself, and from a recovered panic — reaches exactly one place: the app's
+`ErrorHandler`. `HTTPError` carries a status code the default handler answers with directly;
+anything else becomes a generic 500, and the real cause is logged, never sent to the client.
+
+```go
+app.GET("/users/:id", func(c *rice.Ctx) error {
+	name, err := store.Find(c.ParamString("id"))
+	if err != nil {
+		return rice.NewHTTPError(404, "user not found")
+	}
+	return c.String(200, name)
+})
+```
+
+Replace the default to change how a service reports failure — RFC 7807 problem documents,
+for example — without touching any handler:
+
+```go
+app := rice.New(rice.WithErrorHandler(func(c *rice.Ctx, err error) {
+	log.Printf("request failed: %v", err)
+	_ = c.String(500, "something went wrong")
+}))
+```
+
+fasthttp has no panic hook of its own, so rice recovers a panicking handler in its own
+dispatch path rather than leaving one bad handler able to take the whole process down — a
+deliberate, measured exception to the "no cost for unused features" rule, recorded in
+[ADR-0008](docs/adr/0008-rice-recovers-panics-in-core.md). A panic reaches the same
+`ErrorHandler` as everything else, wrapped in a `*PanicError`, and always answers 500.
 
 ## Two phases
 
@@ -146,7 +179,7 @@ publishing them earlier would mean publishing them from an unfinished framework.
 | [04 — Roadmap](docs/04-roadmap.md) | nine milestones, and what each one answers |
 | [05 — Performance model](docs/05-performance-model.md) | the allocation budget, per method |
 | [06 — Glossary](docs/06-glossary.md) | terms used precisely in these docs |
-| [ADRs](docs/adr/) | seven decisions, with the alternatives that lost |
+| [ADRs](docs/adr/) | eight decisions, with the alternatives that lost |
 | [Milestones](docs/milestones/) | retrospectives: what was measured, what surprised |
 | [Journal](docs/progress.md) | the running record, including the wrong turns |
 
@@ -154,7 +187,7 @@ publishing them earlier would mean publishing them from an unfinished framework.
 
 ```
 make test     # go test ./... -race
-make cover    # coverage, currently 98.7%
+make cover    # coverage, currently 98.9%
 make lint     # go vet
 make bench    # runs the suite and records to bench/results/
 ```

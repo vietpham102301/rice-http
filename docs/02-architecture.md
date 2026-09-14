@@ -23,9 +23,8 @@ The public layer is deliberately thin: it is mostly a facade that names things w
 owns lifetimes. The interesting algorithms are one layer down, unexported, and free to
 change.
 
-The diagram is the finished shape, not today's. As of M4, `HTTPError` (M5) and
-`internal/bytesconv` (M6) are named there but not built; the layout below marks precisely
-what exists.
+The diagram is the finished shape, not today's. As of M5, `internal/bytesconv` (M6) is named
+there but not built; the layout below marks precisely what exists.
 
 ## Package layout
 
@@ -35,7 +34,7 @@ import. Splitting them into subdirectories would create separate packages and fo
 into several imports, which is the opposite of the thin single facade the layer diagram
 describes.
 
-**What exists today** (through M4):
+**What exists today** (through M5):
 
 ```
 rice-http/
@@ -49,17 +48,21 @@ rice-http/
 ├── group.go            Group: prefix and middleware scoping, and the registration guards
 ├── build.go            Build: chain compilation and tree rebuild, once
 ├── method.go           the method enum and the fixed-array index
-├── errors.go           ErrNotFound
+├── errors.go           HTTPError, PanicError, ErrNotFound, ErrorHandler, DefaultErrorHandler
 ├── server.go           fasthttp.Server construction, Run/Serve/Shutdown
 ├── doc.go              package documentation
 ├── internal/
 │   ├── router/         radix tree: insert, lookup, param capture, priority
 │   └── chain/          middleware chain compilation
+├── middleware/         optional, opt-in: recover
 ├── docs/               these documents, the ADRs, milestone retrospectives, the journal
 ├── bench/              benchmark suite and recorded results, one file per milestone
 ├── scripts/            bench.sh, the recording harness
 └── .github/workflows/  CI
 ```
+
+logger, requestid and timeout are still unbuilt; `middleware/` currently holds only
+`Recover`.
 
 **What later milestones add.** These are named here so the layout is predictable, not
 because they exist:
@@ -67,12 +70,8 @@ because they exist:
 ```
 ├── ctx_request.go      query and header accessors            (deferred, owned by no milestone)
 ├── pool.go             sync.Pool wiring, acquire/release, debug poisoning   (M6)
-├── middleware/         optional, opt-in: recover, logger, requestid, timeout (M5)
 └── internal/bytesconv/ the only place unsafe string/[]byte views are allowed (M6)
 ```
-
-`HTTPError`, `ErrorHandler` and `defaultErrorHandler` join `errors.go` in M5; today it holds
-only `ErrNotFound`.
 
 `middleware/` is a separate package on purpose. Importing rice must not drag in anything
 a user did not ask for, and the import graph is the honest signal of what costs what.
