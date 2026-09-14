@@ -124,12 +124,16 @@ func (a *App) handle(fctx *fasthttp.RequestCtx) {
 	c := &Ctx{}
 	c.reset(a, fctx)
 
-	// fasthttp has no panic hook. Its only recover() guards body-stream writes;
-	// server.go calls the handler bare from a worker-pool goroutine, so an
-	// unrecovered panic here takes the whole process down, not just this
-	// connection. Recovering is therefore core behaviour rather than opt-in
-	// middleware, which is a deliberate exception to design principle 7 —
-	// see ADR-0008.
+	// M3 allocates a Ctx per request on purpose. This is the baseline M6's
+	// sync.Pool is measured against. Do not optimise it here.
+
+	// fasthttp has no panic hook. Its only recover() on the request path guards
+	// body-stream writes — a second one exists in fasthttpadaptor/adaptor.go,
+	// which rice does not use; server.go calls the handler bare from a
+	// worker-pool goroutine, so an unrecovered panic here takes the whole
+	// process down, not just this connection. Recovering is therefore core
+	// behaviour rather than opt-in middleware, which is a deliberate exception
+	// to design principle 7 — see ADR-0008.
 	//
 	// The closure is written out rather than expressed as defer a.recover(c)
 	// because this is the shape that was measured: 1 alloc/op, unchanged.
@@ -139,8 +143,6 @@ func (a *App) handle(fctx *fasthttp.RequestCtx) {
 		}
 	}()
 
-	// M3 allocates a Ctx per request on purpose. This is the baseline M6's
-	// sync.Pool is measured against. Do not optimise it here.
 	h, ok := a.lookup(fctx.Method(), fctx.Path(), &c.params)
 	if !ok {
 		a.callErrorHandler(c, ErrNotFound)

@@ -60,8 +60,14 @@ func TestAPanickingHandlerIsLoggedWithItsStack(t *testing.T) {
 	if !strings.Contains(out, "handler exploded") {
 		t.Errorf("the panic value was not logged, got %q", out)
 	}
-	if !strings.Contains(out, "panic_test.go") {
-		t.Errorf("the log carries no stack naming this test file, got %q", out)
+	// panic_test.go is on the stack unconditionally, because dispatchCtx lives
+	// there too — that substring would pass even for a stack that only reached
+	// the recovery path and never the handler. The panicking handler's own
+	// closure frame, named for the enclosing test function, can only appear if
+	// the trace actually reaches into the handler that panicked. Confirmed
+	// against a real captured stack; see the fix-round report for the dump.
+	if !strings.Contains(out, "TestAPanickingHandlerIsLoggedWithItsStack.func") {
+		t.Errorf("the log carries no frame naming the panicking handler, got %q", out)
 	}
 }
 
@@ -124,6 +130,25 @@ func TestACustomErrorHandlerReceivesAPanicError(t *testing.T) {
 	}
 	if len(got.Stack) == 0 {
 		t.Error("Stack is empty")
+	}
+}
+
+// TestAPanickingErrorHandlerRecoversFromAPanickingHandlerToo covers the
+// compound path: the handler panics, and the custom ErrorHandler handling
+// that panic also panics. callErrorHandler's own recover runs closer to the
+// second panic than handle's, and handle's recover() is already spent by
+// then — so this must not repeat the panic and take the process down with it.
+func TestAPanickingErrorHandlerRecoversFromAPanickingHandlerToo(t *testing.T) {
+	app := New(WithErrorHandler(func(c *Ctx, err error) { panic("handler panicked too") }))
+	app.GET("/boom", func(c *Ctx) error { panic("handler exploded") })
+
+	fctx := dispatchCtx(app, "GET", "/boom")
+
+	if got := fctx.Response.StatusCode(); got != 500 {
+		t.Errorf("status = %d, want 500", got)
+	}
+	if got := string(fctx.Response.Body()); got != "Internal Server Error" {
+		t.Errorf("body = %q, want the last-resort body", got)
 	}
 }
 
