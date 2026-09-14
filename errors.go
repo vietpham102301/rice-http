@@ -52,14 +52,16 @@ func DefaultErrorHandler(c *Ctx, err error) {
 // respond writes a status and a plain-text body, discarding whatever the
 // handler had written first.
 //
-// The reset is ADR-0002's rule, settled in M1: a handler that writes a response
-// and then returns an error has its body discarded and receives the error
-// handler's response instead.
+// SetBodyString below discards any prior body — stream, raw, or buffered —
+// before writing, which is ADR-0002's rule, settled in M1: a handler that
+// writes a response and then returns an error has its body discarded and
+// receives the error handler's response instead. There is deliberately no
+// explicit ResetBody call: it would be a no-op here, and a no-op whose comment
+// claims to enforce a rule is worse than its absence.
 func respond(c *Ctx, code int, msg string) {
 	if msg == "" {
 		msg = fasthttp.StatusMessage(code)
 	}
-	c.fctx.ResetBody()
 	c.fctx.SetStatusCode(code)
 	c.fctx.SetContentType(MIMETextPlainUTF8)
 	c.fctx.SetBodyString(msg)
