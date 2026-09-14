@@ -386,3 +386,54 @@ func TestAllocBudgetChainCompile(t *testing.T) {
 		_ = compiled(nil)
 	})
 }
+
+// TestAllocBudgetDispatchWithRecover is the load-bearing row of M5's budget
+// table: an installed recovery that never fires must cost nothing. The whole
+// justification for making recovery core behaviour rather than opt-in rests on
+// this being 0.
+func TestAllocBudgetDispatchWithRecover(t *testing.T) {
+	app := New()
+	app.GET("/ok", func(c *Ctx) error { return c.String(200, "ok") })
+	app.Build()
+
+	fctx := &fasthttp.RequestCtx{}
+	fctx.Request.Header.SetMethod("GET")
+	fctx.Request.SetRequestURI("/ok")
+
+	budget(t, "dispatch with recovery installed", 1, func() {
+		app.handle(fctx)
+	})
+}
+
+// TestAllocBudget404 pins D2's claim that a prebuilt ErrNotFound makes a miss
+// cost exactly what a hit costs: one Ctx, nothing for the error.
+func TestAllocBudget404(t *testing.T) {
+	app := New()
+	app.GET("/ok", func(c *Ctx) error { return nil })
+	app.Build()
+
+	fctx := &fasthttp.RequestCtx{}
+	fctx.Request.Header.SetMethod("GET")
+	fctx.Request.SetRequestURI("/missing")
+
+	budget(t, "404 through the funnel", 1, func() {
+		app.handle(fctx)
+	})
+}
+
+// TestAllocBudgetHTTPErrorReturn records the cost of a handler constructing an
+// error: the Ctx plus the HTTPError. It is 2 and it is meant to be 2 — a
+// budget that documents a cost rather than forbidding one.
+func TestAllocBudgetHTTPErrorReturn(t *testing.T) {
+	app := New()
+	app.GET("/bad", func(c *Ctx) error { return NewHTTPError(400, "bad request") })
+	app.Build()
+
+	fctx := &fasthttp.RequestCtx{}
+	fctx.Request.Header.SetMethod("GET")
+	fctx.Request.SetRequestURI("/bad")
+
+	budget(t, "handler returning a fresh HTTPError", 2, func() {
+		app.handle(fctx)
+	})
+}
