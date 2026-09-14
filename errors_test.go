@@ -219,3 +219,68 @@ func TestErrNotFoundStillWorksWithErrorsIs(t *testing.T) {
 		t.Error("errors.Is no longer matches a wrapped sentinel")
 	}
 }
+
+func TestWithErrorHandlerReplacesTheDefault(t *testing.T) {
+	app := New(WithErrorHandler(func(c *Ctx, err error) {
+		respond(c, 599, "custom handler ran")
+	}))
+	app.GET("/boom", func(c *Ctx) error { return errors.New("anything") })
+
+	fctx := &fasthttp.RequestCtx{}
+	fctx.Request.Header.SetMethod("GET")
+	fctx.Request.SetRequestURI("/boom")
+
+	app.Build()
+	app.handle(fctx)
+
+	if got := fctx.Response.StatusCode(); got != 599 {
+		t.Errorf("status = %d, want 599 from the custom handler", got)
+	}
+	if got := string(fctx.Response.Body()); got != "custom handler ran" {
+		t.Errorf("body = %q, want the custom handler's", got)
+	}
+}
+
+func TestWithErrorHandlerAlsoHandlesA404(t *testing.T) {
+	var saw error
+	app := New(WithErrorHandler(func(c *Ctx, err error) { saw = err }))
+
+	fctx := &fasthttp.RequestCtx{}
+	fctx.Request.Header.SetMethod("GET")
+	fctx.Request.SetRequestURI("/missing")
+
+	app.Build()
+	app.handle(fctx)
+
+	if !errors.Is(saw, ErrNotFound) {
+		t.Errorf("the custom handler received %v, want ErrNotFound", saw)
+	}
+}
+
+func TestWithErrorHandlerRejectsNil(t *testing.T) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("WithErrorHandler(nil) did not panic")
+		}
+		msg, ok := r.(string)
+		if !ok || !strings.HasPrefix(msg, "rice: ") {
+			t.Errorf("panic = %v, want a rice-prefixed string", r)
+		}
+	}()
+
+	New(WithErrorHandler(nil))
+}
+
+func TestAnAppWithNoOptionUsesTheDefaultHandler(t *testing.T) {
+	app := New()
+	if app.errorHandler == nil {
+		t.Fatal("errorHandler is nil on a plain New()")
+	}
+
+	c, fctx := newTestCtx("GET", "/")
+	app.errorHandler(c, NewHTTPError(418, "teapot"))
+	if got := fctx.Response.StatusCode(); got != 418 {
+		t.Errorf("status = %d, want the default handler's behaviour", got)
+	}
+}

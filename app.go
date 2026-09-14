@@ -11,10 +11,21 @@ import (
 
 // Option configures an App at construction time.
 //
-// M1 ships no options. The first ones arrive in M7 with server timeouts. The
-// variadic parameter is present now so that adding them later does not change
-// the signature of New.
+// Configuration happens here rather than through setters so that a serving App
+// cannot be reconfigured underneath a request. M7 adds server timeouts.
 type Option func(*App)
+
+// WithErrorHandler replaces the ErrorHandler an App uses for every failure:
+// returned errors, route misses, and recovered panics alike.
+//
+// A nil handler panics here rather than falling back to the default silently,
+// in the style of every other configuration mistake in rice.
+func WithErrorHandler(h ErrorHandler) Option {
+	if h == nil {
+		panic("rice: WithErrorHandler: handler is nil")
+	}
+	return func(a *App) { a.errorHandler = h }
+}
 
 // App is the root of a rice application. It owns the routes, the fasthttp
 // server, and the listener.
