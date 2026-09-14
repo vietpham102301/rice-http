@@ -3,6 +3,7 @@ package rice
 import (
 	"log"
 	"net"
+	"runtime/debug"
 	"sync"
 
 	"github.com/valyala/fasthttp"
@@ -122,6 +123,21 @@ func (a *App) handle(fctx *fasthttp.RequestCtx) {
 	// reason. That is recorded in ADR-0005.
 	c := &Ctx{}
 	c.reset(a, fctx)
+
+	// fasthttp has no panic hook. Its only recover() guards body-stream writes;
+	// server.go calls the handler bare from a worker-pool goroutine, so an
+	// unrecovered panic here takes the whole process down, not just this
+	// connection. Recovering is therefore core behaviour rather than opt-in
+	// middleware, which is a deliberate exception to design principle 7 —
+	// see ADR-0008.
+	//
+	// The closure is written out rather than expressed as defer a.recover(c)
+	// because this is the shape that was measured: 1 alloc/op, unchanged.
+	defer func() {
+		if r := recover(); r != nil {
+			a.callErrorHandler(c, &PanicError{Value: r, Stack: debug.Stack()})
+		}
+	}()
 
 	// M3 allocates a Ctx per request on purpose. This is the baseline M6's
 	// sync.Pool is measured against. Do not optimise it here.

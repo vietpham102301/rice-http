@@ -39,6 +39,18 @@ type ErrorHandler func(c *Ctx, err error)
 // leaking internal error strings to clients is how databases end up described
 // in HTTP responses.
 func DefaultErrorHandler(c *Ctx, err error) {
+	// Checked before *HTTPError, and the order is load-bearing.
+	// PanicError.Unwrap returns the panicked value, so panic(NewHTTPError(400,
+	// ...)) would otherwise answer 400 — a panic quietly becoming a client
+	// error. A panic is a bug, never a way to signal failure, and it is always
+	// a 500.
+	var pe *PanicError
+	if errors.As(err, &pe) {
+		log.Printf("rice: panic recovered: %v\n%s", pe.Value, pe.Stack)
+		respond(c, fasthttp.StatusInternalServerError, "Internal Server Error")
+		return
+	}
+
 	var he *HTTPError
 	if errors.As(err, &he) {
 		respond(c, he.Code, he.Message)

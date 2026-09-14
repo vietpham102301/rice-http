@@ -1,10 +1,12 @@
 package rice_test
 
 import (
+	"bufio"
 	"context"
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -334,5 +336,100 @@ func TestServeMatchesAPercentEncodedRequestAgainstADecodedPattern(t *testing.T) 
 
 	if err := app.Shutdown(context.Background()); err != nil {
 		t.Errorf("Shutdown returned %v, want nil", err)
+	}
+}
+
+// TestServeSurvivesAPanickingHandler is the exit criterion. Before M5 a
+// panicking handler killed the process: fasthttp has no PanicHandler, calls the
+// handler bare from a worker-pool goroutine, and an unrecovered panic there
+// takes the program down with exit status 2 — every other connection with it.
+//
+// The roadmap asked for "without dropping the connection". That understated the
+// problem, so this asserts the stronger thing: the server keeps serving.
+func TestServeSurvivesAPanickingHandler(t *testing.T) {
+	app := rice.New()
+	app.GET("/boom", func(c *rice.Ctx) error { panic("handler exploded") })
+	app.GET("/ok", func(c *rice.Ctx) error { return c.String(200, "still alive") })
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go func() { _ = app.Serve(ln) }()
+	t.Cleanup(func() { _ = app.Shutdown(context.Background()) })
+
+	addr := waitForAddr(t, app)
+
+	if code, _ := get(t, addr, "/ok"); code != 200 {
+		t.Fatalf("before the panic: status = %d, want 200", code)
+	}
+
+	code, body := get(t, addr, "/boom")
+	if code != 500 {
+		t.Errorf("panicking route: status = %d, want 500", code)
+	}
+	if strings.Contains(body, "exploded") {
+		t.Errorf("the panic value reached the client: %q", body)
+	}
+
+	if code, body := get(t, addr, "/ok"); code != 200 || body != "still alive" {
+		t.Errorf("after the panic: status = %d body = %q, want 200 and %q", code, body, "still alive")
+	}
+}
+
+// TestAPanicDoesNotKillTheKeepAliveConnection writes two requests down one TCP
+// connection by hand. The first panics. The second must still be answered on
+// that same connection — "does not take the connection down" is the roadmap's
+// original wording, and http.Get cannot prove it because the client is free to
+// open a fresh connection without telling anyone.
+func TestAPanicDoesNotKillTheKeepAliveConnection(t *testing.T) {
+	app := rice.New()
+	app.GET("/boom", func(c *rice.Ctx) error { panic("handler exploded") })
+	app.GET("/ok", func(c *rice.Ctx) error { return c.String(200, "still alive") })
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go func() { _ = app.Serve(ln) }()
+	t.Cleanup(func() { _ = app.Shutdown(context.Background()) })
+
+	addr := waitForAddr(t, app)
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+
+	br := bufio.NewReader(conn)
+
+	write := func(path string) {
+		t.Helper()
+		req := "GET " + path + " HTTP/1.1\r\nHost: x\r\n\r\n"
+		if _, err := conn.Write([]byte(req)); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	read := func(path string) *http.Response {
+		t.Helper()
+		resp, err := http.ReadResponse(br, nil)
+		if err != nil {
+			t.Fatalf("read response for %s: %v", path, err)
+		}
+		_, _ = io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return resp
+	}
+
+	write("/boom")
+	if got := read("/boom").StatusCode; got != 500 {
+		t.Errorf("panicking route: status = %d, want 500", got)
+	}
+
+	write("/ok")
+	if got := read("/ok").StatusCode; got != 200 {
+		t.Errorf("after the panic, on the same connection: status = %d, want 200", got)
 	}
 }

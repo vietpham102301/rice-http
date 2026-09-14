@@ -82,7 +82,7 @@ func TestHandleDiscardsAPartialBodyWhenTheHandlerErrors(t *testing.T) {
 	app.Build()
 	app.handle(fctx)
 
-	if got := string(fctx.Response.Body()); got == "partial output" {
+	if got := string(fctx.Response.Body()); strings.Contains(got, "partial output") {
 		t.Error("a partially written body survived an error return")
 	}
 	if got := fctx.Response.StatusCode(); got != fasthttp.StatusInternalServerError {
