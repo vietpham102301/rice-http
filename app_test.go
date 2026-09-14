@@ -163,8 +163,8 @@ func TestThe404BodyDoesNotLeakTheSentinelMessage(t *testing.T) {
 	if body != "Not Found" {
 		t.Errorf("body = %q, want %q", body, "Not Found")
 	}
-	if strings.Contains(body, "rice:") {
-		t.Errorf("the sentinel's internal message leaked into the response: %q", body)
+	if strings.Contains(body, "404:") {
+		t.Errorf("the sentinel's Error() rendering leaked into the response: %q", body)
 	}
 }
 

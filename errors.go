@@ -3,21 +3,67 @@ package rice
 import (
 	"errors"
 	"fmt"
+	"log"
 	"strconv"
 
 	"github.com/valyala/fasthttp"
 )
 
 // ErrNotFound is passed into the error funnel when no route matches the
-// request. The error handler turns it into a 404.
+// request, and a handler may return it to produce a 404 of its own.
 //
-// It is a package-level value created once at init, so returning it costs no
-// allocation — which matters, because it is returned on the path that mistaken
-// and hostile traffic hits hardest.
+// It is an *HTTPError built once at package initialisation, so a 404 costs no
+// allocation for the error itself — which matters, because it is the path
+// mistaken and hostile traffic hits hardest. Carrying its own status is also
+// what lets the funnel drop its last special case: DefaultErrorHandler finds
+// this with the same errors.As it uses for everything else.
 //
-// M5 generalises the funnel to an HTTPError type. errors.Is keeps working
-// against this sentinel, so checks written against it today keep working then.
-var ErrNotFound = errors.New("rice: not found")
+// It changed type in M5, from errors.New to *HTTPError. errors.Is against it
+// keeps working, because it is still the same pointer.
+var ErrNotFound = &HTTPError{Code: fasthttp.StatusNotFound, Message: "Not Found"}
+
+// ErrorHandler turns an error into a response. It returns nothing: it is the
+// end of the line, and there is nowhere left to report a failure to.
+//
+// There is exactly one per App, set with WithErrorHandler. Replacing it is the
+// supported way to change how a service reports failure — to emit RFC 7807
+// problem documents, for example.
+type ErrorHandler func(c *Ctx, err error)
+
+// DefaultErrorHandler is the ErrorHandler an App uses unless WithErrorHandler
+// replaces it. It is exported so a custom handler can delegate the cases it
+// does not care about.
+//
+// An *HTTPError anywhere in the chain answers with its code. Anything else is a
+// 500 with a generic body, and the real error is logged rather than sent:
+// leaking internal error strings to clients is how databases end up described
+// in HTTP responses.
+func DefaultErrorHandler(c *Ctx, err error) {
+	var he *HTTPError
+	if errors.As(err, &he) {
+		respond(c, he.Code, he.Message)
+		return
+	}
+
+	log.Printf("rice: unhandled error: %v", err)
+	respond(c, fasthttp.StatusInternalServerError, "Internal Server Error")
+}
+
+// respond writes a status and a plain-text body, discarding whatever the
+// handler had written first.
+//
+// The reset is ADR-0002's rule, settled in M1: a handler that writes a response
+// and then returns an error has its body discarded and receives the error
+// handler's response instead.
+func respond(c *Ctx, code int, msg string) {
+	if msg == "" {
+		msg = fasthttp.StatusMessage(code)
+	}
+	c.fctx.ResetBody()
+	c.fctx.SetStatusCode(code)
+	c.fctx.SetContentType(MIMETextPlainUTF8)
+	c.fctx.SetBodyString(msg)
+}
 
 // HTTPError is an error with an HTTP status attached. It is the one error type
 // the funnel understands: DefaultErrorHandler finds it with errors.As and

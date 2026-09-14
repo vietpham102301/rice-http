@@ -1,7 +1,6 @@
 package rice
 
 import (
-	"errors"
 	"net"
 	"sync"
 
@@ -48,6 +47,16 @@ type App struct {
 	// on routes and the trees, so this unlocked read is not the weak link.
 	built bool
 
+	// errorHandler converts every failure into a response. New sets it to
+	// DefaultErrorHandler before applying options, so it is never nil and the
+	// dispatch path never checks.
+	//
+	// It is written once at construction and read on every failing request, with
+	// no lock. That is safe because it is set before the App can serve: unlike
+	// routes and middleware, there is no setter, so there is no window in which
+	// a serving App can be reconfigured.
+	errorHandler ErrorHandler
+
 	srv *fasthttp.Server
 
 	mu sync.Mutex
@@ -65,7 +74,7 @@ type route struct {
 
 // New creates an App.
 func New(opts ...Option) *App {
-	a := &App{}
+	a := &App{errorHandler: DefaultErrorHandler}
 	a.srv = &fasthttp.Server{
 		Handler: a.handle,
 		Name:    "rice",
@@ -106,34 +115,11 @@ func (a *App) handle(fctx *fasthttp.RequestCtx) {
 	// sync.Pool is measured against. Do not optimise it here.
 	h, ok := a.lookup(fctx.Method(), fctx.Path(), &c.params)
 	if !ok {
-		a.handleError(c, ErrNotFound)
+		a.errorHandler(c, ErrNotFound)
 		return
 	}
 
 	if err := h(c); err != nil {
-		a.handleError(c, err)
+		a.errorHandler(c, err)
 	}
-}
-
-// handleError is M2's error funnel.
-//
-// It discards any partially written body and never writes the cause to the
-// response: leaking internal error strings to clients is how databases end up
-// described in HTTP responses. ErrNotFound is the one error it recognises.
-//
-// M5 replaces this with a configurable ErrorHandler and the HTTPError type,
-// at which point the errors.Is check below generalises rather than disappears.
-func (a *App) handleError(c *Ctx, err error) {
-	status := fasthttp.StatusInternalServerError
-	body := "Internal Server Error"
-
-	if errors.Is(err, ErrNotFound) {
-		status = fasthttp.StatusNotFound
-		body = "Not Found"
-	}
-
-	c.fctx.ResetBody()
-	c.fctx.SetStatusCode(status)
-	c.fctx.SetContentType(MIMETextPlainUTF8)
-	c.fctx.SetBodyString(body)
 }
