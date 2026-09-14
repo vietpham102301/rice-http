@@ -1,6 +1,7 @@
 package rice
 
 import (
+	"log"
 	"net"
 	"sync"
 
@@ -126,11 +127,37 @@ func (a *App) handle(fctx *fasthttp.RequestCtx) {
 	// sync.Pool is measured against. Do not optimise it here.
 	h, ok := a.lookup(fctx.Method(), fctx.Path(), &c.params)
 	if !ok {
-		a.errorHandler(c, ErrNotFound)
+		a.callErrorHandler(c, ErrNotFound)
 		return
 	}
 
 	if err := h(c); err != nil {
-		a.errorHandler(c, err)
+		a.callErrorHandler(c, err)
 	}
+}
+
+// callErrorHandler runs the App's ErrorHandler with a last-resort net beneath it.
+//
+// Without this, a panic inside a user's ErrorHandler reintroduces exactly the
+// failure the recovery in handle removes — and reintroduces it in its worst
+// form, because it fires only when something has already gone wrong, which
+// makes it intermittent and hard to reproduce.
+//
+// It costs nothing on the hot path: a request that succeeds never gets here.
+// Every funnel entry point calls this rather than a.errorHandler directly.
+//
+// The last-resort response is written with raw fasthttp calls rather than
+// through respond, so that a bug in rice's own response path cannot recurse.
+func (a *App) callErrorHandler(c *Ctx, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("rice: ErrorHandler panicked: %v", r)
+			c.fctx.ResetBody()
+			c.fctx.SetStatusCode(fasthttp.StatusInternalServerError)
+			c.fctx.SetContentType(MIMETextPlainUTF8)
+			c.fctx.SetBodyString("Internal Server Error")
+		}
+	}()
+
+	a.errorHandler(c, err)
 }

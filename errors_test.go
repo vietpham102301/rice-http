@@ -284,3 +284,63 @@ func TestAnAppWithNoOptionUsesTheDefaultHandler(t *testing.T) {
 		t.Errorf("status = %d, want the default handler's behaviour", got)
 	}
 }
+
+// TestAPanickingErrorHandlerStillProducesAResponse covers the failure mode this
+// milestone exists to remove, in its nastiest form: it only fires once
+// something has already gone wrong, so it is intermittent in production.
+func TestAPanickingErrorHandlerStillProducesAResponse(t *testing.T) {
+	app := New(WithErrorHandler(func(c *Ctx, err error) {
+		panic("the error handler is broken too")
+	}))
+	app.GET("/boom", func(c *Ctx) error { return errors.New("the first failure") })
+
+	fctx := &fasthttp.RequestCtx{}
+	fctx.Request.Header.SetMethod("GET")
+	fctx.Request.SetRequestURI("/boom")
+
+	app.Build()
+	app.handle(fctx) // must not panic out of here
+
+	if got := fctx.Response.StatusCode(); got != 500 {
+		t.Errorf("status = %d, want 500 from the last-resort net", got)
+	}
+	if got := string(fctx.Response.Body()); got != "Internal Server Error" {
+		t.Errorf("body = %q, want the last-resort body", got)
+	}
+}
+
+func TestAPanickingErrorHandlerIsLogged(t *testing.T) {
+	logged := captureLog(t)
+	app := New(WithErrorHandler(func(c *Ctx, err error) {
+		panic("handler exploded")
+	}))
+	app.GET("/boom", func(c *Ctx) error { return errors.New("first") })
+
+	fctx := &fasthttp.RequestCtx{}
+	fctx.Request.Header.SetMethod("GET")
+	fctx.Request.SetRequestURI("/boom")
+
+	app.Build()
+	app.handle(fctx)
+
+	if !strings.Contains(logged(), "handler exploded") {
+		t.Errorf("the ErrorHandler's panic was not logged, got %q", logged())
+	}
+}
+
+// TestAPanickingErrorHandlerOnTheMissPathIsAlsoCaught pins that the net covers
+// every funnel entry point, not just the one the first test happens to use.
+func TestAPanickingErrorHandlerOnTheMissPathIsAlsoCaught(t *testing.T) {
+	app := New(WithErrorHandler(func(c *Ctx, err error) { panic("boom") }))
+
+	fctx := &fasthttp.RequestCtx{}
+	fctx.Request.Header.SetMethod("GET")
+	fctx.Request.SetRequestURI("/missing")
+
+	app.Build()
+	app.handle(fctx)
+
+	if got := fctx.Response.StatusCode(); got != 500 {
+		t.Errorf("status = %d, want 500", got)
+	}
+}
