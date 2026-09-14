@@ -39,15 +39,42 @@ type ErrorHandler func(c *Ctx, err error)
 // leaking internal error strings to clients is how databases end up described
 // in HTTP responses.
 func DefaultErrorHandler(c *Ctx, err error) {
-	// Checked before *HTTPError, and the order is load-bearing.
-	// PanicError.Unwrap returns the panicked value, so panic(NewHTTPError(400,
-	// ...)) would otherwise answer 400 — a panic quietly becoming a client
-	// error. A panic is a bug, never a way to signal failure, and it is always
-	// a 500.
+	// The type switch is a fast path in front of the errors.As pair below it,
+	// and it exists for allocation, not correctness: taking the address of a
+	// local to hand to errors.As (an any parameter) makes the compiler
+	// heap-allocate that local on every call, matched or not — confirmed with
+	// -gcflags=-m, "moved to heap: pe" / "he". Every error this funnel
+	// actually produces (ErrNotFound, NewHTTPError, the *PanicError built in
+	// handle) arrives as the concrete pointer, never pre-wrapped, so the
+	// switch catches the hit case for free and only a handler-wrapped error
+	// (fmt.Errorf("...: %w", ...)) pays for errors.As's Unwrap walk below.
+	// D2's "a 404 costs one allocation" and the M5 alloc budgets in
+	// alloc_test.go pin this.
+	//
+	// A type switch matches on exact dynamic type, so the order of the two
+	// cases here does not affect which one a given err takes — unlike the
+	// errors.As pair below, ordering between these two cases carries no
+	// correctness invariant.
+	switch e := err.(type) {
+	case *PanicError:
+		respondPanic(c, e)
+		return
+	case *HTTPError:
+		respond(c, e.Code, e.Message)
+		return
+	}
+
+	// Wrapped by a handler, e.g. fmt.Errorf("...: %w", err): pay the Unwrap
+	// walk, and the allocation it costs.
+	//
+	// *PanicError is checked before *HTTPError here, and the order is
+	// load-bearing. PanicError.Unwrap returns the panicked value, so
+	// panic(NewHTTPError(400, ...)) would otherwise answer 400 through this
+	// path — a panic quietly becoming a client error. A panic is a bug, never
+	// a way to signal failure, and it is always a 500.
 	var pe *PanicError
 	if errors.As(err, &pe) {
-		log.Printf("rice: panic recovered: %v\n%s", pe.Value, pe.Stack)
-		respond(c, fasthttp.StatusInternalServerError, "Internal Server Error")
+		respondPanic(c, pe)
 		return
 	}
 
@@ -58,6 +85,14 @@ func DefaultErrorHandler(c *Ctx, err error) {
 	}
 
 	log.Printf("rice: unhandled error: %v", err)
+	respond(c, fasthttp.StatusInternalServerError, "Internal Server Error")
+}
+
+// respondPanic logs a recovered panic with its stack and answers a generic
+// 500. It is shared by the type-switch fast path and the errors.As fallback
+// in DefaultErrorHandler so the panic-handling body exists once.
+func respondPanic(c *Ctx, pe *PanicError) {
+	log.Printf("rice: panic recovered: %v\n%s", pe.Value, pe.Stack)
 	respond(c, fasthttp.StatusInternalServerError, "Internal Server Error")
 }
 

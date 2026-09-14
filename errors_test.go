@@ -156,6 +156,50 @@ func TestDefaultErrorHandlerFindsAnHTTPErrorThroughAWrapper(t *testing.T) {
 	}
 }
 
+// TestDefaultErrorHandlerFindsAWrappedPanicError is TestHTTPErrorIsFoundThroughAWrapper's
+// counterpart for *PanicError. Nothing in rice ever wraps one — handle passes
+// a bare &PanicError{} straight to callErrorHandler — but DefaultErrorHandler
+// still finds one through an Unwrap chain via errors.As, the slow path behind
+// the direct type assertion that handles the unwrapped case for free.
+func TestDefaultErrorHandlerFindsAWrappedPanicError(t *testing.T) {
+	logged := captureLog(t)
+	c, fctx := newTestCtx("GET", "/")
+
+	DefaultErrorHandler(c, fmt.Errorf("ctx: %w", &PanicError{Value: "boom"}))
+
+	if got := fctx.Response.StatusCode(); got != 500 {
+		t.Errorf("status = %d, want 500", got)
+	}
+	if got := string(fctx.Response.Body()); got != "Internal Server Error" {
+		t.Errorf("body = %q, want the generic body", got)
+	}
+	if !strings.Contains(logged(), "boom") {
+		t.Errorf("the wrapped panic value was not logged, got %q", logged())
+	}
+}
+
+// TestAWrappedPanickedHTTPErrorIsStill500 is D5's ordering invariant, exercised
+// on the errors.As fallback rather than the type-switch fast path.
+//
+// TestAPanickedHTTPErrorIsStill500 (panic_test.go) drives the same rule with an
+// unwrapped *PanicError, which the type switch above intercepts by exact type —
+// that test would pass no matter which order the switch's two cases are
+// written in, because Go dispatches a type switch on the dynamic type alone.
+// Only a *PanicError arriving wrapped (fmt.Errorf("...: %w", ...)) reaches the
+// errors.As pair below the switch, and only there does swapping the *PanicError
+// and *HTTPError checks change the answer: this test fails with status 400,
+// not 500, if that pair is reordered. Confirmed by hand while writing it.
+func TestAWrappedPanickedHTTPErrorIsStill500(t *testing.T) {
+	c, fctx := newTestCtx("GET", "/")
+	wrapped := fmt.Errorf("ctx: %w", &PanicError{Value: NewHTTPError(400, "not your fault")})
+
+	DefaultErrorHandler(c, wrapped)
+
+	if got := fctx.Response.StatusCode(); got != 500 {
+		t.Errorf("status = %d, want 500 — a panic is always a bug, never a client error, even wrapped", got)
+	}
+}
+
 // TestTheCauseNeverReachesTheBody is the roadmap's own exit criterion, and it
 // gets its own test rather than a clause bolted onto another. Every funnel
 // input that carries a cause is driven through, and one distinctive token is
