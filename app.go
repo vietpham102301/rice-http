@@ -146,16 +146,14 @@ func (a *App) handle(fctx *fasthttp.RequestCtx) {
 // It costs nothing on the hot path: a request that succeeds never gets here.
 // Every funnel entry point calls this rather than a.errorHandler directly.
 //
-// The last-resort response is written with raw fasthttp calls rather than
-// through respond, so that a bug in rice's own response path cannot recurse.
+// The last-resort response goes through respond, the same one every other
+// error in the funnel uses. There is only one way this framework writes an
+// error body; a second one would just be a second thing to keep correct.
 func (a *App) callErrorHandler(c *Ctx, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("rice: ErrorHandler panicked: %v", r)
-			c.fctx.ResetBody()
-			c.fctx.SetStatusCode(fasthttp.StatusInternalServerError)
-			c.fctx.SetContentType(MIMETextPlainUTF8)
-			c.fctx.SetBodyString("Internal Server Error")
+			respond(c, fasthttp.StatusInternalServerError, "Internal Server Error")
 		}
 	}()
 
