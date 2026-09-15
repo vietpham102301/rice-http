@@ -271,6 +271,23 @@ candidates, and which of them are genuinely new entries rather than the same def
    an injection must be a change in behaviour, never a deletion of text — is recorded here
    because it is worth keeping even though it does not move the number.
 
+5. **`TestRecoverCapturesAStack` asserted only `len(pe.Stack) != 0`.** Task 5 established the
+   standard this needed — assert a frame that can only come from the panicking handler, not
+   merely that the slice is non-empty — while writing `panic_test.go`, but Task 6's brief for
+   `middleware/recover_test.go` predates that standard, which is how the sibling package missed
+   it. Capturing `debug.Stack()` in `Recover()`'s constructor instead of inside the deferred
+   function produces a stack that is real and non-empty — taken at chain-build time, before the
+   panicking handler ever runs — and entirely wrong, and the assertion, and the whole
+   `middleware` package, stayed green. Found by a whole-branch review rather than by a task's own
+   fault injection, the first M5 guard finding that was. Fixed by naming the panicking handler as
+   a top-level function (`panickingHandler`) rather than an inline closure, so the fully-qualified
+   name identifying it in a captured stack is stable regardless of how many closures a test
+   defines, and asserting that name appears in `pe.Stack`. Confirmed the new assertion goes red
+   both ways: an emptied stack, and a real stack captured from `Recover`'s constructor instead of
+   its deferred function. The second is the one with teeth — it is what tells "detects a missing
+   stack" apart from "detects the wrong stack", and a fix that only handled the first would have
+   left this exact defect able to ship again under a different disguise. **Counted.**
+
 One more is explicitly **not a guard at all**: a task review classified `middleware`'s log
 noise as Important because three stack traces "print to stderr on every run." `make test`
 runs without `-v`, and Go discards a passing test's captured output, so the default run
@@ -279,9 +296,11 @@ real; its stated severity rested on an unmeasured claim about the tool. It is th
 disease — a claim about behaviour nobody checked — in a reviewer rather than in a guard, and
 it is named here rather than tallied because it never claimed to guard anything.
 
-**Nine plus two is eleven.** M4's nine, plus item 1 (the redundant `ResetBody`, its
-reintroduction folded in rather than double-counted) and item 3 (the fast path silently
-detaching a live guard from its invariant): **the count is eleven.**
+**Nine plus three is twelve.** M4's nine, plus item 1 (the redundant `ResetBody`, its
+reintroduction folded in rather than double-counted), item 3 (the fast path silently
+detaching a live guard from its invariant), and item 5 (`TestRecoverCapturesAStack` accepting a
+stack captured from the wrong place, found in the whole-branch review that closed this
+milestone): **the count is twelve.**
 
 **What I still do not understand — the fifth entry on this list, and it differs from the
 first four.**

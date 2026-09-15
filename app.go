@@ -171,6 +171,16 @@ func (a *App) callErrorHandler(c *Ctx, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("rice: ErrorHandler panicked: %v", r)
+			// A panic from respond itself, right here, would not be caught by
+			// anything: this recover has already fired and cannot catch a
+			// second panic raised from within its own deferred function, and
+			// if this call stack was reached via handle's recover — the panic
+			// path, not a plain returned error — that recover has already
+			// fired too, for the same reason. It is unreachable today because
+			// respond only touches c.fctx, which c.reset guarantees is
+			// non-nil before dispatch ever begins, and does nothing else that
+			// can fail. The moment respond is asked to do more than that,
+			// this stops being hypothetical.
 			respond(c, fasthttp.StatusInternalServerError, "Internal Server Error")
 		}
 	}()
