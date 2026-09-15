@@ -2,6 +2,7 @@ package middleware_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/valyala/fasthttp"
@@ -116,20 +117,34 @@ func TestRecoverPassesAReturnedErrorThroughUnchanged(t *testing.T) {
 	}
 }
 
+// panickingHandler panics unconditionally. It is a named, top-level function
+// rather than an inline closure so that the substring identifying it in a
+// captured stack trace ("middleware_test.panickingHandler") is stable and
+// unambiguous, regardless of how many other closures a test defines.
+func panickingHandler(c *rice.Ctx) error {
+	panic("exploded")
+}
+
+// TestRecoverCapturesAStack follows the standard panic_test.go set in package
+// rice: assert a frame that can only come from the panicking handler, not
+// merely that Stack is non-empty. len(pe.Stack) != 0 alone passed even when
+// Recover captured debug.Stack() in its own constructor instead of inside the
+// deferred function — a real, non-empty stack, taken at chain-build time
+// before panickingHandler ever ran, and therefore entirely wrong.
 func TestRecoverCapturesAStack(t *testing.T) {
 	var pe *rice.PanicError
 	app := rice.New(rice.WithErrorHandler(func(c *rice.Ctx, err error) {
 		_ = errors.As(err, &pe)
 	}))
 	app.Use(middleware.Recover())
-	app.GET("/boom", func(c *rice.Ctx) error { panic("exploded") })
+	app.GET("/boom", panickingHandler)
 
 	dispatch(t, app, "/boom")
 
 	if pe == nil {
 		t.Fatal("the funnel did not receive a *rice.PanicError")
 	}
-	if len(pe.Stack) == 0 {
-		t.Error("Stack is empty")
+	if !strings.Contains(string(pe.Stack), "middleware_test.panickingHandler") {
+		t.Errorf("Stack does not name the panicking handler, got %q", pe.Stack)
 	}
 }
