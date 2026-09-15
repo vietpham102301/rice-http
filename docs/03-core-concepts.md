@@ -262,13 +262,29 @@ One error type and one funnel. Every error returned by any handler or middleware
 route miss, and every recovered panic reaches `app.ErrorHandler`, whose default behaviour
 is:
 
-1. The concrete error is `*HTTPError` or `*PanicError` → respond with its code (a panic is
-   always 500), checked with a type switch before the fallback below runs.
-2. Otherwise, `errors.As` the error to `*PanicError` then `*HTTPError`, for the case where a
-   handler wrapped one of them (`fmt.Errorf("...: %w", err)`) rather than returning it bare.
+1. The concrete error is `*PanicError` → respond 500 (a panic is always 500), or a concrete
+   `*HTTPError` with no wrapped cause → respond with its own code. Both are checked with a
+   type switch in front of the fallback below, which is what every error this funnel builds
+   for itself (`ErrNotFound`, a fresh `NewHTTPError`) matches without allocating.
+2. Otherwise, `errors.As` the error to `*PanicError` then `*HTTPError`. This is the path a
+   handler-wrapped error takes (`fmt.Errorf("...: %w", err)`), and it is also the path an
+   `*HTTPError` that itself wraps a cause takes, whether or not anything wraps the
+   `*HTTPError` in turn — an `*HTTPError` wrapping a `*PanicError` reaches this pair even
+   completely unwrapped, so a recovered panic is always a 500 no matter how many layers wrap
+   it or don't. Checking `*PanicError` before `*HTTPError` here is load-bearing for the same
+   reason: `PanicError.Unwrap` returns the panicked value, so an `*HTTPError` built from
+   `panic(rice.NewHTTPError(400, "x"))` would otherwise answer 400 through this fallback.
 3. Otherwise → respond 500 with a generic message, and log the real error rather than
    sending it. **The cause is never written to the response body**, because leaking internal
    error strings to clients is how databases end up described in HTTP responses.
+
+`respond` — the function that actually writes the response — also coerces a status code
+outside the range HTTP defines (100–599) to 500, logging the value it replaced. The case
+this exists for is `HTTPError`'s own zero value: `&HTTPError{Message: "nope"}`, which the
+type above shows as the ordinary way to build one when there is no cause to wrap, leaves
+`Code` at 0, and fasthttp's `ResponseHeader.StatusCode()` answers `StatusOK` for a zero
+status. Without the coercion, a handler returning an error could get a 200 — the funnel's
+entire premise, defeated by the zero value of its own error type.
 
 Replacing the error handler is the supported way to change how a service reports failure —
 to emit RFC 7807 problem documents, for example. There is exactly one such place, by

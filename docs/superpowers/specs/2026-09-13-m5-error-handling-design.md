@@ -224,8 +224,10 @@ func DefaultErrorHandler(c *Ctx, err error) {
 		respondPanic(c, e)
 		return
 	case *HTTPError:
-		respond(c, e.Code, e.Message)
-		return
+		if e.Err == nil {
+			respond(c, e.Code, e.Message)
+			return
+		}
 	}
 
 	var pe *PanicError
@@ -245,24 +247,49 @@ func DefaultErrorHandler(c *Ctx, err error) {
 }
 ```
 
-The type switch matches every error the funnel actually produces — `ErrNotFound`, a fresh
-`NewHTTPError`, the `*PanicError` built in `handle` — without allocating, and only a
-handler-wrapped error (`fmt.Errorf("...: %w", err)`) pays for the `errors.As` walk below it,
-which is the case that genuinely needs it. `respondPanic` holds the panic-logging body once,
-shared by both paths.
+**Corrected again, in the M5 final whole-branch review.** The `*HTTPError` case above
+originally answered unconditionally, and the review measured that this made D5's own rule —
+a recovered panic is always a 500, never a client error — hold for some wrappings only:
+`&HTTPError{Code: 400, Message: "m", Err: &PanicError{Value: "boom"}}` answered 400 through
+this case, while the identical value wrapped once more in `fmt.Errorf("ctx: %w", ...)`
+answered 500 through the fallback below, because only the wrapped form failed to match the
+type switch and fell through to the `errors.As` pair where the `*PanicError`-before-`*HTTPError`
+order actually runs. The `e.Err == nil` guard closes that gap: an `*HTTPError` that wraps
+anything — a `*PanicError`, an ordinary error, anything — falls through to the same
+`errors.As` pair a handler-wrapped error already takes, so the panic-always-wins ordering
+governs every wrapping uniformly rather than only the ones that happen to miss the fast path.
 
-The `*PanicError`-before-`*HTTPError` order still applies in both the type switch and the
-fallback, and for the same reason: `PanicError.Unwrap` returns the panicked value, so
+`ErrNotFound` and a fresh `NewHTTPError` both leave `Err` nil, so they still match the type
+switch directly: the 404 path stays at 1 allocation and the `HTTPError`-return budget stays
+at 2, unchanged by this guard. Only an `*HTTPError` that actually carries a cause pays for the
+walk it needs.
+
+The type switch matches every error the funnel produces with no cause of its own —
+`ErrNotFound`, a fresh `NewHTTPError`, the `*PanicError` built in `handle` — without
+allocating, and it exists for allocation, not correctness, but only because of that guard:
+without it, the switch's `*HTTPError` case would decide a case the `errors.As` ordering below
+was written to own. A handler-wrapped error, or an `*HTTPError` that wraps a cause of its own,
+pays for the `errors.As` walk below it — the case that genuinely needs it. `respondPanic`
+holds the panic-logging body once, shared by both paths.
+
+The `*PanicError`-before-`*HTTPError` order still applies in the fallback, and for the same
+reason as before: `PanicError.Unwrap` returns the panicked value, so
 `panic(rice.NewHTTPError(400, "x"))` would otherwise produce a 400 through the fallback — a
 panic quietly becoming a client error. A panic is a bug, not a way to signal failure, and it
 is always a 500. A type switch matches on exact dynamic type, so this ordering concern is
-specific to the `errors.As` fallback; it carries no correctness weight between the two type
-switch cases.
+specific to the `errors.As` fallback; between the type switch's two cases there is no ordering
+question left to have, now that the `*HTTPError` case only ever matches a value the fallback
+would have answered identically.
 
-`respond` is unexported and does the same three things every time:
+`respond` is unexported and does the same three things every time, plus one guard added in the
+same review:
 
 ```go
 func respond(c *Ctx, code int, msg string) {
+	if v := validStatus(code); v != code {
+		log.Printf("rice: invalid HTTP status code %d, replacing with %d", code, v)
+		code = v
+	}
 	if msg == "" {
 		msg = fasthttp.StatusMessage(code)
 	}
@@ -271,6 +298,20 @@ func respond(c *Ctx, code int, msg string) {
 	c.fctx.SetBodyString(msg)
 }
 ```
+
+**`validStatus`, added in the M5 final whole-branch review.** `&HTTPError{Message: "nope"}` —
+`Code` omitted, which `HTTPError`'s own doc comment shows as the ordinary way to build one
+when there is no cause to wrap — answered 200, because fasthttp's
+`ResponseHeader.StatusCode()` reports `StatusOK` for a zero status and nothing in `respond`
+checked the code it was given. A handler returning an error getting a success status defeats
+the funnel's whole premise. `validStatus(code int) int` replaces anything outside 100–599
+(`StatusContinue` through the top of the range HTTP defines) with 500 and is used by both
+`respond`, before writing, and `HTTPError.Error()`, so `&HTTPError{}.Error()` now reads
+"500: Internal Server Error" instead of "0: Unknown Status Code" — the string it renders
+matches what a client sent through `respond` actually receives. `respond` logs the value it
+replaced rather than replacing it silently, and replaces rather than panics: the funnel's job
+is to terminate a request no matter what it is handed, and panicking over a bad status code
+inside the funnel would turn one bad handler into a dead request path instead.
 
 There is deliberately no explicit `ResetBody()` call here. This section originally specified
 one, on the theory that it enforces ADR-0002's rule — that a handler which writes a body and
