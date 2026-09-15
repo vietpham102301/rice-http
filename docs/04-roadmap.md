@@ -88,11 +88,12 @@ cost, or does the closure indirection eat the gain?
 
 ---
 
-### ☐ M5 — Error handling
+### ☑ M5 — Error handling
 
 - `HTTPError`, `ErrorHandler`, default implementation
 - The single error funnel wired through routing, middleware and handlers
-- fasthttp panic hook mapped into the funnel
+- A deferred recovery in rice's own dispatch path, mapped into the funnel — fasthttp has no
+  panic hook to map into one; see [ADR-0008](adr/0008-rice-recovers-panics-in-core.md)
 - `middleware.Recover` as an opt-in package
 
 **Exit criteria:** tests for wrapped errors via `errors.As`, a custom error handler, and a

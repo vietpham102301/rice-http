@@ -1,8 +1,9 @@
 package rice
 
 import (
-	"errors"
+	"log"
 	"net"
+	"runtime/debug"
 	"sync"
 
 	"github.com/valyala/fasthttp"
@@ -12,10 +13,21 @@ import (
 
 // Option configures an App at construction time.
 //
-// M1 ships no options. The first ones arrive in M7 with server timeouts. The
-// variadic parameter is present now so that adding them later does not change
-// the signature of New.
+// Configuration happens here rather than through setters so that a serving App
+// cannot be reconfigured underneath a request. M7 adds server timeouts.
 type Option func(*App)
+
+// WithErrorHandler replaces the ErrorHandler an App uses for every failure:
+// returned errors, route misses, and recovered panics alike.
+//
+// A nil handler panics here rather than falling back to the default silently,
+// in the style of every other configuration mistake in rice.
+func WithErrorHandler(h ErrorHandler) Option {
+	if h == nil {
+		panic("rice: WithErrorHandler: handler is nil")
+	}
+	return func(a *App) { a.errorHandler = h }
+}
 
 // App is the root of a rice application. It owns the routes, the fasthttp
 // server, and the listener.
@@ -48,6 +60,16 @@ type App struct {
 	// on routes and the trees, so this unlocked read is not the weak link.
 	built bool
 
+	// errorHandler converts every failure into a response. New sets it to
+	// DefaultErrorHandler before applying options, so it is never nil and the
+	// dispatch path never checks.
+	//
+	// It is written once at construction and read on every failing request, with
+	// no lock. That is safe because it is set before the App can serve: unlike
+	// routes and middleware, there is no setter, so there is no window in which
+	// a serving App can be reconfigured.
+	errorHandler ErrorHandler
+
 	srv *fasthttp.Server
 
 	mu sync.Mutex
@@ -65,7 +87,7 @@ type route struct {
 
 // New creates an App.
 func New(opts ...Option) *App {
-	a := &App{}
+	a := &App{errorHandler: DefaultErrorHandler}
 	a.srv = &fasthttp.Server{
 		Handler: a.handle,
 		Name:    "rice",
@@ -104,36 +126,64 @@ func (a *App) handle(fctx *fasthttp.RequestCtx) {
 
 	// M3 allocates a Ctx per request on purpose. This is the baseline M6's
 	// sync.Pool is measured against. Do not optimise it here.
+
+	// fasthttp has no panic hook. Its only recover() on the request path guards
+	// body-stream writes — a second one exists in fasthttpadaptor/adaptor.go,
+	// which rice does not use; server.go calls the handler bare from a
+	// worker-pool goroutine, so an unrecovered panic here takes the whole
+	// process down, not just this connection. Recovering is therefore core
+	// behaviour rather than opt-in middleware, which is a deliberate exception
+	// to design principle 7 — see ADR-0008.
+	//
+	// The closure is written out rather than expressed as defer a.recover(c)
+	// because this is the shape that was measured: 1 alloc/op, unchanged.
+	defer func() {
+		if r := recover(); r != nil {
+			a.callErrorHandler(c, &PanicError{Value: r, Stack: debug.Stack()})
+		}
+	}()
+
 	h, ok := a.lookup(fctx.Method(), fctx.Path(), &c.params)
 	if !ok {
-		a.handleError(c, ErrNotFound)
+		a.callErrorHandler(c, ErrNotFound)
 		return
 	}
 
 	if err := h(c); err != nil {
-		a.handleError(c, err)
+		a.callErrorHandler(c, err)
 	}
 }
 
-// handleError is M2's error funnel.
+// callErrorHandler runs the App's ErrorHandler with a last-resort net beneath it.
 //
-// It discards any partially written body and never writes the cause to the
-// response: leaking internal error strings to clients is how databases end up
-// described in HTTP responses. ErrNotFound is the one error it recognises.
+// Without this, a panic inside a user's ErrorHandler reintroduces exactly the
+// failure the recovery in handle removes — and reintroduces it in its worst
+// form, because it fires only when something has already gone wrong, which
+// makes it intermittent and hard to reproduce.
 //
-// M5 replaces this with a configurable ErrorHandler and the HTTPError type,
-// at which point the errors.Is check below generalises rather than disappears.
-func (a *App) handleError(c *Ctx, err error) {
-	status := fasthttp.StatusInternalServerError
-	body := "Internal Server Error"
+// It costs nothing on the hot path: a request that succeeds never gets here.
+// Every funnel entry point calls this rather than a.errorHandler directly.
+//
+// The last-resort response goes through respond, the same one every other
+// error in the funnel uses. There is only one way this framework writes an
+// error body; a second one would just be a second thing to keep correct.
+func (a *App) callErrorHandler(c *Ctx, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("rice: ErrorHandler panicked: %v", r)
+			// A panic from respond itself, right here, would not be caught by
+			// anything: this recover has already fired and cannot catch a
+			// second panic raised from within its own deferred function, and
+			// if this call stack was reached via handle's recover — the panic
+			// path, not a plain returned error — that recover has already
+			// fired too, for the same reason. It is unreachable today because
+			// respond only touches c.fctx, which c.reset guarantees is
+			// non-nil before dispatch ever begins, and does nothing else that
+			// can fail. The moment respond is asked to do more than that,
+			// this stops being hypothetical.
+			respond(c, fasthttp.StatusInternalServerError, "Internal Server Error")
+		}
+	}()
 
-	if errors.Is(err, ErrNotFound) {
-		status = fasthttp.StatusNotFound
-		body = "Not Found"
-	}
-
-	c.fctx.ResetBody()
-	c.fctx.SetStatusCode(status)
-	c.fctx.SetContentType(MIMETextPlainUTF8)
-	c.fctx.SetBodyString(body)
+	a.errorHandler(c, err)
 }

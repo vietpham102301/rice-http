@@ -209,12 +209,30 @@ allocates nothing. M5 pins the number properly — see Benchmarks.
 
 ### D5: `DefaultErrorHandler` checks `*PanicError` before `*HTTPError`
 
+**Corrected after execution.** Both this section's code block and its `respond` listing
+below described code that no longer exists, because writing the M5 allocation budgets found
+a problem this section did not anticipate: `errors.As(err, &target)` heap-allocates
+`target`, because `&target` is passed as an `any` parameter (`go build -gcflags=-m` reports
+`moved to heap`). Unfixed, a plain 404 or a fresh `HTTPError` would have cost two or three
+times the allocations D2 promises. The fix, landed in `errors.go`, is a type switch on the
+concrete types in front of the `errors.As` pair below:
+
 ```go
 func DefaultErrorHandler(c *Ctx, err error) {
+	switch e := err.(type) {
+	case *PanicError:
+		respondPanic(c, e)
+		return
+	case *HTTPError:
+		if e.Err == nil {
+			respond(c, e.Code, e.Message)
+			return
+		}
+	}
+
 	var pe *PanicError
 	if errors.As(err, &pe) {
-		log.Printf("rice: panic recovered: %v\n%s", pe.Value, pe.Stack)
-		respond(c, fasthttp.StatusInternalServerError, "Internal Server Error")
+		respondPanic(c, pe)
 		return
 	}
 
@@ -229,27 +247,80 @@ func DefaultErrorHandler(c *Ctx, err error) {
 }
 ```
 
-The order looks backwards and is not. `PanicError.Unwrap` returns the panicked value, so
-`panic(rice.NewHTTPError(400, "x"))` would otherwise produce a 400 — a panic quietly
-becoming a client error. A panic is a bug, not a way to signal failure, and it is always a
-500. Testing `*PanicError` first makes that rule exceptionless.
+**Corrected again, in the M5 final whole-branch review.** The `*HTTPError` case above
+originally answered unconditionally, and the review measured that this made D5's own rule —
+a recovered panic is always a 500, never a client error — hold for some wrappings only:
+`&HTTPError{Code: 400, Message: "m", Err: &PanicError{Value: "boom"}}` answered 400 through
+this case, while the identical value wrapped once more in `fmt.Errorf("ctx: %w", ...)`
+answered 500 through the fallback below, because only the wrapped form failed to match the
+type switch and fell through to the `errors.As` pair where the `*PanicError`-before-`*HTTPError`
+order actually runs. The `e.Err == nil` guard closes that gap: an `*HTTPError` that wraps
+anything — a `*PanicError`, an ordinary error, anything — falls through to the same
+`errors.As` pair a handler-wrapped error already takes, so the panic-always-wins ordering
+governs every wrapping uniformly rather than only the ones that happen to miss the fast path.
 
-`respond` is unexported and does the same three things every time:
+`ErrNotFound` and a fresh `NewHTTPError` both leave `Err` nil, so they still match the type
+switch directly: the 404 path stays at 1 allocation and the `HTTPError`-return budget stays
+at 2, unchanged by this guard. Only an `*HTTPError` that actually carries a cause pays for the
+walk it needs.
+
+The type switch matches every error the funnel produces with no cause of its own —
+`ErrNotFound`, a fresh `NewHTTPError`, the `*PanicError` built in `handle` — without
+allocating, and it exists for allocation, not correctness, but only because of that guard:
+without it, the switch's `*HTTPError` case would decide a case the `errors.As` ordering below
+was written to own. A handler-wrapped error, or an `*HTTPError` that wraps a cause of its own,
+pays for the `errors.As` walk below it — the case that genuinely needs it. `respondPanic`
+holds the panic-logging body once, shared by both paths.
+
+The `*PanicError`-before-`*HTTPError` order still applies in the fallback, and for the same
+reason as before: `PanicError.Unwrap` returns the panicked value, so
+`panic(rice.NewHTTPError(400, "x"))` would otherwise produce a 400 through the fallback — a
+panic quietly becoming a client error. A panic is a bug, not a way to signal failure, and it
+is always a 500. A type switch matches on exact dynamic type, so this ordering concern is
+specific to the `errors.As` fallback; between the type switch's two cases there is no ordering
+question left to have, now that the `*HTTPError` case only ever matches a value the fallback
+would have answered identically.
+
+`respond` is unexported and does the same three things every time, plus one guard added in the
+same review:
 
 ```go
 func respond(c *Ctx, code int, msg string) {
+	if v := validStatus(code); v != code {
+		log.Printf("rice: invalid HTTP status code %d, replacing with %d", code, v)
+		code = v
+	}
 	if msg == "" {
 		msg = fasthttp.StatusMessage(code)
 	}
-	c.fctx.ResetBody()
 	c.fctx.SetStatusCode(code)
 	c.fctx.SetContentType(MIMETextPlainUTF8)
 	c.fctx.SetBodyString(msg)
 }
 ```
 
-The `ResetBody` is ADR-0002's rule, settled in M1: a handler that writes a response and then
-returns an error has its body discarded and gets the error handler's response instead.
+**`validStatus`, added in the M5 final whole-branch review.** `&HTTPError{Message: "nope"}` —
+`Code` omitted, which `HTTPError`'s own doc comment shows as the ordinary way to build one
+when there is no cause to wrap — answered 200, because fasthttp's
+`ResponseHeader.StatusCode()` reports `StatusOK` for a zero status and nothing in `respond`
+checked the code it was given. A handler returning an error getting a success status defeats
+the funnel's whole premise. `validStatus(code int) int` replaces anything outside 100–599
+(`StatusContinue` through the top of the range HTTP defines) with 500 and is used by both
+`respond`, before writing, and `HTTPError.Error()`, so `&HTTPError{}.Error()` now reads
+"500: Internal Server Error" instead of "0: Unknown Status Code" — the string it renders
+matches what a client sent through `respond` actually receives. `respond` logs the value it
+replaced rather than replacing it silently, and replaces rather than panics: the funnel's job
+is to terminate a request no matter what it is handed, and panicking over a bad status code
+inside the funnel would turn one bad handler into a dead request path instead.
+
+There is deliberately no explicit `ResetBody()` call here. This section originally specified
+one, on the theory that it enforces ADR-0002's rule — that a handler which writes a body and
+then errors has it discarded. It does not enforce anything: `SetBodyString` already calls
+`closeBodyStream`, then `bodyBuffer()` (which nils `bodyRaw`), then `Reset()`, so no input to
+`respond` exists under which the explicit call changes observable behaviour. It was found
+during M5 by a fault injection that removed the call and produced no failure — the injection
+working as designed, not a gap in the guard. ADR-0002's rule still holds; it always held via
+`SetBodyString`, and the extra call was never doing the work its comment claimed.
 
 `DefaultErrorHandler` is exported so a custom handler can delegate to it for the cases it
 does not care about.
@@ -294,15 +365,20 @@ error: `rice: WithErrorHandler: handler is nil`.
 
 ### D8: `callErrorHandler` is the last-resort net
 
+**Corrected after execution.** This section originally showed the last-resort response
+written with raw fasthttp calls, including its own `ResetBody`, "so that a bug in rice's own
+response path cannot recurse." That rationale does not hold up: `respond` is three fasthttp
+calls with no path back into error handling, so it cannot recurse into anything. Acting on a
+false rationale walked the implementer into reintroducing, in a second place, the exact
+`ResetBody` no-op D5's correction above had just removed from the first. The code now calls
+`respond`, like everything else in the funnel:
+
 ```go
 func (a *App) callErrorHandler(c *Ctx, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("rice: ErrorHandler panicked: %v", r)
-			c.fctx.ResetBody()
-			c.fctx.SetStatusCode(fasthttp.StatusInternalServerError)
-			c.fctx.SetContentType(MIMETextPlainUTF8)
-			c.fctx.SetBodyString("Internal Server Error")
+			respond(c, fasthttp.StatusInternalServerError, "Internal Server Error")
 		}
 	}()
 	a.errorHandler(c, err)
@@ -316,8 +392,10 @@ something has already gone wrong, which makes it intermittent and hard to reprod
 It is free on the hot path: a request that succeeds never calls this function. Every call
 site of the error funnel goes through it, so `a.errorHandler` is never invoked directly.
 
-The last-resort response is written with the raw fasthttp calls rather than through
-`respond`, so that a bug in rice's own response path cannot recurse.
+The last-resort response now goes through `respond`, the same one every other error in the
+funnel uses. There is only one way this framework writes an error body; a second one would
+just be a second thing to keep correct — which is the opposite of what the original
+rationale was reaching for.
 
 ### D9: `middleware.Recover` ships, and does something the core cannot
 

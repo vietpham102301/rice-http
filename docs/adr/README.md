@@ -38,3 +38,4 @@ Date: YYYY-MM-DD
 | [0005](0005-context-pooling-and-borrow-contract.md) | Pool the context, publish a borrow contract | Accepted |
 | [0006](0006-no-reflection-in-core.md) | No reflection in core | Accepted |
 | [0007](0007-no-trailing-slash-or-case-insensitive-matching.md) | No trailing-slash redirection, no case-insensitive matching | Accepted |
+| [0008](0008-rice-recovers-panics-in-core.md) | rice recovers panics in core | Accepted |

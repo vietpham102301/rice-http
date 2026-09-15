@@ -37,6 +37,10 @@ test, not a benchmark, so a regression fails CI rather than merely looking worse
 | Router lookup, 5 parameters | 0 | TARGET (M6, needs slot sizing) |
 | Chain call, 0 middleware | 0 | MEASURED M4 |
 | Chain call, 5 middleware | 0 | MEASURED M4 |
+| Recovery installed, nothing panics | 0 extra | MEASURED M5 |
+| 404 through the funnel | 1 | MEASURED M5 |
+| Handler returns a fresh HTTPError | 2 | MEASURED M5 |
+| Panic recovered, stack captured | documented, not bounded | MEASURED M5 |
 | **End to end: single handler, unpooled Ctx (M1 baseline)** | 1 | MEASURED M1 |
 | `c.Method`, `c.Path` | 0 | MEASURED M1 |
 | `c.String`, `c.Bytes` | 0 | MEASURED M1 |
@@ -49,8 +53,8 @@ test, not a benchmark, so a regression fails CI rather than merely looking worse
 | `c.JSON` of a small struct | documented, not bounded | TARGET (M8) |
 
 Measured values come from the results files in `bench/results/`, most recently
-`bench/results/M3-radix-tree-router.txt`. Re-run `make bench-record` on your own
-machine before comparing.
+`bench/results/M5-error-handling.txt`, and from the `AllocsPerRun` assertions in
+`alloc_test.go`. Re-run `make bench-record` on your own machine before comparing.
 
 Raising a budget is a design change. It requires a note in the pull request explaining what
 was bought with the allocation, and if the reasoning is interesting, an ADR.

@@ -1,14 +1,246 @@
 package rice
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+	"log"
+	"strconv"
+
+	"github.com/valyala/fasthttp"
+)
 
 // ErrNotFound is passed into the error funnel when no route matches the
-// request. The error handler turns it into a 404.
+// request, and a handler may return it to produce a 404 of its own.
 //
-// It is a package-level value created once at init, so returning it costs no
-// allocation — which matters, because it is returned on the path that mistaken
-// and hostile traffic hits hardest.
+// It is an *HTTPError built once at package initialisation, so a 404 costs no
+// allocation for the error itself — which matters, because it is the path
+// mistaken and hostile traffic hits hardest. Carrying its own status is also
+// what lets the funnel drop its last special case: DefaultErrorHandler finds
+// this with the same errors.As it uses for everything else.
 //
-// M5 generalises the funnel to an HTTPError type. errors.Is keeps working
-// against this sentinel, so checks written against it today keep working then.
-var ErrNotFound = errors.New("rice: not found")
+// It changed type in M5, from errors.New to *HTTPError. errors.Is against it
+// keeps working, because it is still the same pointer.
+//
+// It is also package-level shared state, live under every request that misses
+// the router at once: never mutate it (he.Message = "..." to add detail is a
+// data race under concurrent traffic, not a per-request customisation). Build
+// a new *HTTPError with NewHTTPError when a caller wants to add anything the
+// request didn't already carry.
+var ErrNotFound = &HTTPError{Code: fasthttp.StatusNotFound, Message: "Not Found"}
+
+// ErrorHandler turns an error into a response. It returns nothing: it is the
+// end of the line, and there is nowhere left to report a failure to.
+//
+// There is exactly one per App, set with WithErrorHandler. Replacing it is the
+// supported way to change how a service reports failure — to emit RFC 7807
+// problem documents, for example.
+type ErrorHandler func(c *Ctx, err error)
+
+// DefaultErrorHandler is the ErrorHandler an App uses unless WithErrorHandler
+// replaces it. It is exported so a custom handler can delegate the cases it
+// does not care about.
+//
+// An *HTTPError anywhere in the chain answers with its code. Anything else is a
+// 500 with a generic body, and the real error is logged rather than sent:
+// leaking internal error strings to clients is how databases end up described
+// in HTTP responses.
+func DefaultErrorHandler(c *Ctx, err error) {
+	// The type switch is a fast path in front of the errors.As pair below it,
+	// and it exists for allocation, not correctness — but only because of the
+	// e.Err == nil guard on the *HTTPError case. Taking the address of a local
+	// to hand to errors.As (an any parameter) makes the compiler heap-allocate
+	// that local on every call, matched or not — confirmed with -gcflags=-m,
+	// "moved to heap: pe" / "he". Every error this funnel actually produces
+	// with no cause of its own (ErrNotFound, a fresh NewHTTPError) arrives as
+	// the concrete pointer, never pre-wrapped, so the switch catches that case
+	// for free. D2's "a 404 costs one allocation" and the M5 alloc budgets in
+	// alloc_test.go pin this.
+	//
+	// A type switch matches on exact dynamic type, so a bare *HTTPError
+	// wrapping a *PanicError would otherwise match the *HTTPError case here
+	// and answer with its own Code — a recovered panic quietly becoming
+	// whatever status the handler chose, for the unwrapped case only, while
+	// the same error wrapped again in fmt.Errorf still reached the errors.As
+	// pair below and correctly answered 500. The e.Err == nil guard closes
+	// that gap: an *HTTPError that wraps anything falls through to the
+	// errors.As pair, the same path a handler-wrapped error already takes, so
+	// "a recovered panic anywhere in the chain is always a 500" holds
+	// uniformly rather than only for some wrappings. An error that actually
+	// carries a cause pays for the walk it needs; ErrNotFound and
+	// NewHTTPError's Err is always nil, so the 404 and HTTPError-return
+	// budgets are unaffected by this guard.
+	switch e := err.(type) {
+	case *PanicError:
+		respondPanic(c, e)
+		return
+	case *HTTPError:
+		if e.Err == nil {
+			respond(c, e.Code, e.Message)
+			return
+		}
+	}
+
+	// Wrapped by a handler, e.g. fmt.Errorf("...: %w", err): pay the Unwrap
+	// walk, and the allocation it costs.
+	//
+	// *PanicError is checked before *HTTPError here, and the order is
+	// load-bearing. PanicError.Unwrap returns the panicked value, so
+	// panic(NewHTTPError(400, ...)) would otherwise answer 400 through this
+	// path — a panic quietly becoming a client error. A panic is a bug, never
+	// a way to signal failure, and it is always a 500.
+	var pe *PanicError
+	if errors.As(err, &pe) {
+		respondPanic(c, pe)
+		return
+	}
+
+	var he *HTTPError
+	if errors.As(err, &he) {
+		respond(c, he.Code, he.Message)
+		return
+	}
+
+	log.Printf("rice: unhandled error: %v", err)
+	respond(c, fasthttp.StatusInternalServerError, "Internal Server Error")
+}
+
+// respondPanic logs a recovered panic with its stack and answers a generic
+// 500. It is shared by the type-switch fast path and the errors.As fallback
+// in DefaultErrorHandler so the panic-handling body exists once.
+func respondPanic(c *Ctx, pe *PanicError) {
+	log.Printf("rice: panic recovered: %v\n%s", pe.Value, pe.Stack)
+	respond(c, fasthttp.StatusInternalServerError, "Internal Server Error")
+}
+
+// validStatus returns code unchanged when it is a plausible HTTP status
+// (100–599: StatusContinue through the top of the 5xx range) and
+// fasthttp.StatusInternalServerError otherwise.
+//
+// The case this exists for is the zero value: &HTTPError{} and any composite
+// literal that omits Code — which HTTPError's own doc comment shows as the
+// normal way to construct one — leaves Code at 0. fasthttp's
+// ResponseHeader.StatusCode() answers StatusOK for a zero status, so without
+// this a handler returning an error would get a 200: the funnel's entire
+// premise, that returning an error means the response reports failure,
+// defeated by the zero value of its own error type. A code above 599 is
+// covered for the same reason — it is not a status HTTP defines either — and
+// there is no reason to trust one kind of nonsense over another.
+func validStatus(code int) int {
+	if code < 100 || code > 599 {
+		return fasthttp.StatusInternalServerError
+	}
+	return code
+}
+
+// respond writes a status and a plain-text body, discarding whatever the
+// handler had written first.
+//
+// SetBodyString below discards any prior body — stream, raw, or buffered —
+// before writing, which is ADR-0002's rule, settled in M1: a handler that
+// writes a response and then returns an error has its body discarded and
+// receives the error handler's response instead. There is deliberately no
+// explicit ResetBody call: it would be a no-op here, and a no-op whose comment
+// claims to enforce a rule is worse than its absence.
+//
+// A code outside validStatus's range is replaced with 500 and logged, naming
+// the value that was rejected — silently swallowing a programming error here
+// would just relocate the bug to whoever has to explain the response later. It
+// is a replacement rather than a panic because the error funnel's job is to
+// terminate a request no matter what it is handed; panicking inside the
+// funnel over a bad status code would turn one bad handler into a dead
+// request path, which is a worse failure than the one being guarded against.
+func respond(c *Ctx, code int, msg string) {
+	if v := validStatus(code); v != code {
+		log.Printf("rice: invalid HTTP status code %d, replacing with %d", code, v)
+		code = v
+	}
+	if msg == "" {
+		msg = fasthttp.StatusMessage(code)
+	}
+	c.fctx.SetStatusCode(code)
+	c.fctx.SetContentType(MIMETextPlainUTF8)
+	c.fctx.SetBodyString(msg)
+}
+
+// HTTPError is an error with an HTTP status attached. It is the one error type
+// the funnel understands: DefaultErrorHandler finds it with errors.As and
+// answers with its code, and everything else becomes a 500.
+//
+// The fields are exported, so wrapping a cause is a composite literal:
+//
+//	&rice.HTTPError{Code: 400, Message: "bad id", Err: err}
+//
+// which is why there is one constructor rather than two.
+//
+// An *HTTPError you did not construct — ErrNotFound is the one every program
+// holds — must never be mutated: it may be the same pointer live under many
+// concurrent requests, and writing to a shared field one of them is reading is
+// a data race, not a per-request customisation. Build a new one instead.
+type HTTPError struct {
+	// Code is the HTTP status code sent to the client.
+	Code int
+
+	// Message is the body sent to the client. Empty means the status text for
+	// Code. It is written to the response, so it must not carry internals.
+	Message string
+
+	// Err is the real cause. It is logged and it is reachable with errors.Is
+	// and errors.As. It is never written to the response.
+	Err error
+}
+
+// NewHTTPError returns an HTTPError with no wrapped cause.
+func NewHTTPError(code int, msg string) *HTTPError {
+	return &HTTPError{Code: code, Message: msg}
+}
+
+// Error renders the code, the message, and the cause when there is one. This
+// string is what gets logged. It is never what gets sent.
+//
+// The rendered code runs through validStatus first, the same coercion respond
+// applies before writing a response — so &HTTPError{}.Error() reads
+// "500: Internal Server Error" rather than "0: Unknown Status Code", matching
+// what the client actually receives instead of the invalid value that was
+// never going to reach it.
+func (e *HTTPError) Error() string {
+	code := validStatus(e.Code)
+	msg := e.Message
+	if msg == "" {
+		msg = fasthttp.StatusMessage(code)
+	}
+	s := strconv.Itoa(code) + ": " + msg
+	if e.Err != nil {
+		s += ": " + e.Err.Error()
+	}
+	return s
+}
+
+// Unwrap returns the wrapped cause, so errors.Is and errors.As reach through.
+func (e *HTTPError) Unwrap() error { return e.Err }
+
+// PanicError is a recovered panic, presented to the error funnel as an error.
+//
+// It exists so that a panic reaches the same ErrorHandler as everything else,
+// which is what "one funnel" means. DefaultErrorHandler always answers 500 for
+// it, whatever it wraps — see the ordering note there.
+type PanicError struct {
+	// Value is what was passed to panic().
+	Value any
+
+	// Stack is the stack trace captured at recovery, while the panicking frames
+	// were still live.
+	Stack []byte
+}
+
+// Error renders the panicked value.
+func (e *PanicError) Error() string { return "panic: " + fmt.Sprint(e.Value) }
+
+// Unwrap returns Value when a panic carried an error, so errors.As can find it.
+// It returns nil otherwise, which is what makes panic("boom") not an error
+// chain of its own.
+func (e *PanicError) Unwrap() error {
+	if err, ok := e.Value.(error); ok {
+		return err
+	}
+	return nil
+}

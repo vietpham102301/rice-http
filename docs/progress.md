@@ -16,6 +16,77 @@ Each entry uses this shape:
 
 ---
 
+## 2026-09-14 — M5 — Error handling: one funnel, a false safety claim corrected, and a regression caught before it shipped
+
+**Did:** Added `HTTPError` and `PanicError`, one `ErrorHandler` per `App` set with
+`WithErrorHandler` and defaulting to `DefaultErrorHandler`, and `respond` as the funnel's one
+way to write an error body. Every failure — a route miss, a returned error, a wrapped error,
+a recovered panic — now reaches `DefaultErrorHandler` through the same type switch in front
+of the same `errors.As` fallback: `grep -n 'ErrNotFound' app.go` returns exactly one line,
+the call into the funnel, with no special-cased branch left anywhere. `App.handle` wraps the
+whole dispatch in a deferred `recover()`, and `callErrorHandler` carries a second one beneath
+it so a panicking `ErrorHandler` cannot resurrect the failure the first one exists to
+prevent. `middleware.Recover` ships as the project's first opt-in package. Documented in
+[M5-error-handling.md](milestones/M5-error-handling.md) and
+[ADR-0008](adr/0008-rice-recovers-panics-in-core.md).
+
+**Learned:** Three things, and a correction to a figure this entry almost got wrong.
+
+1. *A documented safety guarantee was never real.* `docs/03-core-concepts.md` §7 has said
+   since M1 that "the core installs a panic hook on the fasthttp server." fasthttp v1.73.0
+   has no `PanicHandler` and no equivalent — `grep -rn "PanicHandler"` against the vendored
+   source returns nothing — and a probe against `main` before this milestone began showed
+   the actual consequence: a panicking handler took the whole process down, exit status 2,
+   not just its connection. Four milestones, untested, corrected now rather than left to be
+   found by someone running the framework in anger.
+
+2. *The generalisation the milestone was built to make nearly cost the thing it was meant to
+   protect.* Replacing M2's special-cased `errors.Is(err, ErrNotFound)` with a uniform
+   `errors.As` walk is exactly what "one funnel" means, and `errors.As`'s `any` parameter
+   heap-allocates its target on every call, matched or not — confirmed with `-gcflags=-m`.
+   Unfixed, the 404 path — the one mistaken and hostile traffic hits hardest, and the exact
+   case D2's prebuilt `ErrNotFound` exists to protect — would have gotten *more* expensive
+   under the generalisation than it was before it, not less. A type-switch fast path in front
+   of the `errors.As` fallback closed it before `alloc_test.go` was committed, not after.
+
+3. *A design rationale that sounds careful can be checked and found false.* D8 justified
+   writing the last-resort response with raw fasthttp calls "so that a bug in rice's own
+   response path cannot recurse." `respond` is three fasthttp calls with no path back into
+   error handling; it cannot recurse into anything, and acting on the false rationale walked
+   the implementer into reintroducing the exact `ResetBody` no-op a previous task had just
+   removed from `respond` itself. Both spec sections are corrected in place.
+
+**Measured:** The recovery mechanism's cost, both arms in one session so they are directly
+comparable (`bench/results/M5-error-handling.txt`, ten samples each, sorted before reading
+median and range):
+
+| | median | range | allocs |
+| --- | ---: | --- | ---: |
+| `BenchmarkNoRecoverBaseline` | 0.91 ns | 0.91 – 0.92 | 0 |
+| `BenchmarkDeferRecoverOverhead` | 3.02 ns | 3.01 – 3.03 | 0 |
+
+About **2.1 ns and zero additional allocations**. A panic itself, including `debug.Stack()`,
+costs roughly **8.3 µs and 4 allocations** (`BenchmarkDispatchPanic`, median 8347 ns, range
+8290–8361). The allocation budgets in `alloc_test.go` pin the funnel's other costs as tests:
+a 404 is 1 allocation, a handler-constructed `HTTPError` is 2.
+
+**Correction:** an earlier reading of this entry's own draft compared `BenchmarkChainDispatch0`
+across the M4 and M5 files directly — 84.01 ns to 96.96 ns, a tempting "+13 ns of recovery
+overhead." That comparison does not hold: `BenchmarkCtxSetHeader` and
+`BenchmarkTreeLookup1000`, in files M5 never touched, moved *more* between the same two
+recordings than any dispatch benchmark M5's changes run through, and
+`BenchmarkFasthttpBaseline` — no rice code on that path at all — barely moved. This is
+session-to-session drift, the fifth entry on the project's unexplained-numbers list and the
+first that is instability itself rather than a stable unexplained cost, and it is not
+reported as M5's price anywhere in the retrospective.
+
+**Next:** M6 — pool `*Ctx` in a `sync.Pool`, publish `reset`/`release`, size parameter slots
+from the max seen at build time, and add the `ricedebug` poisoning build tag. This is the
+milestone the project has been building toward: the one allocation every dispatch benchmark
+in this file still reports.
+
+---
+
 ## 2026-09-12 — M4 — Middleware and groups: the chain is free, and it took four readings to say what "free" costs
 
 **Did:** Added `Middleware` as `func(next Handler) Handler`, the `internal/chain.Compile`

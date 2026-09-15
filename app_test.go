@@ -82,7 +82,7 @@ func TestHandleDiscardsAPartialBodyWhenTheHandlerErrors(t *testing.T) {
 	app.Build()
 	app.handle(fctx)
 
-	if got := string(fctx.Response.Body()); got == "partial output" {
+	if got := string(fctx.Response.Body()); strings.Contains(got, "partial output") {
 		t.Error("a partially written body survived an error return")
 	}
 	if got := fctx.Response.StatusCode(); got != fasthttp.StatusInternalServerError {
@@ -163,8 +163,8 @@ func TestThe404BodyDoesNotLeakTheSentinelMessage(t *testing.T) {
 	if body != "Not Found" {
 		t.Errorf("body = %q, want %q", body, "Not Found")
 	}
-	if strings.Contains(body, "rice:") {
-		t.Errorf("the sentinel's internal message leaked into the response: %q", body)
+	if strings.Contains(body, "404:") {
+		t.Errorf("the sentinel's Error() rendering leaked into the response: %q", body)
 	}
 }
 

@@ -154,6 +154,9 @@ type App struct { /* unexported */ }
 
 func New(opts ...Option) *App
 
+// Option
+func WithErrorHandler(h ErrorHandler) Option
+
 func (a *App) Use(mw ...Middleware)
 func (a *App) GET(path string, h Handler, mw ...Middleware)
 // POST, PUT, PATCH, DELETE, HEAD, OPTIONS, and Handle(method, ...)
@@ -238,23 +241,62 @@ func NewHTTPError(code int, msg string) *HTTPError
 func (e *HTTPError) Error() string
 func (e *HTTPError) Unwrap() error
 
+// PanicError is a recovered panic, presented to the error funnel as an error
+// like any other — see Panics, below.
+type PanicError struct {
+    Value any    // what was passed to panic()
+    Stack []byte // captured at recovery, while the panicking frames were still live
+}
+
+func (e *PanicError) Error() string
+func (e *PanicError) Unwrap() error // Value when it is itself an error, nil otherwise
+
 type ErrorHandler func(c *Ctx, err error)
+
+// DefaultErrorHandler is the ErrorHandler an App uses unless WithErrorHandler
+// replaces it. Exported so a custom handler can delegate to it.
+func DefaultErrorHandler(c *Ctx, err error)
 ```
 
-One error type and one funnel. Every error returned by any handler or middleware reaches
-`app.ErrorHandler`, whose default behaviour is:
+One error type and one funnel. Every error returned by any handler or middleware, every
+route miss, and every recovered panic reaches `app.ErrorHandler`, whose default behaviour
+is:
 
-1. `errors.As` the error to `*HTTPError` → respond with its code and message.
-2. Otherwise → respond 500 with a generic message, and pass the real error to the
-   configured error hook so it can be logged. **The cause is never written to the response
-   body**, because leaking internal error strings to clients is how databases end up
-   described in HTTP responses.
+1. The concrete error is `*PanicError` → respond 500 (a panic is always 500), or a concrete
+   `*HTTPError` with no wrapped cause → respond with its own code. Both are checked with a
+   type switch in front of the fallback below, which is what every error this funnel builds
+   for itself (`ErrNotFound`, a fresh `NewHTTPError`) matches without allocating.
+2. Otherwise, `errors.As` the error to `*PanicError` then `*HTTPError`. This is the path a
+   handler-wrapped error takes (`fmt.Errorf("...: %w", err)`), and it is also the path an
+   `*HTTPError` that itself wraps a cause takes, whether or not anything wraps the
+   `*HTTPError` in turn — an `*HTTPError` wrapping a `*PanicError` reaches this pair even
+   completely unwrapped, so a recovered panic is always a 500 no matter how many layers wrap
+   it or don't. Checking `*PanicError` before `*HTTPError` here is load-bearing for the same
+   reason: `PanicError.Unwrap` returns the panicked value, so an `*HTTPError` built from
+   `panic(rice.NewHTTPError(400, "x"))` would otherwise answer 400 through this fallback.
+3. Otherwise → respond 500 with a generic message, and log the real error rather than
+   sending it. **The cause is never written to the response body**, because leaking internal
+   error strings to clients is how databases end up described in HTTP responses.
+
+`respond` — the function that actually writes the response — also coerces a status code
+outside the range HTTP defines (100–599) to 500, logging the value it replaced. The case
+this exists for is `HTTPError`'s own zero value: `&HTTPError{Message: "nope"}`, which the
+type above shows as the ordinary way to build one when there is no cause to wrap, leaves
+`Code` at 0, and fasthttp's `ResponseHeader.StatusCode()` answers `StatusOK` for a zero
+status. Without the coercion, a handler returning an error could get a 200 — the funnel's
+entire premise, defeated by the zero value of its own error type.
 
 Replacing the error handler is the supported way to change how a service reports failure —
 to emit RFC 7807 problem documents, for example. There is exactly one such place, by
 design.
 
-**Panics.** The core installs a panic hook on the fasthttp server so a panicking handler
-produces a 500 and does not take the connection down. It is a safety net for bugs, not an
-error mechanism; the `middleware.Recover` package exists for users who want the panic
-converted into a normal `error` and run through their own error handler.
+**Panics.** fasthttp has no panic hook to install — its only `recover()` on the request path
+guards body-stream writes, nothing upstream of the handler. Without one, a panicking handler
+takes the whole process down, not just its connection: `s.Handler(ctx)` is called bare from
+a worker-pool goroutine. rice's core therefore installs its own deferred recovery around the
+whole dispatch, converting a panic into a `*PanicError` and running it through the same
+funnel as everything else. It is a safety net for bugs, not an error mechanism, and it is a
+deliberate exception to principle 7 — see [ADR-0008](adr/0008-rice-recovers-panics-in-core.md).
+The `middleware.Recover` package exists for users who want a panic converted to an ordinary
+returned error *before* it reaches the core recovery, so that outer middleware still sees it
+as a normal return value rather than an unwound stack.
