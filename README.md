@@ -194,3 +194,7 @@ make bench    # runs the suite and records to bench/results/
 
 Benchmarks are recorded to a committed file rather than read off a terminal, so a claim in
 these docs can always be traced to the run that produced it.
+
+## License
+
+MIT — see [LICENSE](LICENSE). fasthttp, the only runtime dependency, is MIT too.
