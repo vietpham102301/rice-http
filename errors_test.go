@@ -230,6 +230,136 @@ func TestTheCauseNeverReachesTheBody(t *testing.T) {
 	}
 }
 
+// TestRespondCoercesAZeroCodeTo500 pins Finding 1 from the M5 final review:
+// fasthttp's ResponseHeader.StatusCode() answers StatusOK for a zero status,
+// so a handler returning &HTTPError{Message: "nope"} — Code omitted, which
+// HTTPError's own doc comment shows as the normal construction — used to get
+// a 200. A handler returning an error must never produce a success status.
+func TestRespondCoercesAZeroCodeTo500(t *testing.T) {
+	logged := captureLog(t)
+	c, fctx := newTestCtx("GET", "/")
+
+	respond(c, 0, "nope")
+
+	if got := fctx.Response.StatusCode(); got != 500 {
+		t.Errorf("status = %d, want 500", got)
+	}
+	if !strings.Contains(logged(), "0") {
+		t.Errorf("log does not name the offending code, got %q", logged())
+	}
+}
+
+// TestRespondCoercesAWhollyZeroHTTPErrorTo500 drives the same rule through
+// DefaultErrorHandler with &HTTPError{}, the value's own zero value — the
+// shape a handler is most likely to produce by accident.
+func TestRespondCoercesAWhollyZeroHTTPErrorTo500(t *testing.T) {
+	logged := captureLog(t)
+	c, fctx := newTestCtx("GET", "/")
+
+	DefaultErrorHandler(c, &HTTPError{})
+
+	if got := fctx.Response.StatusCode(); got != 500 {
+		t.Errorf("status = %d, want 500", got)
+	}
+	if got := string(fctx.Response.Body()); got != "Internal Server Error" {
+		t.Errorf("body = %q, want %q", got, "Internal Server Error")
+	}
+	if !strings.Contains(logged(), "0") {
+		t.Errorf("log does not name the offending code, got %q", logged())
+	}
+}
+
+// TestRespondCoercesAnOutOfRangeHighCodeTo500 pins the upper bound validStatus
+// chose: 599 is the top of the range HTTP defines, so 600 is exactly as
+// invalid as a negative or zero code, and respond must treat it the same way.
+func TestRespondCoercesAnOutOfRangeHighCodeTo500(t *testing.T) {
+	logged := captureLog(t)
+	c, fctx := newTestCtx("GET", "/")
+
+	respond(c, 600, "nope")
+
+	if got := fctx.Response.StatusCode(); got != 500 {
+		t.Errorf("status = %d, want 500", got)
+	}
+	if !strings.Contains(logged(), "600") {
+		t.Errorf("log does not name the offending code, got %q", logged())
+	}
+}
+
+// TestHTTPErrorErrorRendersTheCoercedCode pins the note in Finding 1 that the
+// coercion also repairs HTTPError.Error(), which previously rendered
+// "0: Unknown Status Code" for the zero value — a string that named a code no
+// response would ever actually carry.
+func TestHTTPErrorErrorRendersTheCoercedCode(t *testing.T) {
+	e := &HTTPError{}
+	if got, want := e.Error(), "500: Internal Server Error"; got != want {
+		t.Errorf("Error() = %q, want %q", got, want)
+	}
+}
+
+// TestARecoveredPanicIsAlways500RegardlessOfWrapping pins Finding 2 from the
+// M5 final review: an *HTTPError wrapping a *PanicError must answer 500
+// whether it arrives bare or wrapped again by a handler. Before this fix the
+// type switch's *HTTPError case matched the bare shape unconditionally and
+// answered with the HTTPError's own Code (400 here) instead of falling
+// through to the ordering that makes a panic always win — while the same
+// value wrapped in fmt.Errorf already reached the errors.As fallback and
+// correctly answered 500. D5 always meant this rule to be universal.
+func TestARecoveredPanicIsAlways500RegardlessOfWrapping(t *testing.T) {
+	panicked := &PanicError{Value: "boom"}
+
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{"bare HTTPError wrapping a PanicError", &HTTPError{Code: 400, Message: "m", Err: panicked}},
+		{"HTTPError wrapping a PanicError, wrapped again", fmt.Errorf("ctx: %w", &HTTPError{Code: 400, Message: "m", Err: panicked})},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c, fctx := newTestCtx("GET", "/")
+
+			DefaultErrorHandler(c, tc.err)
+
+			if got := fctx.Response.StatusCode(); got != 500 {
+				t.Errorf("status = %d, want 500 — a recovered panic is always a 500, whatever wraps it", got)
+			}
+		})
+	}
+}
+
+// TestAnHTTPErrorWrappingAnOrdinaryCauseKeepsItsOwnCode is
+// TestARecoveredPanicIsAlways500RegardlessOfWrapping's control: the e.Err ==
+// nil guard must not turn every *HTTPError with a cause into a 500 — only one
+// whose cause is, or contains, a *PanicError.
+func TestAnHTTPErrorWrappingAnOrdinaryCauseKeepsItsOwnCode(t *testing.T) {
+	cause := errors.New("db down")
+
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{"bare HTTPError wrapping an ordinary error", &HTTPError{Code: 400, Message: "bad", Err: cause}},
+		{"HTTPError wrapping an ordinary error, wrapped again", fmt.Errorf("ctx: %w", &HTTPError{Code: 400, Message: "bad", Err: cause})},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c, fctx := newTestCtx("GET", "/")
+
+			DefaultErrorHandler(c, tc.err)
+
+			if got := fctx.Response.StatusCode(); got != 400 {
+				t.Errorf("status = %d, want 400 — an ordinary wrapped cause must not force a 500", got)
+			}
+			if got := string(fctx.Response.Body()); got != "bad" {
+				t.Errorf("body = %q, want %q", got, "bad")
+			}
+		})
+	}
+}
+
 func TestRespondDiscardsAPreviouslyWrittenBody(t *testing.T) {
 	c, fctx := newTestCtx("GET", "/")
 	_ = c.String(200, "partial output")
