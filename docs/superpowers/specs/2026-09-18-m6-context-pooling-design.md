@@ -276,10 +276,14 @@ The existing `TestAllocBudgetHandleDispatch` and `TestAllocBudgetHandleDispatchP
 drop from 1 to 0; `TestAllocBudget404` drops from 1 to 0.
 
 **Budgets under `-race`.** `make test` runs with the race detector, and in race builds
-`sync.Pool.Put` deliberately drops one object in four (`sync/pool.go`, Go 1.25). A
-zero-allocation dispatch therefore allocates about 0.25 times per call under `-race`.
-`testing.AllocsPerRun` divides integer counts, so this reads as 0 and the budgets pass —
-while a genuine per-request allocation still reads as at least 1 and fails. The comment on
+`sync.Pool.Put` deliberately drops one object in four (`sync/pool.go`, Go 1.25). Each drop
+sends the next `Get` to `newCtx`, which allocates the `Ctx`, its parameter slice and its
+store slice — at most three objects — so a zero-allocation dispatch averages at most 0.75
+allocations per call under `-race`. `testing.AllocsPerRun` divides integer counts, so this
+reads as 0 and the budgets pass, while a genuine per-request allocation adds a full 1 and
+fails. The margin is real but thin: a fourth allocation in `newCtx` would push the average
+to 1.0 and break every zero budget under `-race`, which is a reason `newCtx` must stay at
+three. The comment on
 the budget helper says so, because a reader who sees a pool-dependent zero pass under `-race`
 will otherwise suspect the test is not measuring anything.
 
@@ -347,7 +351,9 @@ Recorded to `bench/results/M6-context-pooling.txt`.
   claim.
 - `BenchmarkDispatchPooledVsUnpooled` — both arms in one session: the pooled `handle`, and
   the same dispatch with a `&Ctx{}` per request. This is the honest answer to the milestone's
-  question.
+  question. The unpooled arm needs unexported access, so this benchmark lives in package
+  `rice` (`pool_bench_test.go`) rather than `bench/`, and `scripts/bench.sh` and
+  `make bench` gain the root package.
 - `BenchmarkCtxSetGet` — one `Set` and one `Get` with a pointer value.
 - `BenchmarkDispatchParallel` — `b.RunParallel` over the pooled path, since `sync.Pool`'s
   per-P caches are what a single-goroutine benchmark cannot show.
