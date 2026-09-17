@@ -31,13 +31,17 @@ func (a *App) acquire(fctx *fasthttp.RequestCtx) *Ctx {
 	return c
 }
 
-// release unbinds c and returns it to the pool.
+// release unbinds c and hands it back.
 //
-// It drops every reference c holds before the Put, so a pooled Ctx never keeps a
-// finished request's memory reachable. After this call, c belongs to whichever
-// request gets it next — which is the borrow contract, stated from the other
-// side.
+// It drops every reference c holds, so a pooled Ctx never keeps a finished
+// request's memory reachable. In the debug build it then poisons c and keeps it
+// out of the pool, so every later use panics; in the release build the poison is
+// a no-op and c returns to the pool. poolReuse is a constant, so the branch not
+// taken is compiled out.
 func (a *App) release(c *Ctx) {
 	c.reset(nil, nil)
-	a.pool.Put(c)
+	c.poison.mark()
+	if poolReuse {
+		a.pool.Put(c)
+	}
 }

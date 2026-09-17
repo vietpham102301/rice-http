@@ -1,3 +1,5 @@
+//go:build !ricedebug
+
 package rice
 
 import (
@@ -9,23 +11,11 @@ import (
 	"github.com/vietpham102301/rice-http/internal/router"
 )
 
-// budget asserts that fn allocates no more than want objects per call.
-//
-// The response buffers are warmed before measuring, because a live server is
-// warm. Measuring a cold buffer would measure one-time setup, not steady state.
-//
-// Under -race, sync.Pool drops one Put in four, so a pooled dispatch really does
-// allocate a fraction of a Ctx per call there. AllocsPerRun divides integer
-// counts and reports that fraction as 0, while a genuine per-request allocation
-// still reads as at least 1. The zero budgets are meaningful in both modes; see
-// newCtx for why that holds only while newCtx allocates three objects or fewer.
-func budget(t *testing.T, name string, want float64, fn func()) {
-	t.Helper()
-	fn() // warm
-	if got := testing.AllocsPerRun(1000, fn); got > want {
-		t.Errorf("%s allocated %.1f objects per call, budget is %.0f", name, got, want)
-	}
-}
+// This file is excluded from the ricedebug build, which allocates a fresh Ctx
+// per request on purpose: a poisoned Ctx is never returned to the pool. The
+// budget helper itself lives in budget_test.go, unbuilt-tagged, because
+// method_test.go's TestAllocBudgetMethodIndex needs it too and is unaffected by
+// ricedebug.
 
 func TestAllocBudgetString(t *testing.T) {
 	fctx := &fasthttp.RequestCtx{}

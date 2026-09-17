@@ -11,6 +11,10 @@ import (
 // It is valid only for the duration of the handler that received it, along with
 // every []byte it hands out. See the borrow contract in doc.go.
 type Ctx struct {
+	// poison is first on purpose. It is zero-sized in release builds, and Go pads
+	// a zero-sized final field so a pointer to it cannot point past the struct.
+	poison poison
+
 	fctx *fasthttp.RequestCtx
 	app  *App
 
@@ -40,14 +44,23 @@ func (c *Ctx) reset(app *App, fctx *fasthttp.RequestCtx) {
 //
 // It is the escape hatch for anything rice does not wrap. Everything the
 // borrow contract says about Ctx applies to what you reach through it.
-func (c *Ctx) RequestCtx() *fasthttp.RequestCtx { return c.fctx }
+func (c *Ctx) RequestCtx() *fasthttp.RequestCtx {
+	c.poison.check()
+	return c.fctx
+}
 
 // Method returns the HTTP verb.
 //
 // Borrowed: the returned slice is valid only until the handler returns.
-func (c *Ctx) Method() []byte { return c.fctx.Method() }
+func (c *Ctx) Method() []byte {
+	c.poison.check()
+	return c.fctx.Method()
+}
 
 // Path returns the request path, without the query string.
 //
 // Borrowed: the returned slice is valid only until the handler returns.
-func (c *Ctx) Path() []byte { return c.fctx.Path() }
+func (c *Ctx) Path() []byte {
+	c.poison.check()
+	return c.fctx.Path()
+}

@@ -22,6 +22,7 @@ type entry struct {
 // Borrowed: the store dies with the Ctx when the handler returns. The value is
 // yours, but it cannot be read back through this Ctx afterwards.
 func (c *Ctx) Set(key string, v any) {
+	c.poison.check()
 	for i := range c.store {
 		if c.store[i].key == key {
 			c.store[i].val = v
@@ -36,6 +37,7 @@ func (c *Ctx) Set(key string, v any) {
 // A linear scan beats a map at the handful of keys a request carries, and
 // allocates nothing.
 func (c *Ctx) Get(key string) (any, bool) {
+	c.poison.check()
 	for i := range c.store {
 		if c.store[i].key == key {
 			return c.store[i].val, true

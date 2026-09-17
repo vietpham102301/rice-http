@@ -27,5 +27,8 @@ jobs:
       - name: Test
         run: make test
 
+      - name: Test (ricedebug)
+        run: make test-debug
+
       - name: Benchmark smoke run
         run: make bench
