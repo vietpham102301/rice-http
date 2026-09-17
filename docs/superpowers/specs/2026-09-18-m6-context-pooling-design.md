@@ -174,8 +174,14 @@ says whose allocation the last one is.
 
 Under `-tags ricedebug`, `release` poisons the `Ctx` and drops it; `acquire` always builds a
 fresh one. A poisoned `Ctx` therefore stays poisoned for as long as anything references it,
-and every use after release panics — deterministically, regardless of load. The price is one
-allocation per request in debug builds only.
+and every use after release panics — deterministically, regardless of load. The price is a
+fresh `Ctx` per request in debug builds only — three objects through `newCtx`, not one.
+
+**Corrected during M6's documentation task.** This paragraph originally read "one allocation per
+request in debug builds only". That is wrong by this milestone's own counting: with nothing ever
+`Put` back, every debug-build request goes through `pool.New` → `newCtx`, which allocates the
+`Ctx`, its parameter slice and its store slice. The debug build *is* the unpooled arm of
+`BenchmarkDispatchPooledVsUnpooled`, which the same document records at three allocations.
 
 The mechanism compiles out of release builds by construction, not by hoping the inliner
 cooperates:
@@ -270,7 +276,7 @@ New build tag: `ricedebug`.
 | `Ctx.Set` with a pointer value | 0 | TARGET M6 |
 | `Ctx.Get` | 0 | TARGET M6 |
 | `Ctx.Set` with a non-constant string (caller's boxing) | 1 | TARGET M6 |
-| Any dispatch under `-tags ricedebug` | 1 more than release | documented, not asserted |
+| Any dispatch under `-tags ricedebug` | 3 more than release (`newCtx`'s three objects) | documented, not asserted |
 
 The existing `TestAllocBudgetHandleDispatch` and `TestAllocBudgetHandleDispatchParameterised`
 drop from 1 to 0; `TestAllocBudget404` drops from 1 to 0.

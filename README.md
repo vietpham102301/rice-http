@@ -8,7 +8,7 @@ it. The design decisions are written down in [ADRs](docs/adr/) before they are i
 and each milestone ends with a [retrospective](docs/milestones/) naming what the
 measurements changed.
 
-> **Status: not production ready.** Six of nine milestones are done (M0–M6). The `Ctx` is
+> **Status: not production ready.** Seven of nine milestones are done (M0–M6). The `Ctx` is
 > pooled and dispatch allocates nothing, which makes the borrow contract real: a `*Ctx` kept
 > past its handler reads another request's data. Build with `-tags ricedebug` (or run
 > `make test-debug`) to turn that into a panic. `Shutdown` is still blunt — it races fasthttp's

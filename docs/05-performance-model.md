@@ -55,7 +55,7 @@ test, not a benchmark, so a regression fails CI rather than merely looking worse
 | **End to end: static route, five middleware, plaintext** | **0** | MEASURED M6 |
 | `c.JSON` of a small struct | documented, not bounded | TARGET (M8) |
 
-The three rows that changed value rather than status did so because the `Ctx` stopped being an
+The two rows that changed value rather than status did so because the `Ctx` stopped being an
 allocation. A 404 was 1 and is 0; a handler returning a fresh `HTTPError` was 2 and is 1, the
 one that remains being the `HTTPError` itself. Neither path was touched in M6 — the allocation
 that left them was the one every dispatch carried.
@@ -70,7 +70,8 @@ Measured values come from the results files in `bench/results/`, most recently
 `alloc_test.go`. Re-run `make bench-record` on your own machine before comparing.
 
 Two notes on reading the M6 file. `alloc_test.go` is built `!ricedebug`, because the debug
-build allocates a `Ctx` per request on purpose — that is D5's price, documented rather than
+build allocates a fresh `Ctx` per request on purpose — three objects through `newCtx`, since
+nothing is ever returned to the pool there. That is D5's price, documented rather than
 asserted. And `make test` runs with `-race`, where `sync.Pool` deliberately drops one `Put` in
 four; each drop sends the next `Get` to `newCtx`, which allocates three objects, so a
 zero-allocation dispatch averages at most 0.75 there. `AllocsPerRun` reports that as 0 while a
@@ -131,7 +132,8 @@ with no separate storage to allocate.
 The `check()` calls the `ricedebug` build needs in every exported `Ctx` method cost nothing in
 the release build. `go build -gcflags=-m` shows `(*poison).check` inlined at every call site,
 which is the direct evidence: the method body is empty, so the inlined call is nothing. A
-same-session benchstat of dispatch before and after the calls were added reads:
+benchstat of dispatch before and after the calls were added — two back-to-back runs on the same
+machine, minutes apart, not one process like the table above — reads:
 
 ```
                 │  precheck.txt  │              postcheck.txt              │

@@ -42,7 +42,8 @@ the pool in both builds under `-race`. ADR-0005 is corrected in place. Documente
    code holding the stale pointer has no generation of its own, because the stale pointer and the
    reused object are the same pointer. Found by reading the design, five milestones after the ADR
    was accepted, and not by anyone running the framework in anger. The debug build now drops
-   poisoned contexts instead of pooling them, at one allocation per request in that build only.
+   poisoned contexts instead of pooling them, which costs a fresh `Ctx` per request there —
+   three objects through `newCtx`, the same count the unpooled benchmark arm reports.
 
 2. *The plan's own test could not fail on its own fault.* `TestARetainedCtxPanicsEvenAfterAnotherRequest`
    was written from the argument in point 1, and Task 4's injection — return the poisoned `Ctx` to
@@ -86,7 +87,8 @@ runs no rice code, moved −3.88% across the same pair. `DispatchHTTPError` went
 and `DispatchPanic` 4 → 3 without either path being opened: the one they lost is the `Ctx`. The
 `check()` calls cost nothing in the release build — `go build -gcflags=-m` reports
 `inlining call to (*poison).check` at every call site and the release body is empty — and the
-same-session benchstat around them reads `RiceDispatch` −0.27% (p=0.001) against `CtxSetHeader`
+benchstat around them, two back-to-back runs on the same machine rather than one process, reads
+`RiceDispatch` −0.27% (p=0.001) against `CtxSetHeader`
 +1.19% (p=0.000), both with 0 allocs on both sides. Two significant deltas with opposite signs are
 code layout and session drift, not a cost; a real per-call cost cannot make one benchmark faster.
 Root package coverage 98.9%.

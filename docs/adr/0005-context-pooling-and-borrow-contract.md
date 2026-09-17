@@ -78,7 +78,8 @@ request acquires the same object, `reset` clears the poison, and a stale referen
 that request's data without panicking. A generation counter cannot help, because the code
 holding the stale pointer has no generation of its own to compare — the stale pointer and the
 reused object are the same pointer. The debug build now keeps poisoned contexts out of the pool
-entirely, at one allocation per request in that build only.
+entirely. Its price is a fresh `Ctx` for every request — three objects through `newCtx`: the
+`Ctx`, its parameter slice and its store slice — paid in that build only.
 `TestARetainedCtxPanicsEvenAfterAnotherRequest` fails when the poisoned `Ctx` is returned to the
 pool, which is the empirical form of this correction. See the M6 design doc, D5.
 

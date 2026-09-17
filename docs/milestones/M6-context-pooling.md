@@ -65,8 +65,9 @@ pool. If it does, the mechanism fails at exactly the moment it is needed:
 A generation counter cannot rescue it, because the code holding the stale pointer has no
 generation of its own to compare against — the stale pointer and the reused object are the same
 pointer. D5 replaced the mechanism: under `ricedebug`, `release` marks the `Ctx` and drops it, and
-`acquire` always builds a fresh one, at one allocation per request in that build only.
-ADR-0005 is corrected in place.
+`acquire` always builds a fresh one. The price is three allocations per request in that build —
+the debug build *is* the unpooled arm measured below, and `newCtx` makes three objects: the
+`Ctx`, its parameter slice and its store slice. ADR-0005 is corrected in place.
 
 This was found while reading the design, not in production, which is the cheapest place to find
 it and also the reason it is worth recording: a documented safety mechanism sat in an accepted
@@ -168,8 +169,10 @@ the error funnel nor the panic path. The one they lost is the `Ctx`.
 
 The `check()` calls that `ricedebug` needs in all twelve exported `Ctx` methods cost nothing in
 the release build. `go build -gcflags=-m` reports `inlining call to (*poison).check` at every call
-site, and the release-build method body is empty, so there is nothing left to inline. A
-same-session benchstat of dispatch before and after the calls were added:
+site, and the release-build method body is empty, so there is nothing left to inline. A benchstat
+of dispatch before and after the calls were added — two back-to-back runs on the same machine,
+minutes apart, which is weaker than the one-process pairing this document reserves "same session"
+for:
 
 ```
                 │  precheck.txt  │              postcheck.txt              │

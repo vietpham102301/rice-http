@@ -273,9 +273,14 @@ func TestAllocBudgetCtxParamString(t *testing.T) {
 
 // TestAllocBudgetHandleDispatchParameterised keeps the end-to-end promise honest
 // for a parameterised route: still nothing, now that the Ctx is pooled.
+//
+// The handler reads the parameter and writes it back, because that is the claim
+// the budget is quoted for — a parameterised route read with Param. A handler
+// that ignored the parameter would measure the same dispatch as the static
+// budget above and pass while capture allocated, so the body is asserted too.
 func TestAllocBudgetHandleDispatchParameterised(t *testing.T) {
 	app := New()
-	app.GET("/users/:id", func(c *Ctx) error { return c.String(200, "ok") })
+	app.GET("/users/:id", func(c *Ctx) error { return c.Bytes(200, c.Param("id")) })
 
 	fctx := &fasthttp.RequestCtx{}
 	fctx.Request.Header.SetMethod("GET")
@@ -285,6 +290,9 @@ func TestAllocBudgetHandleDispatchParameterised(t *testing.T) {
 	app.handle(fctx)
 	if fctx.Response.StatusCode() != 200 {
 		t.Fatalf("status = %d, want 200; this budget would be measuring the 404 path", fctx.Response.StatusCode())
+	}
+	if got := string(fctx.Response.Body()); got != "42" {
+		t.Fatalf("body = %q, want %q; this budget would not be measuring a parameter read", got, "42")
 	}
 
 	budget(t, "App.handle on a parameterised route", 0, func() {
