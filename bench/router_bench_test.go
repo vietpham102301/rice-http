@@ -52,7 +52,7 @@ func BenchmarkMapLookup1000(b *testing.B) { benchmarkMapLookup(b, 1000) }
 // Do not divide a BenchmarkTreeLookup* figure by a BenchmarkMapLookup* figure.
 // They do not measure comparable work: benchmarkMapLookup times a bare
 // map[string]int probe with no framework around it, while this function times
-// a full dispatch through FasthttpHandler — allocating a Ctx, calling the
+// a full dispatch through FasthttpHandler — acquiring a pooled Ctx, calling the
 // handler, and writing a response body — of which the lookup is only one part.
 // A ratio between the two numbers is not a router comparison; it is an
 // artifact of comparing a data-structure probe to an end-to-end request.

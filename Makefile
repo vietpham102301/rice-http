@@ -12,7 +12,7 @@ test-debug:
 
 ## bench: quick benchmark run, one iteration, for CI smoke testing
 bench:
-	$(GO) test ./bench/... -run '^$$' -bench . -benchmem -count=1
+	$(GO) test . ./bench/... -run '^$$' -bench . -benchmem -count=1
 
 ## bench-record: full benchmark run, stamped and written to bench/results/
 ## usage: make bench-record LABEL=M1-minimal-server
