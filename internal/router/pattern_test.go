@@ -1,6 +1,7 @@
 package router
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -65,7 +66,6 @@ func TestParsePatternRejects(t *testing.T) {
 		{"/files/*", "empty wildcard name"},
 		{"/files/*path/edit", "must be the last"},
 		{"/a/:id/b/:id", "twice"},
-		{"/a/:x1/:x2/:x3/:x4/:x5/:x6/:x7/:x8/:x9", "at most"},
 		{"/files/:name.txt", "outside a-z, A-Z, 0-9 and _"},
 		{"/u/:id-:name", "outside a-z, A-Z, 0-9 and _"},
 		{"/f/*path.zip", "outside a-z, A-Z, 0-9 and _"},
@@ -106,34 +106,17 @@ func TestParsePatternAllowsABarePercent(t *testing.T) {
 	}
 }
 
-func TestParsePatternAllowsExactlyMaxParams(t *testing.T) {
+// TestParsePatternAcceptsManyParameters records M6's removal of the
+// eight-parameter limit. The limit existed only because Params was a fixed
+// array; it is a slice now.
+func TestParsePatternAcceptsManyParameters(t *testing.T) {
 	pattern := ""
-	for i := 0; i < MaxParams; i++ {
-		pattern += "/a/:p" + string(rune('0'+i))
+	for i := 0; i < 20; i++ {
+		pattern += "/a/:p" + strconv.Itoa(i)
 	}
+	pattern += "/*rest"
 
-	segs, err := parsePattern(pattern)
-	if err != nil {
-		t.Fatalf("parsePattern(%q) returned %v, want nil for exactly MaxParams parameters", pattern, err)
-	}
-
-	params := 0
-	for _, s := range segs {
-		if s.kind == segParam {
-			params++
-		}
-	}
-	if params != MaxParams {
-		t.Errorf("parsed %d parameters, want %d", params, MaxParams)
-	}
-}
-
-// TestParsePatternCountsAWildcardTowardTheLimit records the rule: a wildcard
-// occupies a Params slot exactly as a named parameter does.
-func TestParsePatternCountsAWildcardTowardTheLimit(t *testing.T) {
-	pattern := "/a/:p0/:p1/:p2/:p3/:p4/:p5/:p6/:p7/*rest"
-
-	if _, err := parsePattern(pattern); err == nil {
-		t.Error("parsePattern accepted MaxParams parameters plus a wildcard, want a rejection")
+	if _, err := parsePattern(pattern); err != nil {
+		t.Fatalf("parsePattern rejected 20 parameters and a wildcard: %v", err)
 	}
 }

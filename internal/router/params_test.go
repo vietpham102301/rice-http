@@ -2,18 +2,15 @@ package router
 
 import (
 	"bytes"
+	"strconv"
 	"testing"
 )
 
 func TestParamsAddAndGet(t *testing.T) {
 	var p Params
 
-	if !p.add("id", []byte("42")) {
-		t.Fatal("add reported storage full on an empty Params")
-	}
-	if !p.add("slug", []byte("hello")) {
-		t.Fatal("add reported storage full after one entry")
-	}
+	p.add("id", []byte("42"))
+	p.add("slug", []byte("hello"))
 
 	if got := p.Get("id"); !bytes.Equal(got, []byte("42")) {
 		t.Errorf("Get(\"id\") = %q, want %q", got, "42")
@@ -75,30 +72,51 @@ func TestParamsAtPanicsOutOfRange(t *testing.T) {
 	}
 }
 
-func TestParamsFillsExactlyMaxParams(t *testing.T) {
+// TestParamsHasNoFixedLimit replaces the M3 overflow tests. M6 removed the
+// eight-slot array; storage is a slice that grows, so a capture can never be
+// refused.
+func TestParamsHasNoFixedLimit(t *testing.T) {
 	var p Params
-
-	for i := 0; i < MaxParams; i++ {
-		if !p.add("k", []byte("v")) {
-			t.Fatalf("add reported storage full at entry %d, want room for %d", i, MaxParams)
-		}
+	for i := 0; i < 64; i++ {
+		p.add("k"+strconv.Itoa(i), []byte(strconv.Itoa(i)))
 	}
-	if got := p.Len(); got != MaxParams {
-		t.Errorf("Len() = %d, want %d", got, MaxParams)
+
+	if got := p.Len(); got != 64 {
+		t.Fatalf("Len() = %d, want 64", got)
+	}
+	if got := string(p.Get("k63")); got != "63" {
+		t.Errorf("Get(\"k63\") = %q, want %q", got, "63")
 	}
 }
 
-func TestParamsRejectsOverflow(t *testing.T) {
-	var p Params
-	for i := 0; i < MaxParams; i++ {
-		p.add("k", []byte("v"))
-	}
+func TestMakeParamsPreSizesStorage(t *testing.T) {
+	p := MakeParams(5)
 
-	if p.add("one-too-many", []byte("v")) {
-		t.Error("add accepted an entry past MaxParams, want false")
+	if got := cap(p.slots); got != 5 {
+		t.Errorf("cap = %d, want 5", got)
 	}
-	if got := p.Len(); got != MaxParams {
-		t.Errorf("a rejected add changed Len to %d, want %d", got, MaxParams)
+	if got := p.Cap(); got != 5 {
+		t.Errorf("Cap() = %d, want 5", got)
+	}
+	if got := p.Len(); got != 0 {
+		t.Errorf("Len() = %d, want 0", got)
+	}
+}
+
+// TestAddWithinCapacityAllocatesNothing is the property the pool depends on:
+// once a Ctx's parameter slice is sized, capture is free.
+func TestAddWithinCapacityAllocatesNothing(t *testing.T) {
+	p := MakeParams(3)
+	value := []byte("v")
+
+	got := testing.AllocsPerRun(1000, func() {
+		p.Reset()
+		p.add("a", value)
+		p.add("b", value)
+		p.add("c", value)
+	})
+	if got != 0 {
+		t.Errorf("add within capacity allocated %.1f objects per call, want 0", got)
 	}
 }
 
@@ -128,9 +146,10 @@ func TestResetZeroesDiscardedSlots(t *testing.T) {
 
 	p.Reset()
 
-	for i := 0; i < MaxParams; i++ {
-		if p.slots[i].Key != "" || p.slots[i].Value != nil {
-			t.Errorf("slot %d still holds %+v after Reset, want the zero Param", i, p.slots[i])
+	backing := p.slots[:cap(p.slots)]
+	for i := range backing {
+		if backing[i].Key != "" || backing[i].Value != nil {
+			t.Errorf("slot %d still holds %+v after Reset, want the zero Param", i, backing[i])
 		}
 	}
 }
@@ -154,8 +173,8 @@ func TestTruncateRollsBackAndZeroes(t *testing.T) {
 	if got := p.Get("kept"); !bytes.Equal(got, []byte("yes")) {
 		t.Errorf("truncate discarded a kept capture: Get(\"kept\") = %q", got)
 	}
-	if p.slots[1].Key != "" || p.slots[1].Value != nil {
-		t.Errorf("slot 1 still holds %+v after truncate, want the zero Param", p.slots[1])
+	if s := p.slots[:2][1]; s.Key != "" || s.Value != nil {
+		t.Errorf("slot 1 still holds %+v after truncate, want the zero Param", s)
 	}
 }
 
@@ -184,20 +203,6 @@ func TestSetReplacesAnExistingName(t *testing.T) {
 	}
 	if got := p.Get("id"); !bytes.Equal(got, []byte("second")) {
 		t.Errorf("Get(\"id\") = %q, want %q", got, "second")
-	}
-}
-
-func TestSetReportsFalseWhenFull(t *testing.T) {
-	var p Params
-	for i := 0; i < MaxParams; i++ {
-		p.Set("k"+string(rune('0'+i)), []byte("v"))
-	}
-
-	if p.Set("one-too-many", []byte("v")) {
-		t.Error("Set accepted a new name past MaxParams, want false")
-	}
-	if !p.Set("k0", []byte("replaced")) {
-		t.Error("Set refused to replace an existing name in a full Params, want true")
 	}
 }
 

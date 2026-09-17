@@ -2,6 +2,7 @@ package router
 
 import (
 	"errors"
+	"strconv"
 	"testing"
 )
 
@@ -140,5 +141,65 @@ func TestTreeWorksWithAFuncType(t *testing.T) {
 	}
 	if got := h(); got != "called" {
 		t.Errorf("handler returned %q, want %q", got, "called")
+	}
+}
+
+func TestTreeMaxParamsTracksTheLargestPattern(t *testing.T) {
+	var tr Tree[int]
+	if got := tr.MaxParams(); got != 0 {
+		t.Fatalf("MaxParams() on an empty tree = %d, want 0", got)
+	}
+
+	mustInsert := func(pattern string) {
+		t.Helper()
+		if err := tr.Insert(pattern, 1); err != nil {
+			t.Fatalf("Insert(%q): %v", pattern, err)
+		}
+	}
+
+	mustInsert("/static")
+	mustInsert("/users/:id")
+	mustInsert("/a/:x/b/:y/*rest") // wildcard counts: 3
+	mustInsert("/users/:id/posts") // 1, must not lower the max
+
+	if got := tr.MaxParams(); got != 3 {
+		t.Errorf("MaxParams() = %d, want 3", got)
+	}
+}
+
+// TestTreeMaxParamsIgnoresRejectedPatterns guards the order inside Insert: a
+// pattern that fails must not raise the maximum.
+func TestTreeMaxParamsIgnoresRejectedPatterns(t *testing.T) {
+	var tr Tree[int]
+	if err := tr.Insert("/users/:id", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := tr.Insert("/users/:name/:a/:b", 1); err == nil {
+		t.Fatal("conflicting parameter name was accepted; this test needs a rejected insert")
+	}
+
+	if got := tr.MaxParams(); got != 1 {
+		t.Errorf("MaxParams() = %d after a rejected insert, want 1", got)
+	}
+}
+
+func TestLookupCapturesMoreThanEightParameters(t *testing.T) {
+	var tr Tree[int]
+	pattern, path := "", ""
+	for i := 0; i < 12; i++ {
+		pattern += "/:p" + strconv.Itoa(i)
+		path += "/" + strconv.Itoa(i)
+	}
+	if err := tr.Insert(pattern, 7); err != nil {
+		t.Fatal(err)
+	}
+
+	var p Params
+	h, ok := tr.Lookup([]byte(path), &p)
+	if !ok || h != 7 {
+		t.Fatalf("Lookup(%q) = %d, %v; want 7, true", path, h, ok)
+	}
+	if got := string(p.Get("p11")); got != "11" {
+		t.Errorf("p11 = %q, want %q", got, "11")
 	}
 }

@@ -18,10 +18,6 @@ type Ctx struct {
 	// parameters needs no allocation of its own. This is what ADR-0005's
 	// Lookup(path, *Params) signature exists to make possible, and it is why the
 	// Ctx must be constructed before the lookup runs.
-	//
-	// It costs size: Params is MaxParams fixed slots, so a Ctx is a few hundred
-	// bytes rather than sixteen. M6's pool makes that irrelevant by reusing the
-	// same Ctx across requests. Until then it is one larger allocation, not two.
 	params router.Params
 }
 
