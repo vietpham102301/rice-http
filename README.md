@@ -8,10 +8,12 @@ it. The design decisions are written down in [ADRs](docs/adr/) before they are i
 and each milestone ends with a [retrospective](docs/milestones/) naming what the
 measurements changed.
 
-> **Status: not production ready.** Five of nine milestones are done (M0–M5). There is no
-> context pooling, and `Shutdown` is blunt — it races fasthttp's own shutdown against your
-> context rather than draining in-flight requests against a deadline. The API will change.
-> See the [roadmap](docs/04-roadmap.md).
+> **Status: not production ready.** Six of nine milestones are done (M0–M6). The `Ctx` is
+> pooled and dispatch allocates nothing, which makes the borrow contract real: a `*Ctx` kept
+> past its handler reads another request's data. Build with `-tags ricedebug` (or run
+> `make test-debug`) to turn that into a panic. `Shutdown` is still blunt — it races fasthttp's
+> own shutdown against your context rather than draining in-flight requests against a deadline.
+> The API will change. See the [roadmap](docs/04-roadmap.md).
 
 ## Install
 
@@ -142,28 +144,43 @@ This is the borrow contract, [ADR-0005](docs/adr/0005-context-pooling-and-borrow
 It is why route parameter capture allocates nothing: `Lookup` fills caller-supplied storage
 rather than returning a new slice.
 
+The `*Ctx` itself is borrowed too, and since it comes from a pool, keeping one past its handler
+reads whatever request holds it next. Under `-tags ricedebug` a released `Ctx` is poisoned and
+never reused, so any later call on it panics instead. That build catches misuse of the `*Ctx`;
+it cannot catch a retained `[]byte`, which points into fasthttp's memory rather than rice's.
+
 ## Where it stands, measured
 
-Apple M2 Pro, Go 1.25.6, medians of ten runs. Full data in
+Apple M2 Pro, Go 1.25.6, medians of ten runs, from
+[`bench/results/M6-context-pooling.txt`](bench/results/M6-context-pooling.txt). Full data in
 [`bench/results/`](bench/results/), one file per milestone.
 
 | | ns/op | allocs/op |
 |---|---:|---:|
-| fasthttp, no framework | 11.39 | 0 |
-| rice dispatch, static route, no middleware | 84.01 | 1 |
-| rice dispatch, one middleware | 91.71 | 1 |
-| rice dispatch, five middleware | 92.68 | 1 |
-| rice dispatch, five via nested groups | 93.86 | 1 |
-| tree lookup, one parameter | 90.38 | 1 |
-| tree lookup, 1000 static routes | 114.30 | 1 |
-| build, 1000 routes | 238,840 | 7,503 |
+| fasthttp, no framework | 11.15 | 0 |
+| rice dispatch, static route, no middleware | 33.19 | 0 |
+| rice dispatch, one middleware | 34.27 | 0 |
+| rice dispatch, five middleware | 37.61 | 0 |
+| rice dispatch, five via nested groups | 37.09 | 0 |
+| rice dispatch, parameterised route read with `Param` | 38.03 | 0 |
+| tree lookup, one parameter | 42.19 | 0 |
+| tree lookup, 1000 static routes | 47.69 | 0 |
+| build, 1000 routes | 228,500 | 7,503 |
 
-Two things worth reading off that table. **Five middleware cost the same single allocation
-as none** — the chain is compiled at build time, so the closures are already folded when the
-request arrives; the time cost is roughly 1.1 ns per middleware. And **that one allocation
-is the `Ctx`**, 352 bytes, allocated fresh per request. It is deliberate and it is the whole
-remaining gap: M6 pools it. Everything above 11 ns in the first column is dominated by it,
-which M3 established by bisection rather than by assumption.
+Every request-path row is a zero now. Through M5 each was a 1: the `Ctx`, 352 bytes, allocated
+fresh per request. M6 pools it, and what that is worth is measured with both arms in one
+session rather than across files — `BenchmarkDispatchPooledVsUnpooled` reads **35.94 ns and
+0 allocations pooled against 82.11 ns, 240 bytes and 3 allocations unpooled**. Three, because
+the unpooled arm also pays for the parameter and store slices a pooled `Ctx` keeps.
+
+**Five middleware still cost the same as none** — the chain is compiled at build time, so the
+closures are already folded when the request arrives; 33.19 ns with none against 37.61 ns with
+five, same session.
+
+The `ns/op` column is not comparable with earlier milestones' files: the host OS moved from
+Darwin 25.6.0 to Darwin 27.0.0 between the M5 and M6 recordings, and even benchmarks with no
+rice code on their path moved a few percent. The `allocs/op` column is exact and carries no such
+caveat.
 
 Numbers rice does not yet have: comparisons against Gin, Echo or Fiber. Those are M8, and
 publishing them earlier would mean publishing them from an unfinished framework.
@@ -186,11 +203,16 @@ publishing them earlier would mean publishing them from an unfinished framework.
 ## Development
 
 ```
-make test     # go test ./... -race
-make cover    # coverage, currently 98.9%
-make lint     # go vet
-make bench    # runs the suite and records to bench/results/
+make test        # go test ./... -race
+make test-debug  # the same suite under -tags ricedebug
+make cover       # coverage, currently 98.9%
+make lint        # gofmt and go vet
+make bench       # runs the suite and records to bench/results/
 ```
+
+`make test-debug` is not a duplicate of `make test`: the `ricedebug` build never returns a
+released `Ctx` to the pool, so it is the only run in which a use-after-release panics rather
+than quietly succeeding. CI runs both.
 
 Benchmarks are recorded to a committed file rather than read off a terminal, so a claim in
 these docs can always be traced to the run that produced it.
