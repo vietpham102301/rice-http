@@ -441,3 +441,43 @@ func TestAllocBudgetHTTPErrorReturn(t *testing.T) {
 		app.handle(fctx)
 	})
 }
+
+// storeSink keeps Get's result reachable so the compiler cannot elide the call.
+var storeSink any
+
+func TestAllocBudgetCtxSetPointer(t *testing.T) {
+	c := New().newCtx()
+	v := &struct{ n int }{}
+
+	budget(t, "Ctx.Set with a pointer value", 0, func() {
+		c.resetStore()
+		c.Set("k", v)
+	})
+}
+
+func TestAllocBudgetCtxGet(t *testing.T) {
+	c := New().newCtx()
+	c.Set("k", &struct{ n int }{})
+
+	budget(t, "Ctx.Get", 0, func() {
+		storeSink, _ = c.Get("k")
+	})
+}
+
+// TestAllocBudgetCtxSetString asserts exactly one allocation, and the allocation
+// is not rice's. Converting a non-constant string to any at the call site boxes
+// it; Set itself allocates nothing, as TestAllocBudgetCtxSetPointer shows. The
+// budget is exact rather than an upper bound so that a change to Go's boxing
+// rules shows up here instead of silently changing what the documentation says.
+func TestAllocBudgetCtxSetString(t *testing.T) {
+	c := New().newCtx()
+	s := strconv.Itoa(123456)
+
+	got := testing.AllocsPerRun(1000, func() {
+		c.resetStore()
+		c.Set("k", s)
+	})
+	if got != 1 {
+		t.Errorf("Ctx.Set with a non-constant string allocated %.1f objects per call, want exactly 1 (the caller's boxing)", got)
+	}
+}

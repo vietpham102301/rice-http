@@ -18,7 +18,10 @@ import (
 // quarter of this function's cost; at four objects that reaches a whole
 // allocation and every zero budget fails under make test.
 func (a *App) newCtx() *Ctx {
-	return &Ctx{params: router.MakeParams(a.maxParams)}
+	return &Ctx{
+		params: router.MakeParams(a.maxParams),
+		store:  make([]entry, 0, storeCapacity),
+	}
 }
 
 // acquire takes a Ctx from the pool and binds it to fctx.

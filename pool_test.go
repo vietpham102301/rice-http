@@ -27,6 +27,7 @@ func TestReleaseDropsEveryReference(t *testing.T) {
 	app := New()
 	app.GET("/users/:id", func(c *Ctx) error {
 		retained = c
+		c.Set("k", &struct{}{})
 		return c.String(200, "ok")
 	})
 
@@ -46,6 +47,34 @@ func TestReleaseDropsEveryReference(t *testing.T) {
 	}
 	if n := retained.params.Len(); n != 0 {
 		t.Errorf("released Ctx still holds %d parameters", n)
+	}
+	if n := len(retained.store); n != 0 {
+		t.Errorf("released Ctx still holds %d store entries", n)
+	}
+	// Truncating is not enough: the backing array would still hold the value and
+	// the pool would keep it alive.
+	for i, e := range retained.store[:cap(retained.store)] {
+		if e.key != "" || e.val != nil {
+			t.Errorf("store backing slot %d still holds %+v after release", i, e)
+		}
+	}
+}
+
+// TestThePoolBuildsContextsThroughNewCtx guards the wiring in New. Every other
+// sizing test calls newCtx directly, so a pool.New that built a bare &Ctx{}
+// would pass them all: an undersized Ctx grows once on warm-up and the budgets
+// read 0 afterwards.
+func TestThePoolBuildsContextsThroughNewCtx(t *testing.T) {
+	app := New()
+	app.GET("/a/:p1/:p2", func(c *Ctx) error { return nil })
+
+	c := app.pool.Get().(*Ctx)
+
+	if got := c.params.Cap(); got != 2 {
+		t.Errorf("pooled Ctx params capacity = %d, want 2", got)
+	}
+	if got := cap(c.store); got != storeCapacity {
+		t.Errorf("pooled Ctx store capacity = %d, want %d", got, storeCapacity)
 	}
 }
 

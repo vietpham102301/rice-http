@@ -19,6 +19,9 @@ type Ctx struct {
 	// Lookup(path, *Params) signature exists to make possible, and it is why the
 	// Ctx must be constructed before the lookup runs.
 	params router.Params
+
+	// store backs Set and Get. newCtx pre-sizes it to storeCapacity.
+	store []entry
 }
 
 // reset binds the context to a request, or unbinds it when app and fctx are nil.
@@ -30,6 +33,7 @@ func (c *Ctx) reset(app *App, fctx *fasthttp.RequestCtx) {
 	c.app = app
 	c.fctx = fctx
 	c.params.Reset()
+	c.resetStore()
 }
 
 // RequestCtx exposes the underlying fasthttp context.
