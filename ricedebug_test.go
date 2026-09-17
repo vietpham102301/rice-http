@@ -59,17 +59,40 @@ func TestEveryCtxMethodPanicsAfterRelease(t *testing.T) {
 }
 
 // TestARetainedCtxPanicsEvenAfterAnotherRequest is the sequence ADR-0005's
-// original mechanism missed: a retained Ctx used after a later request has run.
-// With a poisoned Ctx returned to the pool, the second request would un-poison
-// it and this call would return the second request's parameter instead of
-// panicking.
+// original mechanism missed: a Ctx retained from an earlier request, called
+// while a later request still owns it. Under ADR-0005's original mechanism —
+// where reset clears the poison on acquire and a released Ctx goes back to the
+// pool — request 2's acquire would already have un-poisoned this same object
+// before the stale call below runs, so the call would return request 2's
+// parameter ("2") instead of panicking.
+//
+// The stale call has to happen while request 2 is still live. Checking
+// afterwards, once both requests have finished, cannot see the failure: by
+// then, either request 2 reused the same object and its own release re-marked
+// it, or request 2 got a different object and retained still carries request
+// 1's own mark from request 1's release. Either way a post-hoc check passes
+// regardless of whether the mechanism actually protects the live window.
 func TestARetainedCtxPanicsEvenAfterAnotherRequest(t *testing.T) {
 	var retained *Ctx
+	var recovered any
+	var staleResult string
+	secondRequestRan := false
+
 	app := New()
 	app.GET("/users/:id", func(c *Ctx) error {
 		if retained == nil {
 			retained = c
+			return nil
 		}
+
+		// This is request 2, and it still owns c. retained is request 1's Ctx,
+		// called here while request 2 is live — the exact window ADR-0005's
+		// original mechanism missed.
+		secondRequestRan = true
+		func() {
+			defer func() { recovered = recover() }()
+			staleResult = string(retained.Param("id"))
+		}()
 		return nil
 	})
 	app.Build()
@@ -81,12 +104,12 @@ func TestARetainedCtxPanicsEvenAfterAnotherRequest(t *testing.T) {
 		app.handle(fctx)
 	}
 
-	defer func() {
-		if r := recover(); r != errUseAfterRelease {
-			t.Errorf("retained Ctx after a second request: recovered %v, want the use-after-release panic", r)
-		}
-	}()
-	_ = retained.Param("id")
+	if !secondRequestRan {
+		t.Fatal("request 2's handler did not run; the stale call was never attempted")
+	}
+	if recovered != errUseAfterRelease {
+		t.Errorf("stale call on request 1's Ctx while request 2 held it: recovered %v (returned %q), want the use-after-release panic", recovered, staleResult)
+	}
 }
 
 func TestTheDebugBuildNeverReusesAContext(t *testing.T) {

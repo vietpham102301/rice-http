@@ -13,7 +13,7 @@ import (
 
 // This file is excluded from the ricedebug build, which allocates a fresh Ctx
 // per request on purpose: a poisoned Ctx is never returned to the pool. The
-// budget helper itself lives in budget_test.go, unbuilt-tagged, because
+// budget helper itself lives in budget_test.go, untagged, because
 // method_test.go's TestAllocBudgetMethodIndex needs it too and is unaffected by
 // ricedebug.
 
