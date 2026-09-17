@@ -21,12 +21,11 @@ type Ctx struct {
 	params router.Params
 }
 
-// reset rebinds the context to a new request.
+// reset binds the context to a request, or unbinds it when app and fctx are nil.
 //
-// M3 constructs a fresh Ctx per request, so reset is called exactly once per
-// instance. M6 introduces a sync.Pool, at which point reset becomes the point
-// where a recycled Ctx drops every reference to the previous request — which is
-// why it clears params rather than trusting them to be empty.
+// acquire calls it to bind a pooled Ctx and release calls it to unbind one, so
+// it clears everything a previous request could have left behind rather than
+// trusting it to be empty.
 func (c *Ctx) reset(app *App, fctx *fasthttp.RequestCtx) {
 	c.app = app
 	c.fctx = fctx

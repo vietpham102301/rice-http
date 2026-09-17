@@ -13,6 +13,12 @@ import (
 //
 // The response buffers are warmed before measuring, because a live server is
 // warm. Measuring a cold buffer would measure one-time setup, not steady state.
+//
+// Under -race, sync.Pool drops one Put in four, so a pooled dispatch really does
+// allocate a fraction of a Ctx per call there. AllocsPerRun divides integer
+// counts and reports that fraction as 0, while a genuine per-request allocation
+// still reads as at least 1. The zero budgets are meaningful in both modes; see
+// newCtx for why that holds only while newCtx allocates three objects or fewer.
 func budget(t *testing.T, name string, want float64, fn func()) {
 	t.Helper()
 	fn() // warm
@@ -88,11 +94,9 @@ func TestAllocBudgetLookupMiss(t *testing.T) {
 	})
 }
 
-// TestAllocBudgetHandleDispatch pins the "End to end: single handler, unpooled
-// Ctx (M1 baseline)" row in docs/05-performance-model.md. That row previously
-// existed only as a benchmark number, and a benchmark asserts nothing — it can
-// regress silently forever. M2 allocates a Ctx per request on purpose (see
-// app.go), so the budget here is 1, not 0.
+// TestAllocBudgetHandleDispatch pins the headline claim of M6: end-to-end
+// dispatch on a warm server allocates nothing. Until M6 the budget was 1, the
+// unpooled Ctx that M1 recorded as the baseline.
 func TestAllocBudgetHandleDispatch(t *testing.T) {
 	app := New()
 	app.GET("/users", func(c *Ctx) error { return nil })
@@ -107,7 +111,7 @@ func TestAllocBudgetHandleDispatch(t *testing.T) {
 	}
 
 	app.Build()
-	budget(t, "App.handle dispatch (hit)", 1, func() {
+	budget(t, "App.handle dispatch (hit)", 0, func() {
 		app.handle(fctx)
 	})
 }
@@ -278,7 +282,7 @@ func TestAllocBudgetCtxParamString(t *testing.T) {
 }
 
 // TestAllocBudgetHandleDispatchParameterised keeps the end-to-end promise honest
-// for a parameterised route: still exactly one allocation, the Ctx.
+// for a parameterised route: still nothing, now that the Ctx is pooled.
 func TestAllocBudgetHandleDispatchParameterised(t *testing.T) {
 	app := New()
 	app.GET("/users/:id", func(c *Ctx) error { return c.String(200, "ok") })
@@ -293,7 +297,7 @@ func TestAllocBudgetHandleDispatchParameterised(t *testing.T) {
 		t.Fatalf("status = %d, want 200; this budget would be measuring the 404 path", fctx.Response.StatusCode())
 	}
 
-	budget(t, "App.handle on a parameterised route", 1, func() {
+	budget(t, "App.handle on a parameterised route", 0, func() {
 		app.handle(fctx)
 	})
 }
@@ -327,13 +331,13 @@ func TestAllocBudgetDispatchNoMiddleware(t *testing.T) {
 		t.Fatalf("status = %d, want 200; this budget would be measuring the 404 path", fctx.Response.StatusCode())
 	}
 
-	budget(t, "App.handle with no middleware", 1, func() {
+	budget(t, "App.handle with no middleware", 0, func() {
 		app.handle(fctx)
 	})
 }
 
 // TestAllocBudgetDispatchFiveMiddleware is the milestone's central claim as a
-// test: five middleware cost no allocations beyond the one Ctx.
+// test: five middleware cost no allocations at all.
 func TestAllocBudgetDispatchFiveMiddleware(t *testing.T) {
 	app := New()
 	app.Use(countingMW(), countingMW(), countingMW())
@@ -355,7 +359,7 @@ func TestAllocBudgetDispatchFiveMiddleware(t *testing.T) {
 		t.Fatalf("%d middleware ran, want 5; this budget would be measuring a shorter chain than it claims", chainSink)
 	}
 
-	budget(t, "App.handle with five middleware", 1, func() {
+	budget(t, "App.handle with five middleware", 0, func() {
 		app.handle(fctx)
 	})
 }
@@ -400,13 +404,13 @@ func TestAllocBudgetDispatchWithRecover(t *testing.T) {
 	fctx.Request.Header.SetMethod("GET")
 	fctx.Request.SetRequestURI("/ok")
 
-	budget(t, "dispatch with recovery installed", 1, func() {
+	budget(t, "dispatch with recovery installed", 0, func() {
 		app.handle(fctx)
 	})
 }
 
-// TestAllocBudget404 pins D2's claim that a prebuilt ErrNotFound makes a miss
-// cost exactly what a hit costs: one Ctx, nothing for the error.
+// TestAllocBudget404 pins D2 of the M5 design with the pool in place: a miss
+// costs what a hit costs, and both cost nothing.
 func TestAllocBudget404(t *testing.T) {
 	app := New()
 	app.GET("/ok", func(c *Ctx) error { return nil })
@@ -416,14 +420,14 @@ func TestAllocBudget404(t *testing.T) {
 	fctx.Request.Header.SetMethod("GET")
 	fctx.Request.SetRequestURI("/missing")
 
-	budget(t, "404 through the funnel", 1, func() {
+	budget(t, "404 through the funnel", 0, func() {
 		app.handle(fctx)
 	})
 }
 
 // TestAllocBudgetHTTPErrorReturn records the cost of a handler constructing an
-// error: the Ctx plus the HTTPError. It is 2 and it is meant to be 2 — a
-// budget that documents a cost rather than forbidding one.
+// error: the HTTPError, and nothing else now that the Ctx is pooled. It is 1 and
+// it is meant to be 1 — a budget that documents a cost rather than forbidding one.
 func TestAllocBudgetHTTPErrorReturn(t *testing.T) {
 	app := New()
 	app.GET("/bad", func(c *Ctx) error { return NewHTTPError(400, "bad request") })
@@ -433,7 +437,7 @@ func TestAllocBudgetHTTPErrorReturn(t *testing.T) {
 	fctx.Request.Header.SetMethod("GET")
 	fctx.Request.SetRequestURI("/bad")
 
-	budget(t, "handler returning a fresh HTTPError", 2, func() {
+	budget(t, "handler returning a fresh HTTPError", 1, func() {
 		app.handle(fctx)
 	})
 }

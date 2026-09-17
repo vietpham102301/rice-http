@@ -70,6 +70,19 @@ type App struct {
 	// a serving App can be reconfigured.
 	errorHandler ErrorHandler
 
+	// pool holds idle contexts. It is created in New, not Build, because the
+	// dispatch path is reachable before Build: package tests call handle on unbuilt
+	// Apps throughout. See the M6 design doc, D1.
+	pool sync.Pool
+
+	// maxParams is the largest parameter count of any registered route. newCtx
+	// sizes parameter storage from it.
+	//
+	// It is written during registration and read by newCtx while serving, with no
+	// lock, on the same argument as built above: registration is a
+	// single-goroutine phase that ends before serving begins.
+	maxParams int
+
 	srv *fasthttp.Server
 
 	mu sync.Mutex
@@ -88,6 +101,7 @@ type route struct {
 // New creates an App.
 func New(opts ...Option) *App {
 	a := &App{errorHandler: DefaultErrorHandler}
+	a.pool.New = func() any { return a.newCtx() }
 	a.srv = &fasthttp.Server{
 		Handler: a.handle,
 		Name:    "rice",
@@ -111,21 +125,9 @@ func (a *App) FasthttpHandler() fasthttp.RequestHandler {
 
 // handle is the dispatch path: one request in, one response out.
 func (a *App) handle(fctx *fasthttp.RequestCtx) {
-	// The Ctx is constructed before the lookup, which reverses the ordering M2
-	// chose. It is not a regression walked back: the lookup fills a *Params, and
-	// Params lives on the Ctx so that capturing parameters costs no allocation
-	// of its own. That is ADR-0005's design, and the price of it is that the
-	// borrowed handle must exist before anything can fill it.
-	//
-	// The consequence is that a miss now pays for a Ctx again, and the
-	// zero-allocation 404 path M2 measured is gone. M2 predicted M5's
-	// configurable ErrorHandler would end it; M3 ended it first, for a different
-	// reason. That is recorded in ADR-0005.
-	c := &Ctx{}
-	c.reset(a, fctx)
-
-	// M3 allocates a Ctx per request on purpose. This is the baseline M6's
-	// sync.Pool is measured against. Do not optimise it here.
+	// The Ctx is acquired before the lookup because the lookup fills c.params in
+	// place. That ordering is ADR-0005's design; see the Ctx.params comment.
+	c := a.acquire(fctx)
 
 	// fasthttp has no panic hook. Its only recover() on the request path guards
 	// body-stream writes — a second one exists in fasthttpadaptor/adaptor.go,
@@ -135,12 +137,21 @@ func (a *App) handle(fctx *fasthttp.RequestCtx) {
 	// behaviour rather than opt-in middleware, which is a deliberate exception
 	// to design principle 7 — see ADR-0008.
 	//
-	// The closure is written out rather than expressed as defer a.recover(c)
-	// because this is the shape that was measured: 1 alloc/op, unchanged.
+	// release shares this closure rather than taking a defer of its own, so the
+	// recovery's measured cost remains the only defer cost on the path. It runs
+	// after the ErrorHandler, which may still use c, and it runs whether the
+	// handler returned, errored or panicked — the property that makes the pool
+	// safe.
+	//
+	// One hole is accepted. If respond panicked inside callErrorHandler's
+	// last-resort recover, nothing would catch it and release would not run.
+	// That is unreachable today (see callErrorHandler), and if it became
+	// reachable the cost is one Ctx lost to the pool, not a corrupted one.
 	defer func() {
 		if r := recover(); r != nil {
 			a.callErrorHandler(c, &PanicError{Value: r, Stack: debug.Stack()})
 		}
+		a.release(c)
 	}()
 
 	h, ok := a.lookup(fctx.Method(), fctx.Path(), &c.params)
