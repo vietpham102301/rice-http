@@ -165,7 +165,7 @@ Apple M2 Pro, Go 1.25.6, medians of ten runs, from
 | rice dispatch, parameterised route read with `Param` | 38.03 | 0 |
 | tree lookup, one parameter | 42.19 | 0 |
 | tree lookup, 1000 static routes | 47.69 | 0 |
-| build, 1000 routes | 228,500 | 7,503 |
+| build, 1000 routes | 228,496 | 7,503 |
 
 Every request-path row is a zero now. Through M5 each was a 1: the `Ctx`, 352 bytes, allocated
 fresh per request. M6 pools it, and what that is worth is measured with both arms in one
@@ -173,9 +173,10 @@ session rather than across files — `BenchmarkDispatchPooledVsUnpooled` reads *
 0 allocations pooled against 82.11 ns, 240 bytes and 3 allocations unpooled**. Three, because
 the unpooled arm also pays for the parameter and store slices a pooled `Ctx` keeps.
 
-**Five middleware still cost the same as none** — the chain is compiled at build time, so the
-closures are already folded when the request arrives; 33.19 ns with none against 37.61 ns with
-five, same session.
+**Five middleware still cost the same allocations as none** — zero — because the chain is compiled
+at build time, so the closures are already folded when the request arrives. They are not free in
+time: 33.19 ns with none against 37.61 ns with five in the same session, about 0.9 ns per
+middleware.
 
 The `ns/op` column is not comparable with earlier milestones' files: the host OS moved from
 Darwin 25.6.0 to Darwin 27.0.0 between the M5 and M6 recordings, and even benchmarks with no

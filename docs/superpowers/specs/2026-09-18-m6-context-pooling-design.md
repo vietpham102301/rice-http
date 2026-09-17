@@ -175,7 +175,7 @@ says whose allocation the last one is.
 Under `-tags ricedebug`, `release` poisons the `Ctx` and drops it; `acquire` always builds a
 fresh one. A poisoned `Ctx` therefore stays poisoned for as long as anything references it,
 and every use after release panics — deterministically, regardless of load. The price is a
-fresh `Ctx` per request in debug builds only — three objects through `newCtx`, not one.
+fresh `Ctx` per request in debug builds only — up to three objects through `newCtx`, not one.
 
 **Corrected during M6's documentation task.** This paragraph originally read "one allocation per
 request in debug builds only". That is wrong by this milestone's own counting: with nothing ever
@@ -276,7 +276,7 @@ New build tag: `ricedebug`.
 | `Ctx.Set` with a pointer value | 0 | TARGET M6 |
 | `Ctx.Get` | 0 | TARGET M6 |
 | `Ctx.Set` with a non-constant string (caller's boxing) | 1 | TARGET M6 |
-| Any dispatch under `-tags ricedebug` | 3 more than release (`newCtx`'s three objects) | documented, not asserted |
+| Any dispatch under `-tags ricedebug` | `newCtx`'s objects more than release: 3 with a parameterised route, 2 static-only | documented, not asserted |
 
 The existing `TestAllocBudgetHandleDispatch` and `TestAllocBudgetHandleDispatchParameterised`
 drop from 1 to 0; `TestAllocBudget404` drops from 1 to 0.
@@ -287,11 +287,27 @@ sends the next `Get` to `newCtx`, which allocates the `Ctx`, its parameter slice
 store slice — at most three objects — so a zero-allocation dispatch averages at most 0.75
 allocations per call under `-race`. `testing.AllocsPerRun` divides integer counts, so this
 reads as 0 and the budgets pass, while a genuine per-request allocation adds a full 1 and
-fails. The margin is real but thin: a fourth allocation in `newCtx` would push the average
-to 1.0 and break every zero budget under `-race`, which is a reason `newCtx` must stay at
-three. The comment on
+fails. The margin is real but thin: a fourth allocation in `newCtx` erodes it, which is a reason
+`newCtx` must stay at three. The comment on
 the budget helper says so, because a reader who sees a pool-dependent zero pass under `-race`
 will otherwise suspect the test is not measuring anything.
+
+**Corrected after M6's whole-branch review.** Two claims in the paragraph above were wrong, and
+both were measured on the finished branch at `GOMAXPROCS=1` over 200,000 iterations, reading
+`runtime.MemStats` rather than `AllocsPerRun`:
+
+- "at most three objects … averages at most 0.75" holds only for an App with a parameterised
+  route. `MakeParams(0)` is `make([]Param, 0, 0)`, which Go serves from `runtime.zerobase` without
+  a malloc, so a static-only App's `newCtx` allocates **two** objects and its dispatch averages
+  **0.4982**; a parameterised App's allocates three and averages **0.7492**.
+- "a fourth allocation … would break every zero budget under `-race`" is false. Injected, the
+  static figure reaches 0.7535, which integer division still reports as 0, so
+  `TestAllocBudgetHandleDispatch` passes; the parameterised figure reaches 1.0017, on the boundary,
+  and three consecutive runs of `TestAllocBudgetHandleDispatchParameterised` gave fail, fail, pass.
+
+The ceiling is therefore enforced by `TestNewCtxStaysWithinThreeAllocations`, which measures
+`newCtx` directly and needs no race detector, rather than by the `-race` margin this paragraph
+relied on.
 
 `alloc_test.go` gains `//go:build !ricedebug`: the debug build allocates on purpose.
 

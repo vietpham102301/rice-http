@@ -70,13 +70,23 @@ Measured values come from the results files in `bench/results/`, most recently
 `alloc_test.go`. Re-run `make bench-record` on your own machine before comparing.
 
 Two notes on reading the M6 file. `alloc_test.go` is built `!ricedebug`, because the debug
-build allocates a fresh `Ctx` per request on purpose — three objects through `newCtx`, since
-nothing is ever returned to the pool there. That is D5's price, documented rather than
+build allocates a fresh `Ctx` per request on purpose — up to three objects through `newCtx`,
+since nothing is ever returned to the pool there. That is D5's price, documented rather than
 asserted. And `make test` runs with `-race`, where `sync.Pool` deliberately drops one `Put` in
-four; each drop sends the next `Get` to `newCtx`, which allocates three objects, so a
-zero-allocation dispatch averages at most 0.75 there. `AllocsPerRun` reports that as 0 while a
-genuine per-request allocation still reads as 1, which is why a zero budget means something
-under the race detector — and why `newCtx` must stay at three allocations.
+four; each drop sends the next `Get` to `newCtx`, so a zero-allocation dispatch really allocates
+a fraction of a `Ctx` per call there. Measured on this package: **0.75 per call for a route with
+a parameter, 0.50 for a static one** (0.7492 and 0.4982 exactly; the M6 retrospective records the
+method). The asymmetry is `newCtx` — three objects when the App has
+a parameterised route, two when it does not, because `MakeParams(0)` is a zero-capacity slice and
+Go serves that from `runtime.zerobase` without a malloc. `AllocsPerRun` divides integer counts and
+reports either fraction as 0, while a genuine per-request allocation adds a full 1 and fails. That
+is why a zero budget means something under the race detector.
+
+It is *not* why `newCtx` stays at three objects. A fourth takes the parameterised figure to about
+1.0 — the boundary, so those budgets go red on some runs and green on others, and the static
+budgets keep passing outright. Measured, with a fourth allocation injected: the parameterised
+dispatch budget failed on two runs out of three and the static one on none.
+`TestNewCtxStaysWithinThreeAllocations` is the guard, and it needs no race detector to fail.
 
 Raising a budget is a design change. It requires a note in the pull request explaining what
 was bought with the allocation, and if the reasoning is interesting, an ADR.

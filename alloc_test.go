@@ -300,6 +300,49 @@ func TestAllocBudgetHandleDispatchParameterised(t *testing.T) {
 	})
 }
 
+// TestAllocBudgetPoolAcquireRelease pins the pool's own round trip, which
+// docs/05-performance-model.md lists as a budgeted operation. The dispatch
+// budgets above cover it in passing; this one measures it with nothing else in
+// the frame, so a regression in acquire or release is attributed to acquire or
+// release.
+func TestAllocBudgetPoolAcquireRelease(t *testing.T) {
+	app := New()
+	app.GET("/users/:id", func(c *Ctx) error { return nil })
+
+	fctx := &fasthttp.RequestCtx{}
+	fctx.Request.Header.SetMethod("GET")
+	fctx.Request.SetRequestURI("/users/42")
+
+	budget(t, "pool acquire + release", 0, func() {
+		app.release(app.acquire(fctx))
+	})
+}
+
+// TestNewCtxStaysWithinThreeAllocations guards the ceiling the zero budgets in
+// this file depend on under -race.
+//
+// In race builds sync.Pool drops one Put in four, so each drop sends the next
+// acquire to newCtx and a nominally zero-allocation dispatch really averages a
+// fraction of newCtx's cost. At three objects that fraction is about 0.75 for an
+// App with a parameterised route, which AllocsPerRun's integer division reports
+// as 0; a fourth object pushes it to roughly 1.0, on the boundary, and the
+// parameterised budget starts failing at random. See budget_test.go.
+//
+// That ceiling was a comment on newCtx for the whole milestone, and a comment is
+// not a guard: nothing failed when a fourth allocation was added. This test is
+// the guard. It uses a three-parameter route because newCtx allocates the
+// parameter slice only when there is a parameter to hold.
+func TestNewCtxStaysWithinThreeAllocations(t *testing.T) {
+	app := New()
+	app.GET("/a/:x/:y/:z", func(c *Ctx) error { return nil })
+
+	var sink *Ctx
+	if got := testing.AllocsPerRun(1000, func() { sink = app.newCtx() }); got > 3 {
+		t.Errorf("newCtx allocated %.0f objects, budget is 3; see the -race note in budget_test.go", got)
+	}
+	_ = sink
+}
+
 // chainSink counts middleware invocations. It is a package-level variable so the
 // compiler cannot discard the increments as dead code, which would let these
 // budgets measure a chain that was optimised away.

@@ -43,7 +43,8 @@ the pool in both builds under `-race`. ADR-0005 is corrected in place. Documente
    reused object are the same pointer. Found by reading the design, five milestones after the ADR
    was accepted, and not by anyone running the framework in anger. The debug build now drops
    poisoned contexts instead of pooling them, which costs a fresh `Ctx` per request there —
-   three objects through `newCtx`, the same count the unpooled benchmark arm reports.
+   up to three objects through `newCtx` — the same count the unpooled benchmark arm reports, and
+   two rather than three for an App with no parameterised route.
 
 2. *The plan's own test could not fail on its own fault.* `TestARetainedCtxPanicsEvenAfterAnotherRequest`
    was written from the argument in point 1, and Task 4's injection — return the poisoned `Ctx` to
@@ -66,14 +67,22 @@ the pool in both builds under `-race`. ADR-0005 is corrected in place. Documente
    or backed by a direct capacity assertion — which is why `Params.Cap()` exists — and the
    injections confirmed the replacements go red where the originals did not.
 
-4. *A test-harness detail became a design constraint.* `make test` runs with `-race`, where
-   `sync.Pool.Put` deliberately drops one object in four; each drop sends the next `Get` to
-   `newCtx`, which allocates three objects, so a zero-allocation dispatch really averages up to
-   0.75 there. `AllocsPerRun` divides integer malloc counts, so that reads as 0 while a genuine
-   per-request allocation still reads as 1. A *fourth* allocation in `newCtx` would push the
-   average to 1.0 and break every zero budget under `make test` while leaving them green under
-   plain `go test`. Nothing in the framework wants three rather than four; the measuring apparatus
-   does, and both `newCtx` and the `budget` helper now say so.
+4. *A test-harness detail became a design constraint, and the constraint as first written was
+   wrong.* `make test` runs with `-race`, where `sync.Pool.Put` deliberately drops one object in
+   four; each drop sends the next `Get` to `newCtx`, so a zero-allocation dispatch really allocates
+   a fraction of a `Ctx` there. Measured at `GOMAXPROCS=1` over 200,000 iterations: **0.7492 per
+   call for a parameterised route, 0.4982 for a static one**, because `newCtx` allocates three
+   objects in the first case and two in the second — `MakeParams(0)` is a zero-capacity slice and
+   Go serves it from `runtime.zerobase` with no malloc. `AllocsPerRun` divides integer counts, so
+   both read as 0 while a genuine per-request allocation adds a full 1 and fails. Every version of
+   this milestone's docs and comments up to the final review then added that a *fourth* allocation
+   in `newCtx` "would break every zero budget under `make test`". It would not: injected, the
+   static figure reaches 0.7535 and still reads 0, and the parameterised one reaches 1.0017, close
+   enough to the boundary that three consecutive runs gave fail, fail, pass. The margin is real and
+   the ceiling matters, but no existing test enforced it —
+   `TestNewCtxStaysWithinThreeAllocations` now measures `newCtx` directly and fails
+   deterministically without the race detector. A comment is not a guard, which is the second time
+   this milestone learned that.
 
 **Measured:** What pooling saves, both arms in one session so no cross-session drift is in the
 number (`BenchmarkDispatchPooledVsUnpooled`, `bench/results/M6-context-pooling.txt`):

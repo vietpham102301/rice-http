@@ -65,9 +65,10 @@ pool. If it does, the mechanism fails at exactly the moment it is needed:
 A generation counter cannot rescue it, because the code holding the stale pointer has no
 generation of its own to compare against — the stale pointer and the reused object are the same
 pointer. D5 replaced the mechanism: under `ricedebug`, `release` marks the `Ctx` and drops it, and
-`acquire` always builds a fresh one. The price is three allocations per request in that build —
-the debug build *is* the unpooled arm measured below, and `newCtx` makes three objects: the
-`Ctx`, its parameter slice and its store slice. ADR-0005 is corrected in place.
+`acquire` always builds a fresh one. The price is up to three allocations per request in that
+build — the debug build *is* the unpooled arm measured below, and `newCtx` makes three objects for
+an App with a parameterised route and two without one (see the next section). ADR-0005 is
+corrected in place.
 
 This was found while reading the design, not in production, which is the cheapest place to find
 it and also the reason it is worth recording: a documented safety mechanism sat in an accepted
@@ -82,18 +83,44 @@ took two attempts to write — see the first entry under "What surprised me".
 ### The `-race` interaction with `sync.Pool`, and the three-object ceiling on `newCtx`
 
 `make test` runs with the race detector, and in race builds `sync.Pool.Put` deliberately drops
-one object in four. Each drop sends the next `Get` to `newCtx`, which allocates three objects: the
-`Ctx`, its parameter slice, its store slice. So a dispatch that allocates nothing in a release
-build really does allocate an average of at most 0.75 objects per call under `-race`.
+one object in four. Each drop sends the next `Get` to `newCtx`, so a dispatch that allocates
+nothing in a release build really does allocate a fraction of a `Ctx` per call under `-race`.
+Measured on this checkout with `GOMAXPROCS=1` over 200,000 iterations, reading
+`runtime.MemStats.Mallocs` directly rather than through `AllocsPerRun`:
 
-`testing.AllocsPerRun` divides integer malloc counts before converting to float, so 0.75 reads as
-0 and the zero budgets pass, while a genuine per-request allocation adds a full 1 and fails. The
-margin is real but thin, and it is one-sided: a *fourth* allocation in `newCtx` would push the
-average to 1.0 and break every zero budget under `make test` while leaving them green under plain
-`go test`. That makes "`newCtx` allocates at most three objects" a design constraint rather than
-an implementation detail, imposed by the test harness rather than by the framework, and it is
-written on `newCtx` and on the `budget` helper so that a future reader who adds a fourth knows
-what they broke and why the failure looks like a race-detector flake.
+| App | `newCtx` | `handle` under `-race` |
+| --- | ---: | ---: |
+| static route only | 2 | 0.4982 |
+| `/users/:id` | 3 | 0.7492 |
+
+`newCtx` allocates three objects — the `Ctx`, its parameter slice, its store slice — only when the
+App has a parameterised route. For a static-only App `MakeParams(0)` is `make([]Param, 0, 0)`, and
+Go serves a zero-size allocation from `runtime.zerobase` without a malloc, so it allocates two.
+`testing.AllocsPerRun` divides integer malloc counts before converting to float, so both fractions
+read as 0 and the zero budgets pass, while a genuine per-request allocation adds a full 1 and
+fails. That half holds.
+
+**The design constraint this milestone wrote down did not.** Until the final review, `newCtx`, the
+`budget` helper, the performance model, this file and the journal all said that a *fourth*
+allocation in `newCtx` would push the average to 1.0 and break every zero budget under
+`make test`. Measured with a fourth allocation injected, the static-only figure goes to 0.7535 —
+still 0 after integer division, so `TestAllocBudgetHandleDispatch` passes — and the parameterised
+figure to 1.0017, which is the boundary, so it is decided by noise: across three consecutive runs
+`TestAllocBudgetHandleDispatchParameterised` failed, failed, then passed. The claim was one-sided
+in the wrong direction. It described a certain failure where the truth is "no failure for a static
+App, a coin flip for a parameterised one".
+
+So the ceiling is real — a fourth object does erode the margin the zero budgets rely on — but
+nothing enforced it. That is the shape of defect this project keeps finding: a comment asserting a
+property with no test behind it, and in this case the comment was also wrong about what the
+property protects. `TestNewCtxStaysWithinThreeAllocations` now measures `newCtx` directly and goes
+red deterministically, with no race detector involved:
+
+```
+$ go test . -run TestNewCtxStaysWithinThreeAllocations -count=1 -v
+    alloc_test.go:341: newCtx allocated 4 objects, budget is 3; see the -race note in budget_test.go
+--- FAIL: TestNewCtxStaysWithinThreeAllocations (0.00s)
+```
 
 ### Why `Params` appends instead of being hard-sized
 
@@ -300,6 +327,11 @@ the finding. Four this milestone:
    `TestErrorHandlerReceivesALiveCtx`'s `ErrorHandler` called `c.Path()` on an unbound `Ctx` while
    the runtime was still unwinding. `go test` still exits non-zero, so CI would catch it. Recorded
    because "the guard went red" and "the guard reported what was wrong" are not the same thing.
+   Task 5's shared-`Ctx` injection crashed the same way, in `respond` under
+   `callErrorHandler.func1`, and both crashes have one cause: D2's accepted hole, the last-resort
+   `respond` inside `callErrorHandler`'s own recover, which re-panics when `fctx` is nil. Two of
+   this milestone's guards therefore report by killing the binary rather than by failing their own
+   assertion, and that is the hole's only observed consequence so far.
 
 Task 5's two injections both failed loudly under `-race` — data races reported at `pool.go`'s
 `release`, and, for a package-level shared `Ctx`, races in `reset`, `Set` and fasthttp's own

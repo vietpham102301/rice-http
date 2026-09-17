@@ -13,10 +13,17 @@ import (
 // before that is not, and grows on its first oversized capture — see the M6
 // design doc, D3.
 //
-// It must allocate no more than three objects. Under -race, sync.Pool drops one
-// Put in four, so every dispatch budget of zero in alloc_test.go absorbs a
-// quarter of this function's cost; at four objects that reaches a whole
-// allocation and every zero budget fails under make test.
+// It must allocate no more than three objects, which
+// TestNewCtxStaysWithinThreeAllocations pins. Three is the count for an App with
+// a parameterised route; a static-only App allocates two, because MakeParams(0)
+// is a zero-capacity slice and costs no malloc. Under -race, sync.Pool drops one
+// Put in four, so each zero dispatch budget in alloc_test.go absorbs a quarter of
+// this function's cost: measured, 0.75 per call for a parameterised route and
+// 0.50 for a static one, both of which AllocsPerRun's integer division reports as
+// 0. A fourth object here takes the parameterised figure to about 1.0 — on the
+// boundary, so those budgets fail intermittently rather than reliably, and the
+// static ones do not fail at all. That is why the ceiling is a test and not this
+// comment.
 func (a *App) newCtx() *Ctx {
 	return &Ctx{
 		params: router.MakeParams(a.maxParams),
