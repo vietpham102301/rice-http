@@ -173,3 +173,41 @@ func TestHookRegistrationPanics(t *testing.T) {
 		}
 	}
 }
+
+// TestTimeoutOptionsReachTheServer checks each option sets its fasthttp field.
+// WriteTimeout is only checked here: an end-to-end slow reader is flaky on
+// loopback, where socket buffers absorb the whole response.
+func TestTimeoutOptionsReachTheServer(t *testing.T) {
+	a := New(
+		WithReadTimeout(1*time.Second),
+		WithWriteTimeout(2*time.Second),
+		WithIdleTimeout(3*time.Second),
+	)
+	if a.srv.ReadTimeout != 1*time.Second {
+		t.Errorf("ReadTimeout = %v, want 1s", a.srv.ReadTimeout)
+	}
+	if a.srv.WriteTimeout != 2*time.Second {
+		t.Errorf("WriteTimeout = %v, want 2s", a.srv.WriteTimeout)
+	}
+	if a.srv.IdleTimeout != 3*time.Second {
+		t.Errorf("IdleTimeout = %v, want 3s", a.srv.IdleTimeout)
+	}
+
+	if d := New(); d.srv.ReadTimeout != 0 || d.srv.WriteTimeout != 0 || d.srv.IdleTimeout != 0 {
+		t.Error("an App without timeout options has a non-zero timeout; the default must stay unlimited")
+	}
+}
+
+func TestTimeoutOptionsPanicOnNegativeDurations(t *testing.T) {
+	cases := map[string]func(){
+		"WithReadTimeout(-1)":  func() { WithReadTimeout(-1) },
+		"WithWriteTimeout(-1)": func() { WithWriteTimeout(-1) },
+		"WithIdleTimeout(-1)":  func() { WithIdleTimeout(-1) },
+	}
+	for name, fn := range cases {
+		v := mustPanic(t, name, fn)
+		if s, ok := v.(string); !ok || s[:6] != "rice: " {
+			t.Errorf("%s panicked with %v, want a string starting %q", name, v, "rice: ")
+		}
+	}
+}

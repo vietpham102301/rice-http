@@ -704,3 +704,66 @@ func TestShutdownDuringOnStartStopsServe(t *testing.T) {
 		t.Errorf("Addr() = %q, want empty: Serve published a listener after Shutdown", app.Addr())
 	}
 }
+
+// TestReadTimeoutDisconnectsAStalledClient sends half a request line and stops.
+func TestReadTimeoutDisconnectsAStalledClient(t *testing.T) {
+	app := rice.New(rice.WithReadTimeout(100 * time.Millisecond))
+	app.GET("/", func(c *rice.Ctx) error { return c.String(200, "up") })
+	addr, _ := serve(t, app)
+	t.Cleanup(func() { _ = app.Shutdown(context.Background()) })
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	fmt.Fprint(conn, "GET / HTTP/1.1\r\n")
+
+	start := time.Now()
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, err = io.ReadAll(conn)
+
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		t.Fatal("a stalled client was still connected after 2s with a 100ms ReadTimeout")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("the stalled client was disconnected after %v, want about 100ms", elapsed)
+	}
+}
+
+// TestIdleTimeoutClosesAnIdleKeepAliveConnection completes one request and then
+// leaves the connection idle.
+func TestIdleTimeoutClosesAnIdleKeepAliveConnection(t *testing.T) {
+	app := rice.New(rice.WithIdleTimeout(100 * time.Millisecond))
+	app.GET("/", func(c *rice.Ctx) error { return c.String(200, "up") })
+	addr, _ := serve(t, app)
+	t.Cleanup(func() { _ = app.Shutdown(context.Background()) })
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	br := bufio.NewReader(conn)
+
+	fmt.Fprint(conn, "GET / HTTP/1.1\r\nHost: rice\r\n\r\n")
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil {
+		t.Fatalf("reading the response: %v", err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+
+	start := time.Now()
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, err = br.ReadByte()
+
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		t.Fatal("an idle keep-alive connection was still open after 2s with a 100ms IdleTimeout")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("the idle connection was closed after %v, want about 100ms", elapsed)
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"net"
 	"runtime/debug"
 	"sync"
+	"time"
 
 	"github.com/valyala/fasthttp"
 
@@ -15,7 +16,7 @@ import (
 // Option configures an App at construction time.
 //
 // Configuration happens here rather than through setters so that a serving App
-// cannot be reconfigured underneath a request. M7 adds server timeouts.
+// cannot be reconfigured underneath a request.
 type Option func(*App)
 
 // WithErrorHandler replaces the ErrorHandler an App uses for every failure:
@@ -28,6 +29,35 @@ func WithErrorHandler(h ErrorHandler) Option {
 		panic("rice: WithErrorHandler: handler is nil")
 	}
 	return func(a *App) { a.errorHandler = h }
+}
+
+// WithReadTimeout limits how long the server waits to read a full request,
+// including its body. Zero, the default, means no limit. Set it in production:
+// without it a client that sends half a request holds its connection forever.
+func WithReadTimeout(d time.Duration) Option {
+	if d < 0 {
+		panic("rice: WithReadTimeout: duration is negative")
+	}
+	return func(a *App) { a.srv.ReadTimeout = d }
+}
+
+// WithWriteTimeout limits how long the server spends writing a response. The
+// clock starts after the handler returns. Zero, the default, means no limit.
+func WithWriteTimeout(d time.Duration) Option {
+	if d < 0 {
+		panic("rice: WithWriteTimeout: duration is negative")
+	}
+	return func(a *App) { a.srv.WriteTimeout = d }
+}
+
+// WithIdleTimeout limits how long a keep-alive connection may sit idle between
+// requests. Zero, the default, falls back to the read timeout, and so means no
+// limit when that is unset too.
+func WithIdleTimeout(d time.Duration) Option {
+	if d < 0 {
+		panic("rice: WithIdleTimeout: duration is negative")
+	}
+	return func(a *App) { a.srv.IdleTimeout = d }
 }
 
 // App is the root of a rice application. It owns the routes, the fasthttp
