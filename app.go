@@ -1,6 +1,7 @@
 package rice
 
 import (
+	"context"
 	"log"
 	"net"
 	"runtime/debug"
@@ -105,6 +106,15 @@ type App struct {
 	// forceClosed is set by the sweep. A connection reported open after it was
 	// accepted before the listener closed, and is closed on arrival.
 	forceClosed bool
+
+	// onStart and onShutdown are the lifecycle hooks, in registration order.
+	// They are written during registration and read by Serve and Shutdown with
+	// no lock, on the same argument as built: registration ends before serving.
+	onStart    []func() error
+	onShutdown []func(context.Context) error
+
+	// shutdownOnce makes the OnShutdown hooks run on the first Shutdown only.
+	shutdownOnce sync.Once
 }
 
 // route is one registration, recorded for Build to compile.

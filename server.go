@@ -37,9 +37,27 @@ func (a *App) Run(addr string) error {
 //
 // An App serves once. If Shutdown has already been called, Serve closes ln and
 // returns nil without serving.
+//
+// OnStart hooks run first, before any connection is accepted. If one fails,
+// Serve closes ln and returns its error.
 func (a *App) Serve(ln net.Listener) error {
 	a.Build()
 
+	a.mu.Lock()
+	closed := a.closed
+	a.mu.Unlock()
+	if closed {
+		_ = ln.Close()
+		return nil
+	}
+
+	if err := a.runStart(); err != nil {
+		_ = ln.Close()
+		return err
+	}
+
+	// Shutdown may have run while the hooks did. Publishing ln and checking
+	// closed under one lock is what lets Shutdown find it.
 	a.mu.Lock()
 	if a.closed {
 		a.mu.Unlock()
@@ -70,6 +88,9 @@ func (a *App) Addr() string {
 // The drain is fasthttp's: it closes idle keep-alive connections and polls for
 // the rest every 100ms, so Shutdown may return up to that long after the last
 // request finished.
+//
+// OnShutdown hooks then run, after the drain; their errors are joined with the
+// drain's into the result. See OnShutdown.
 func (a *App) Shutdown(ctx context.Context) error {
 	a.mu.Lock()
 	a.closed = true
@@ -90,5 +111,10 @@ func (a *App) Shutdown(ctx context.Context) error {
 	if ln != nil {
 		_ = ln.Close()
 	}
-	return err
+
+	hookErrs := a.runShutdown(ctx)
+	if len(hookErrs) == 0 {
+		return err
+	}
+	return errors.Join(append([]error{err}, hookErrs...)...)
 }

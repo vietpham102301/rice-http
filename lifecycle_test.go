@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -314,5 +315,257 @@ func TestForceCloseUnderConcurrentLoad(t *testing.T) {
 	}
 	if err := within(t, 2*time.Second, "Serve returning", errCh); err != nil {
 		t.Errorf("Serve returned %v, want nil", err)
+	}
+}
+
+// recorder collects hook and handler events in order, from any goroutine.
+type recorder struct {
+	mu     sync.Mutex
+	events []string
+}
+
+func (r *recorder) add(e string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, e)
+}
+
+func (r *recorder) get() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.events...)
+}
+
+func equalEvents(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func TestOnStartHooksRunInOrderBeforeTheFirstRequest(t *testing.T) {
+	var rec recorder
+	app := rice.New()
+	app.OnStart(func() error { rec.add("start 1"); return nil })
+	app.OnStart(func() error { rec.add("start 2"); return nil })
+	app.GET("/", func(c *rice.Ctx) error { rec.add("request"); return c.String(200, "up") })
+
+	addr, _ := serve(t, app)
+	t.Cleanup(func() { _ = app.Shutdown(context.Background()) })
+	get(t, addr, "/")
+
+	if got, want := rec.get(), []string{"start 1", "start 2", "request"}; !equalEvents(got, want) {
+		t.Errorf("events = %v, want %v", got, want)
+	}
+}
+
+func TestAnOnStartErrorStopsServeAndFreesThePort(t *testing.T) {
+	errBoom := errors.New("boom")
+	var laterRan atomic.Bool
+
+	app := rice.New()
+	app.OnStart(func() error { return errBoom })
+	app.OnStart(func() error { laterRan.Store(true); return nil })
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := ln.Addr().String()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- app.Serve(ln) }()
+
+	if err := within(t, 2*time.Second, "Serve returning", errCh); !errors.Is(err, errBoom) {
+		t.Errorf("Serve returned %v, want the OnStart error", err)
+	}
+	if laterRan.Load() {
+		t.Error("an OnStart hook ran after an earlier one failed")
+	}
+	if app.Addr() != "" {
+		t.Errorf("Addr() = %q after a failed start, want empty", app.Addr())
+	}
+
+	again, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Fatalf("the port is still held after a failed start: %v", err)
+	}
+	_ = again.Close()
+}
+
+func TestOnShutdownHooksRunInReverseAfterTheDrain(t *testing.T) {
+	type ctxKey struct{}
+	var rec recorder
+	var handlerDone atomic.Bool
+	release := make(chan struct{})
+	inFlight := make(chan struct{})
+
+	app := rice.New()
+	app.GET("/slow", func(c *rice.Ctx) error {
+		close(inFlight)
+		<-release
+		handlerDone.Store(true)
+		return c.String(200, "done")
+	})
+	for _, name := range []string{"hook 1", "hook 2", "hook 3"} {
+		app.OnShutdown(func(ctx context.Context) error {
+			if !handlerDone.Load() {
+				rec.add(name + " before the drain")
+			}
+			if ctx.Value(ctxKey{}) != "shutdown ctx" {
+				rec.add(name + " got a different ctx")
+			}
+			rec.add(name)
+			return nil
+		})
+	}
+	addr, _ := serve(t, app)
+
+	go func() {
+		resp, err := http.Get("http://" + addr + "/slow")
+		if err == nil {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+		}
+	}()
+	<-inFlight
+
+	ctx, cancel := context.WithTimeout(context.WithValue(context.Background(), ctxKey{}, "shutdown ctx"), 5*time.Second)
+	defer cancel()
+	shutCh := make(chan error, 1)
+	go func() { shutCh <- app.Shutdown(ctx) }()
+
+	time.Sleep(50 * time.Millisecond) // Shutdown is now draining
+	close(release)
+
+	if err := within(t, 2*time.Second, "Shutdown returning", shutCh); err != nil {
+		t.Fatalf("Shutdown returned %v, want nil", err)
+	}
+	if got, want := rec.get(), []string{"hook 3", "hook 2", "hook 1"}; !equalEvents(got, want) {
+		t.Errorf("events = %v, want %v", got, want)
+	}
+}
+
+func TestEveryOnShutdownHookRunsWhenOneFails(t *testing.T) {
+	errA := errors.New("hook a")
+	errB := errors.New("hook b")
+	var rec recorder
+
+	app := rice.New()
+	app.OnShutdown(func(context.Context) error { rec.add("a"); return errA })
+	app.OnShutdown(func(context.Context) error { rec.add("ok"); return nil })
+	app.OnShutdown(func(context.Context) error { rec.add("b"); return errB })
+
+	err := app.Shutdown(context.Background())
+
+	if got, want := rec.get(), []string{"b", "ok", "a"}; !equalEvents(got, want) {
+		t.Errorf("events = %v, want %v", got, want)
+	}
+	if missing := errorsIsAll(err, errA, errB); len(missing) > 0 {
+		t.Errorf("Shutdown returned %v, which does not match %v", err, missing)
+	}
+}
+
+func TestOnShutdownErrorsJoinADrainTimeout(t *testing.T) {
+	errHook := errors.New("hook")
+	release := make(chan struct{})
+	inFlight := make(chan struct{})
+
+	app := rice.New()
+	app.GET("/slow", func(c *rice.Ctx) error {
+		close(inFlight)
+		<-release
+		return c.String(200, "late")
+	})
+	hookRan := make(chan struct{})
+	app.OnShutdown(func(context.Context) error { close(hookRan); return errHook })
+	addr, _ := serve(t, app)
+
+	go func() {
+		resp, err := http.Get("http://" + addr + "/slow")
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+	}()
+	<-inFlight
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	err := app.Shutdown(ctx)
+	close(release)
+
+	within(t, time.Second, "the OnShutdown hook running", hookRan)
+	if missing := errorsIsAll(err, rice.ErrShutdownTimeout, context.DeadlineExceeded, errHook); len(missing) > 0 {
+		t.Errorf("Shutdown returned %v, which does not match %v", err, missing)
+	}
+}
+
+func TestShutdownRunsHooksOnce(t *testing.T) {
+	var calls atomic.Int32
+	app := rice.New()
+	app.OnShutdown(func(context.Context) error { calls.Add(1); return nil })
+
+	_ = app.Shutdown(context.Background())
+	_ = app.Shutdown(context.Background())
+
+	if n := calls.Load(); n != 1 {
+		t.Errorf("OnShutdown hook ran %d times over two Shutdowns, want 1", n)
+	}
+}
+
+func TestServeAfterShutdownRunsNoOnStartHooks(t *testing.T) {
+	var ran atomic.Bool
+	app := rice.New()
+	app.OnStart(func() error { ran.Store(true); return nil })
+	_ = app.Shutdown(context.Background())
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	errCh := make(chan error, 1)
+	go func() { errCh <- app.Serve(ln) }()
+
+	within(t, 2*time.Second, "Serve returning", errCh)
+	if ran.Load() {
+		t.Error("an OnStart hook ran on an App that was already shut down")
+	}
+}
+
+// TestShutdownDuringOnStartStopsServe is D5 step 4: Shutdown lands while a start
+// hook is running; Serve must not begin serving when the hook returns.
+func TestShutdownDuringOnStartStopsServe(t *testing.T) {
+	entered := make(chan struct{})
+	proceed := make(chan struct{})
+	app := rice.New()
+	app.OnStart(func() error {
+		close(entered)
+		<-proceed
+		return nil
+	})
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	errCh := make(chan error, 1)
+	go func() { errCh <- app.Serve(ln) }()
+
+	<-entered
+	if err := app.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown returned %v, want nil", err)
+	}
+	close(proceed)
+
+	if err := within(t, 2*time.Second, "Serve returning", errCh); err != nil {
+		t.Errorf("Serve returned %v, want nil", err)
+	}
+	if app.Addr() != "" {
+		t.Errorf("Addr() = %q, want empty: Serve published a listener after Shutdown", app.Addr())
 	}
 }

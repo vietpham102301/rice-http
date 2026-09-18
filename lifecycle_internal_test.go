@@ -143,3 +143,24 @@ func TestConnectionsAreUntrackedAfterACleanDrain(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 }
+
+func TestHookRegistrationPanics(t *testing.T) {
+	cases := []struct {
+		name string
+		fn   func(a *App)
+	}{
+		{"OnStart(nil)", func(a *App) { a.OnStart(nil) }},
+		{"OnShutdown(nil)", func(a *App) { a.OnShutdown(nil) }},
+		{"OnStart after Build", func(a *App) { a.Build(); a.OnStart(func() error { return nil }) }},
+		{"OnShutdown after Build", func(a *App) {
+			a.Build()
+			a.OnShutdown(func(context.Context) error { return nil })
+		}},
+	}
+	for _, tc := range cases {
+		v := mustPanic(t, tc.name, func() { tc.fn(New()) })
+		if s, ok := v.(string); !ok || len(s) < 6 || s[:6] != "rice: " {
+			t.Errorf("%s panicked with %v, want a string starting %q", tc.name, v, "rice: ")
+		}
+	}
+}
