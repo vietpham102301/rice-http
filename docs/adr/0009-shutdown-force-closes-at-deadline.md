@@ -120,6 +120,14 @@ what it accepted — fasthttp's open count covers its accept loop until that ret
 slips past — or finds nothing and returns at once.
 `TestShutdownDrainsAConnectionAcceptedBeforeFasthttpRecordedTheListener` pins it.
 
+One trace of that window outlives the `Shutdown` that closed it: if fasthttp records the
+listener only after the second `ShutdownWithContext`, it keeps the already-closed listener in
+its list, and the next `ShutdownWithContext` closes it again and reports "use of closed
+network connection". `Shutdown` drops any error that `errors.Is(err, net.ErrClosed)`: rice
+closed that listener on purpose, and a context error never matches, so a timeout still gets
+through. `TestShutdownAfterFasthttpRecordedAClosedListenerReturnsNil` pins it. Before M7's
+follow-up a later `Shutdown` returned that error.
+
 **Handlers are not stopped.** Go cannot kill a goroutine. A handler running at the deadline
 runs to completion; its connection is gone, so its response is lost, and its pooled `Ctx` is
 released when it returns, as M6's borrow contract requires. When the handler's response write
@@ -176,6 +184,13 @@ has to make it.
 the `OnShutdown` hooks and returns before that `OnStart` hook does; `Serve` then sees `closed`
 and returns without serving (`TestShutdownDuringOnStartStopsServe`), but anything the
 `OnStart` hook opened after `Shutdown` began is never released by an `OnShutdown` hook.
+
+**A hook must not call `Shutdown` with a ctx that never ends.** Hooks run while their
+`Shutdown` holds the turn, so a `Shutdown` from inside a hook waits for a turn released only
+after the hook returns. It returns an error wrapping `ErrShutdownTimeout` when its own ctx
+ends (`TestShutdownFromAHookWaitsOnlyUntilItsOwnCtxEnds`); with `context.Background()` it
+deadlocks. rice cannot tell such a call from a concurrent one on another goroutine, so this is
+documented rather than detected.
 
 **Forecloses:** a `ConnState` hook of the user's own on the App's server. rice owns the field,
 and offering it would mean chaining a second call onto the per-request path.

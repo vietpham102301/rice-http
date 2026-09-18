@@ -16,6 +16,38 @@ Each entry uses this shape:
 
 ---
 
+## 2026-09-18 — M7 — Follow-up: four loose ends the fix wave's re-review left
+
+**Did:** Closed the four items M7's final re-review parked. A later `Shutdown` no longer returns
+a spurious "use of closed network connection" when fasthttp recorded a listener rice had
+already closed: `Shutdown` drops an error matching `net.ErrClosed`. `RunContext` no longer
+returns while another caller's `OnShutdown` hooks run: it waits for hooks that have started,
+whichever `Shutdown` runs them, so `grace` bounds the drain and not the teardown — but it does
+not wait past `grace` on another call's drain, which a handler that never returns can hold open
+forever. A second concurrent
+`Serve` returns the new `ErrAlreadyServing` and closes its listener; the flag clears when
+`Serve` returns, so a failed start can still be retried. A hook that calls `Shutdown` with a ctx
+that never ends deadlocks, and that is documented, not detected. Recorded in
+[M7-lifecycle.md](milestones/M7-lifecycle.md) and
+[ADR-0009](adr/0009-shutdown-force-closes-at-deadline.md).
+
+**Learned:** Two things. The fix for a race can leave its trace in bookkeeping after the race
+itself is closed: the second `ShutdownWithContext` stopped the late listener from serving, but
+fasthttp still held it, closed, in its list, and the next call reported closing it again —
+"nothing is served" and "returns `nil`" are two claims, and the first being true did not make the
+second so. And "wait for the hooks" turned out to mean "wait for the drain before them", which a
+handler that never returns can hold open forever even after the force-close; the fix wave's own
+test caught the first version, and `RunContext` now waits only for hooks that have started.
+
+**Measured:** Nothing on the per-request path changed; no benchmark was re-recorded. Each fix's
+test failed on the merged code before the fix; the retry test failed with the `serving` reset
+removed.
+
+**Next:** M8 — the benchmark suite against Gin, Echo and Fiber, the allocation budget table,
+and the project retrospective.
+
+---
+
 ## 2026-09-18 — M7 — Lifecycle: a shutdown that stops, and two predictions the measurements corrected
 
 **Did:** `Shutdown` now delegates the drain to fasthttp's `ShutdownWithContext`, and when its

@@ -198,7 +198,9 @@ error handler and the fasthttp server. It has the two phases described in
 between them.
 
 `Run` and `Serve` block. An App serves once: `Serve` after `Shutdown` closes its listener and
-returns `nil` without serving.
+returns `nil` without serving, and a `Serve` while another is running closes its listener and
+returns `ErrAlreadyServing`. A `Serve` that returned without a `Shutdown` — an `OnStart` hook
+failed, or serving failed — may be called again.
 
 `Shutdown` stops accepting connections and waits for in-flight requests until they finish or
 its `ctx` ends. It returns `nil` after a clean drain, and an error wrapping both
@@ -234,6 +236,9 @@ Hooks let a program order its own setup and teardown against the server's:
 - Registering a nil hook, or any hook after `Build`, panics.
 - `Shutdown` does not wait for an `OnStart` hook that is still running: its `OnShutdown` hooks
   run, and it returns, before that hook does.
+- A hook must not call `Shutdown` with a `ctx` that never ends. The hook runs while its own
+  `Shutdown` holds the turn, so the inner call waits until its `ctx` ends and then returns an
+  error wrapping `ErrShutdownTimeout`; with `context.Background()` it waits forever.
 
 `RunContext` is the signal helper. It binds `addr`, serves until `ctx` is done, then calls
 `Shutdown` with a fresh `grace`-long context — not one derived from `ctx`, which is already
@@ -250,9 +255,15 @@ A `grace` of zero force-closes at once; a negative one panics.
 
 If `Shutdown` is called elsewhere, `RunContext` waits for it to drain and run the `OnShutdown`
 hooks, then returns `nil`, so `main` does not exit mid-drain; if its own `ctx` ends during that
-wait, it shuts down with `grace` as usual, which cuts the other drain short. `RunContext` can
-outlast `grace` in one case: when `ctx` ends while an `OnStart` hook is still running, because
-`Serve` returns only after that hook does.
+wait, it shuts down with `grace` as usual, which cuts the other drain short.
+
+`RunContext` never returns while `OnShutdown` hooks are running, whichever `Shutdown` runs them,
+so `main` does not exit mid-teardown. `grace` bounds the drain, not the hooks: `RunContext` can
+outlast `grace` by as long as the hooks take. It does not wait past `grace` on another
+`Shutdown`'s drain, though — a handler that never returns can hold that drain up forever — so if
+that drain is still going, `RunContext` returns, and the other call's hooks, when they start, may
+be cut short by the program's exit. `RunContext` can also outlast `grace` when `ctx` ends while an
+`OnStart` hook is still running, because `Serve` returns only after that hook does.
 
 The three timeout options set the matching `fasthttp.Server` fields. Zero, the default, means
 unlimited, and a zero idle timeout falls back to the read timeout, as in fasthttp. A negative

@@ -961,3 +961,148 @@ func TestAFirstShutdownWithAnEndedContextStillRunsTheHooks(t *testing.T) {
 		}
 	}
 }
+
+// TestRunContextWaitsForAnotherShutdownsHooksAfterGrace is the M7 follow-up's
+// second item. Another goroutine's Shutdown is running a slow OnShutdown hook
+// when RunContext's ctx ends. RunContext's own Shutdown gives up waiting at
+// grace, but RunContext itself must not return while the hooks are still
+// running: main would exit mid-teardown.
+func TestRunContextWaitsForAnotherShutdownsHooksAfterGrace(t *testing.T) {
+	hookStarted := make(chan struct{})
+	releaseHook := make(chan struct{})
+	var hookDone atomic.Bool
+
+	app := rice.New()
+	app.OnShutdown(func(context.Context) error {
+		close(hookStarted)
+		<-releaseHook
+		hookDone.Store(true)
+		return nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runCh := make(chan error, 1)
+	go func() { runCh <- app.RunContext(ctx, "127.0.0.1:0", 50*time.Millisecond) }()
+	waitForAddr(t, app)
+
+	go func() { _ = app.Shutdown(context.Background()) }()
+	within(t, 2*time.Second, "the other Shutdown's hook starting", hookStarted)
+
+	cancel()
+	select {
+	case err := <-runCh:
+		t.Fatalf("RunContext returned %v while another Shutdown's OnShutdown hook was still running", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	close(releaseHook)
+	within(t, 2*time.Second, "RunContext returning", runCh)
+	if !hookDone.Load() {
+		t.Error("RunContext returned before the OnShutdown hook finished")
+	}
+}
+
+// TestASecondConcurrentServeIsRejected is the M7 follow-up's third item: an
+// App serves once, so a Serve while another is running returns
+// ErrAlreadyServing and closes the listener it was handed.
+func TestASecondConcurrentServeIsRejected(t *testing.T) {
+	entered := make(chan struct{})
+	proceed := make(chan struct{})
+	app := rice.New()
+	app.OnStart(func() error {
+		close(entered)
+		<-proceed
+		return nil
+	})
+
+	first, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	firstCh := make(chan error, 1)
+	go func() { firstCh <- app.Serve(first) }()
+	within(t, 2*time.Second, "the first Serve's OnStart hook running", entered)
+
+	second, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	secondCh := make(chan error, 1)
+	go func() { secondCh <- app.Serve(second) }()
+	if err := within(t, 2*time.Second, "the second Serve returning", secondCh); !errors.Is(err, rice.ErrAlreadyServing) {
+		t.Errorf("second Serve returned %v, want ErrAlreadyServing", err)
+	}
+	if conn, err := net.DialTimeout("tcp", second.Addr().String(), 200*time.Millisecond); err == nil {
+		_ = conn.Close()
+		t.Error("the rejected Serve left its listener open")
+	}
+
+	close(proceed)
+	waitForAddr(t, app)
+	if err := app.Shutdown(context.Background()); err != nil {
+		t.Errorf("Shutdown returned %v, want nil", err)
+	}
+	if err := within(t, 2*time.Second, "the first Serve returning", firstCh); err != nil {
+		t.Errorf("first Serve returned %v, want nil", err)
+	}
+}
+
+// TestServeCanBeRetriedAfterAFailedStart: ErrAlreadyServing guards a Serve
+// that is running, not one that already returned. A Serve whose OnStart hook
+// failed can be called again.
+func TestServeCanBeRetriedAfterAFailedStart(t *testing.T) {
+	var attempts atomic.Int32
+	app := rice.New()
+	app.OnStart(func() error {
+		if attempts.Add(1) == 1 {
+			return errors.New("not ready yet")
+		}
+		return nil
+	})
+	app.GET("/", func(c *rice.Ctx) error { return c.String(200, "up") })
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	if err := app.Serve(ln); err == nil {
+		t.Fatal("first Serve returned nil, want the OnStart error")
+	}
+
+	addr, errCh := serve(t, app)
+	if status, body := get(t, addr, "/"); status != 200 || body != "up" {
+		t.Errorf("after a retried Serve: got %d %q, want 200 %q", status, body, "up")
+	}
+	if err := app.Shutdown(context.Background()); err != nil {
+		t.Errorf("Shutdown returned %v, want nil", err)
+	}
+	if err := within(t, 2*time.Second, "Serve returning", errCh); err != nil {
+		t.Errorf("retried Serve returned %v, want nil", err)
+	}
+}
+
+// TestShutdownFromAHookWaitsOnlyUntilItsOwnCtxEnds pins the OnShutdown doc:
+// a Shutdown called from inside a hook cannot take the turn its caller holds,
+// so it returns ErrShutdownTimeout when its own ctx ends. With a ctx that
+// never ends it would block forever, which is why the doc forbids that.
+func TestShutdownFromAHookWaitsOnlyUntilItsOwnCtxEnds(t *testing.T) {
+	inner := make(chan error, 1)
+	app := rice.New()
+	app.OnShutdown(func(context.Context) error {
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+		inner <- app.Shutdown(ctx)
+		return nil
+	})
+
+	outer := make(chan error, 1)
+	go func() { outer <- app.Shutdown(context.Background()) }()
+
+	if err := within(t, 2*time.Second, "the hook's Shutdown returning", inner); !errors.Is(err, rice.ErrShutdownTimeout) {
+		t.Errorf("Shutdown inside a hook returned %v, want ErrShutdownTimeout", err)
+	}
+	if err := within(t, 2*time.Second, "the outer Shutdown returning", outer); err != nil {
+		t.Errorf("outer Shutdown returned %v, want nil", err)
+	}
+}
