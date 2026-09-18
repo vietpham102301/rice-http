@@ -50,7 +50,8 @@ descend into a nested module, so the existing `make` targets are unaffected too.
 
 **fasthttp version inside the comparison.** Fiber requires fasthttp too, and Go's minimal
 version selection may resolve a newer fasthttp in `bench/compare` than the v1.73.0 rice pins.
-If it does, rice is measured on that version in the comparison. The results header records the
+If it does, rice is measured on that version in the comparison. (Checked on 2026-09-19 with
+Fiber v3.5.0: it resolves to v1.73.0, the same as rice's pin.) The results header records the
 fasthttp version resolved in `bench/compare/go.mod`, and if it differs from the root pin, the
 M8 retrospective says so and the rice-only numbers in `bench/results/M7-lifecycle.txt` remain
 the reference for rice on its pinned version.
@@ -78,8 +79,8 @@ Where a default differs materially (for example a response header one framework 
 equivalence test compares status and body only, and the difference is noted in the results.
 
 The one scenario whose body is each framework's own is `notfound`: every framework answers a
-miss with its default 404, and those bodies differ by design (plain text in rice and Gin, JSON
-in Echo, a "Cannot GET" message in Fiber). Overriding them would stop measuring each
+miss with its default 404, and those bodies differ by design (`Not Found` in rice and Fiber,
+`404 page not found` in Gin, a JSON object in Echo — checked on 2026-09-19). Overriding them would stop measuring each
 framework's default miss path. For `notfound` the equivalence gate checks the status only, and
 the results list each framework's 404 body length.
 
@@ -94,6 +95,12 @@ the results list each framework's 404 body length.
 | `githubapi` | `GET /repos/:owner/:repo/pulls/:number/comments` (filled) on the GitHub API route table | write `ok` | not rice: many-route lookup |
 | `json` | `GET /json` | encode `{"id":42,"name":"rice","tags":["a","b"]}` | not rice: JSON-heavy |
 | `body64k` | `POST /echo-len` with a 64 KiB body | write the body length as text | not rice: large body |
+
+**Two apps per framework.** The GitHub API table declares `/users/:user`, which conflicts with
+the `param` scenario's `/users/:id` in routers that reject two parameter names at one position
+(rice and Gin among them). Each adapter therefore builds a *small* app serving every scenario
+except `githubapi`, and a *github* app serving the 203-route table and nothing else. That also
+keeps the other scenarios from being measured inside a 203-route tree.
 
 The GitHub API route table is the 203-route set from julienschmidt/go-http-routing-benchmark,
 registered identically in all four frameworks (all four accept `:name` parameters). It is
@@ -218,13 +225,16 @@ CI gains one step after the benchmark smoke run: `make compare`. It also runs
 | `bench/compare/go.mod` | the comparison module; rice via `replace` | rice, Gin, Echo, Fiber |
 | `bench/compare/scenarios.go` | scenario table, payloads, expected results | — |
 | `bench/compare/githubapi.go` | the 203-route GitHub API table, attributed | — |
-| `bench/compare/{rice,gin,echo,fiber}.go` | one adapter each: build an app serving every scenario | scenarios, framework |
-| `bench/compare/discardwriter.go` | reusable `http.ResponseWriter` for the `net/http` frameworks | — |
-| `bench/compare/equivalence_test.go` | the equivalence gate | adapters |
+| `bench/compare/targets.go` | `Server`, `Target`, `Targets`, `TargetByName` | — |
+| `bench/compare/{rice,gin,echo,fiber}.go` | one adapter each: build the small and github apps | scenarios, framework |
+| `bench/compare/check.go` | `Do` (one in-process request) and `Check` (the equivalence gate) | targets |
+| `bench/compare/compare_test.go` | the equivalence gate test, the GitHub-table registration test | adapters |
+| `bench/compare/discardwriter_test.go` | reusable `http.ResponseWriter` for the `net/http` frameworks (test-only) | — |
 | `bench/compare/handler_bench_test.go` | handler-level benchmarks | adapters, gate |
-| `bench/compare/cmd/server` | one binary serving a chosen framework | adapters |
-| `bench/compare/cmd/loadgen` | closed-loop fasthttp load generator | scenarios |
-| `bench/compare/scripts/e2e.sh` | rounds, CPU split, results file | server, loadgen |
+| `bench/compare/histogram.go`, `loadgen.go` | allocation-free latency histogram; `Load`, `WaitReady` | scenarios |
+| `bench/compare/summarize.go` | raw end-to-end lines → results tables | scenarios, targets |
+| `bench/compare/cmd/{server,loadgen,summarize}` | the three binaries | the above |
+| `bench/compare/scripts/{header,handler,e2e}.sh` | results headers and the two recordings | binaries |
 | `alloc_test.go` (root) | four new budget tests | — |
 | `Makefile`, `.github/workflows/ci.yml` | `compare`, `compare-record`, the CI step | — |
 
