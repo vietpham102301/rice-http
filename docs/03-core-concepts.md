@@ -200,7 +200,9 @@ between them.
 `Run` and `Serve` block. An App serves once: `Serve` after `Shutdown` closes its listener and
 returns `nil` without serving, and a `Serve` while another is running closes its listener and
 returns `ErrAlreadyServing`. A `Serve` that returned without a `Shutdown` — an `OnStart` hook
-failed, or serving failed — may be called again.
+failed, or serving failed — may be called again; after a serve error the old listener stays
+open, and `Addr` keeps reporting it, until the retried `Serve` replaces it or a `Shutdown`
+closes it.
 
 `Shutdown` stops accepting connections and waits for in-flight requests until they finish or
 its `ctx` ends. It returns `nil` after a clean drain, and an error wrapping both
@@ -238,7 +240,8 @@ Hooks let a program order its own setup and teardown against the server's:
   run, and it returns, before that hook does.
 - A hook must not call `Shutdown` with a `ctx` that never ends. The hook runs while its own
   `Shutdown` holds the turn, so the inner call waits until its `ctx` ends and then returns an
-  error wrapping `ErrShutdownTimeout`; with `context.Background()` it waits forever.
+  error wrapping `ErrShutdownTimeout`, after closing every open connection as any waiting
+  call whose `ctx` ends does; with `context.Background()` it waits forever.
 
 `RunContext` is the signal helper. It binds `addr`, serves until `ctx` is done, then calls
 `Shutdown` with a fresh `grace`-long context — not one derived from `ctx`, which is already

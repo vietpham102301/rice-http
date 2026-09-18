@@ -46,7 +46,9 @@ func (a *App) OnStart(fn func() error) {
 // the Shutdown that runs them holds its turn, so a Shutdown called from inside
 // a hook waits for a turn that is only released after the hook returns: it
 // blocks until its own ctx ends, and with context.Background() it blocks
-// forever.
+// forever. When its ctx does end it behaves as any Shutdown whose ctx ends
+// while it waits: it closes every open connection, including any a handler
+// cut off by a timed-out drain is still using.
 func (a *App) OnShutdown(fn func(context.Context) error) {
 	if fn == nil {
 		panic("rice: OnShutdown: hook is nil")

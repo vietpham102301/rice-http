@@ -21,12 +21,12 @@ Each entry uses this shape:
 **Did:** Closed the four items M7's final re-review parked. A later `Shutdown` no longer returns
 a spurious "use of closed network connection" when fasthttp recorded a listener rice had
 already closed: `Shutdown` drops an error matching `net.ErrClosed`. `RunContext` no longer
-returns while another caller's `OnShutdown` hooks run: it waits for hooks that have started,
-whichever `Shutdown` runs them, so `grace` bounds the drain and not the teardown — but it does
-not wait past `grace` on another call's drain, which a handler that never returns can hold open
-forever. A second concurrent
-`Serve` returns the new `ErrAlreadyServing` and closes its listener; the flag clears when
-`Serve` returns, so a failed start can still be retried. A hook that calls `Shutdown` with a ctx
+returns while another caller's `OnShutdown` hooks run — after its grace ran out, or after an
+`OnStart` hook failed while those hooks ran: it waits for hooks that have started, whichever
+`Shutdown` runs them, so `grace` bounds the drain and not the teardown. It does not wait past
+`grace` on another call's drain, which a handler that never returns can hold open forever. A
+second concurrent `Serve` returns the new `ErrAlreadyServing` and closes its listener; the flag
+clears when `Serve` returns, so a failed start can still be retried. A hook that calls `Shutdown` with a ctx
 that never ends deadlocks, and that is documented, not detected. Recorded in
 [M7-lifecycle.md](milestones/M7-lifecycle.md) and
 [ADR-0009](adr/0009-shutdown-force-closes-at-deadline.md).

@@ -188,7 +188,7 @@ and returns without serving (`TestShutdownDuringOnStartStopsServe`), but anythin
 **A hook must not call `Shutdown` with a ctx that never ends.** Hooks run while their
 `Shutdown` holds the turn, so a `Shutdown` from inside a hook waits for a turn released only
 after the hook returns. It returns an error wrapping `ErrShutdownTimeout` when its own ctx
-ends (`TestShutdownFromAHookWaitsOnlyUntilItsOwnCtxEnds`); with `context.Background()` it
+ends, after closing every open connection as any waiting call does (`TestShutdownFromAHookWaitsOnlyUntilItsOwnCtxEnds`); with `context.Background()` it
 deadlocks. rice cannot tell such a call from a concurrent one on another goroutine, so this is
 documented rather than detected.
 

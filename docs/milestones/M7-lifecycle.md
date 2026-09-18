@@ -204,6 +204,9 @@ behaviour that was already there.
   and `RunContext` waited forever. It now waits only once the hooks have started (a
   `hooksStarted` channel closed as they begin); a drain still held up at `grace` is not waited
   on, and hooks that start after `RunContext` returned may be cut short by the program's exit.
+  The follow-up's own review found one more path: an `OnStart` hook failing while a `Shutdown`
+  called elsewhere runs the hooks made `RunContext` return the error at once. It now waits there
+  too (`TestRunContextWaitsForRunningHooksWhenStartFails`).
 - **A second concurrent `Serve` was not rejected.** It ran the `OnStart` hooks a second time and
   handed a second listener to fasthttp. `Serve` now returns the new `ErrAlreadyServing`, closing
   the listener it was given, while another `Serve` runs. The flag is cleared when `Serve`

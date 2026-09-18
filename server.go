@@ -140,6 +140,11 @@ func (a *App) RunContext(ctx context.Context, addr string, grace time.Duration) 
 	select {
 	case err := <-serveErr:
 		if err != nil {
+			// An OnStart hook can fail after a Shutdown called elsewhere has
+			// started the OnShutdown hooks, since Shutdown does not wait for a
+			// running OnStart hook. With no Shutdown in progress this returns
+			// at once.
+			a.awaitRunningHooks()
 			return err
 		}
 		// Serve returns nil only once a Shutdown has begun, so one was called
@@ -248,7 +253,9 @@ func (a *App) Shutdown(ctx context.Context) error {
 		// fasthttp can record ln after an earlier Shutdown closed it — the
 		// publish-record window below — and then closes it again here. Rice
 		// closed that listener on purpose, so the error is noise. It is never
-		// a context error, so a timeout still gets through.
+		// a context error, so a timeout still gets through. fasthttp keeps only
+		// the first close error of its listeners, but an App serves one
+		// listener at a time, so no other close error can hide behind it.
 		err = nil
 	}
 	if err == nil && ln != nil {

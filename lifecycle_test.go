@@ -997,7 +997,11 @@ func TestRunContextWaitsForAnotherShutdownsHooksAfterGrace(t *testing.T) {
 	}
 
 	close(releaseHook)
-	within(t, 2*time.Second, "RunContext returning", runCh)
+	// RunContext's own Shutdown lost the turn and gave up at grace.
+	err := within(t, 2*time.Second, "RunContext returning", runCh)
+	if missing := errorsIsAll(err, rice.ErrShutdownTimeout, context.DeadlineExceeded); len(missing) > 0 {
+		t.Errorf("RunContext returned %v, which does not match %v", err, missing)
+	}
 	if !hookDone.Load() {
 		t.Error("RunContext returned before the OnShutdown hook finished")
 	}
@@ -1104,5 +1108,53 @@ func TestShutdownFromAHookWaitsOnlyUntilItsOwnCtxEnds(t *testing.T) {
 	}
 	if err := within(t, 2*time.Second, "the outer Shutdown returning", outer); err != nil {
 		t.Errorf("outer Shutdown returned %v, want nil", err)
+	}
+}
+
+// TestRunContextWaitsForRunningHooksWhenStartFails: a Shutdown called while an
+// OnStart hook runs does not wait for it, so its OnShutdown hooks can be running
+// when that OnStart hook then fails. RunContext returns the OnStart error, but
+// not while those hooks still run.
+func TestRunContextWaitsForRunningHooksWhenStartFails(t *testing.T) {
+	startEntered := make(chan struct{})
+	failStart := make(chan struct{})
+	hookStarted := make(chan struct{})
+	releaseHook := make(chan struct{})
+	var hookDone atomic.Bool
+	errStart := errors.New("start failed")
+
+	app := rice.New()
+	app.OnStart(func() error {
+		close(startEntered)
+		<-failStart
+		return errStart
+	})
+	app.OnShutdown(func(context.Context) error {
+		close(hookStarted)
+		<-releaseHook
+		hookDone.Store(true)
+		return nil
+	})
+
+	runCh := make(chan error, 1)
+	go func() { runCh <- app.RunContext(context.Background(), "127.0.0.1:0", time.Second) }()
+	within(t, 2*time.Second, "the OnStart hook running", startEntered)
+
+	go func() { _ = app.Shutdown(context.Background()) }()
+	within(t, 2*time.Second, "the OnShutdown hook starting", hookStarted)
+
+	close(failStart)
+	select {
+	case err := <-runCh:
+		t.Fatalf("RunContext returned %v while an OnShutdown hook was still running", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	close(releaseHook)
+	if err := within(t, 2*time.Second, "RunContext returning", runCh); !errors.Is(err, errStart) {
+		t.Errorf("RunContext returned %v, want the OnStart error", err)
+	}
+	if !hookDone.Load() {
+		t.Error("RunContext returned before the OnShutdown hook finished")
 	}
 }
