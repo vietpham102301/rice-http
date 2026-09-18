@@ -159,11 +159,17 @@ func TestShutdownReturnsErrShutdownTimeoutWhenTheDeadlinePasses(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
+	start := time.Now()
 	err = app.Shutdown(ctx)
+	elapsed := time.Since(start)
 	close(release) // let the handler finish so the goroutine does not leak
 
-	if err != rice.ErrShutdownTimeout {
-		t.Errorf("Shutdown returned %v, want ErrShutdownTimeout", err)
+	if missing := errorsIsAll(err, rice.ErrShutdownTimeout, context.DeadlineExceeded); len(missing) > 0 {
+		t.Errorf("Shutdown returned %v, which does not match %v", err, missing)
+	}
+	// Roadmap exit criterion 2: the deadline is honoured. 500ms of slack for CI.
+	if elapsed > 600*time.Millisecond {
+		t.Errorf("Shutdown took %v with a 100ms deadline", elapsed)
 	}
 }
 

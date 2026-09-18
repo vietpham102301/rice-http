@@ -85,8 +85,14 @@ type App struct {
 
 	srv *fasthttp.Server
 
+	// mu guards ln and closed, which Serve and Shutdown use to agree on whether
+	// serving may begin. See the M7 design doc, D5.
 	mu sync.Mutex
 	ln net.Listener
+
+	// closed is set by the first Shutdown. A Serve that sees it closes its
+	// listener and returns without serving: an App serves once.
+	closed bool
 }
 
 // route is one registration, recorded for Build to compile.
