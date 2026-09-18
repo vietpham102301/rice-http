@@ -27,6 +27,14 @@ func (a *App) OnStart(fn func() error) {
 // Every hook runs even when an earlier one fails or the drain timed out, and
 // Shutdown returns all their errors joined with its own. Hooks run on the first
 // Shutdown only. A panicking hook is not recovered.
+//
+// When the drain timed out, the ctx a hook receives is already done: a hook
+// that needs time of its own must not derive it from ctx.
+//
+// Shutdown does not wait for a running OnStart hook. If it is called while one
+// is running, the OnShutdown hooks run, and Shutdown returns, before that
+// OnStart hook does; anything the OnStart hook opens after that point is never
+// released by an OnShutdown hook.
 func (a *App) OnShutdown(fn func(context.Context) error) {
 	if fn == nil {
 		panic("rice: OnShutdown: hook is nil")

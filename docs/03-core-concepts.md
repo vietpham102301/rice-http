@@ -165,6 +165,9 @@ func New(opts ...Option) *App
 
 // Option
 func WithErrorHandler(h ErrorHandler) Option
+func WithReadTimeout(d time.Duration) Option
+func WithWriteTimeout(d time.Duration) Option
+func WithIdleTimeout(d time.Duration) Option
 
 func (a *App) Use(mw ...Middleware)
 func (a *App) GET(path string, h Handler, mw ...Middleware)
@@ -173,8 +176,16 @@ func (a *App) Group(prefix string, mw ...Middleware) *Group
 
 func (a *App) Build()
 
+func (a *App) OnStart(fn func() error)
+func (a *App) OnShutdown(fn func(context.Context) error)
+
 func (a *App) Run(addr string) error
+func (a *App) Serve(ln net.Listener) error
+func (a *App) RunContext(ctx context.Context, addr string, grace time.Duration) error
+func (a *App) Addr() string
 func (a *App) Shutdown(ctx context.Context) error
+
+var ErrShutdownTimeout error
 ```
 
 `Build` compiles every route's middleware chain once and is called automatically by `Run`,
@@ -186,10 +197,52 @@ error handler and the fasthttp server. It has the two phases described in
 [02-architecture.md](02-architecture.md): registration, then serving, with `build()`
 between them.
 
-`Run` blocks. `Shutdown` stops accepting connections, waits for in-flight requests up to
-the deadline in the passed `context.Context`, then returns. Lifecycle hooks
-(`OnStart`, `OnShutdown`) exist so users can order their own resource teardown against the
-server's, which is the thing that is genuinely hard to get right by hand.
+`Run` and `Serve` block. An App serves once: `Serve` after `Shutdown` closes its listener and
+returns `nil` without serving.
+
+`Shutdown` stops accepting connections and waits for in-flight requests until they finish or
+its `ctx` ends. It returns `nil` after a clean drain, and an error wrapping both
+`ErrShutdownTimeout` and the context's own error when the deadline came first. **Whatever it
+returns, nothing is served after it returns.** At the deadline rice closes every connection
+still open, because fasthttp's own shutdown, when it times out, lets a busy keep-alive
+connection go on serving new requests. The handlers on those connections are not stopped — a
+goroutine cannot be — so they run to completion and their responses are lost. That decision,
+and its measured cost of about 2.5 ns per request, is
+[ADR-0009](adr/0009-shutdown-force-closes-at-deadline.md). The drain polls every 100 ms, so
+`Shutdown` returns up to about 100 ms after the last request finishes, and takes about one poll
+even when only idle connections are open.
+
+Hooks let a program order its own setup and teardown against the server's:
+
+- **`OnStart`** hooks run in registration order inside `Serve`, after the listener is bound and
+  before any connection is accepted. The first error stops the sequence, closes the listener,
+  and is returned by `Serve`, `Run` or `RunContext`; no `OnShutdown` hook runs on its account.
+- **`OnShutdown`** hooks run in reverse registration order, as `defer` does, after the drain and
+  after any force-close, each with the `ctx` passed to `Shutdown` — which is already done if the
+  drain timed out. Every hook runs even when an earlier one fails, their errors are joined into
+  `Shutdown`'s result, and they run on the first `Shutdown` only, including on an App that never
+  served. A panicking hook is not recovered.
+- Registering a nil hook, or any hook after `Build`, panics.
+- `Shutdown` does not wait for an `OnStart` hook that is still running: its `OnShutdown` hooks
+  run, and it returns, before that hook does.
+
+`RunContext` is the signal helper. It binds `addr`, serves until `ctx` is done, then calls
+`Shutdown` with a fresh `grace`-long context — not one derived from `ctx`, which is already
+done — and returns once serving has stopped. rice does not import `os/signal`; the program
+chooses its signals:
+
+```go
+ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+defer stop()
+err := app.RunContext(ctx, ":8080", 10*time.Second)
+```
+
+A `grace` of zero force-closes at once; a negative one panics.
+
+The three timeout options set the matching `fasthttp.Server` fields. Zero, the default, means
+unlimited, and a zero idle timeout falls back to the read timeout, as in fasthttp. A negative
+duration panics. Set all three in production: without a read timeout, a client that sends
+half a request holds its connection open for as long as it likes.
 
 ---
 

@@ -133,8 +133,8 @@ type App struct {
 	// Shutdown closes them when its deadline passes. Allocated on first use.
 	conns map[net.Conn]struct{}
 
-	// forceClosed is set by the sweep. A connection reported open after it was
-	// accepted before the listener closed, and is closed on arrival.
+	// forceClosed is set by the sweep. A connection accepted before the
+	// listener closed but reported after the sweep is closed on arrival.
 	forceClosed bool
 
 	// onStart and onShutdown are the lifecycle hooks, in registration order.

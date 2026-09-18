@@ -8,12 +8,13 @@ it. The design decisions are written down in [ADRs](docs/adr/) before they are i
 and each milestone ends with a [retrospective](docs/milestones/) naming what the
 measurements changed.
 
-> **Status: not production ready.** Seven of nine milestones are done (M0–M6). The `Ctx` is
+> **Status: not production ready.** Eight of nine milestones are done (M0–M7). The `Ctx` is
 > pooled and dispatch allocates nothing, which makes the borrow contract real: a `*Ctx` kept
 > past its handler reads another request's data. Build with `-tags ricedebug` (or run
-> `make test-debug`) to turn that into a panic. `Shutdown` is still blunt — it races fasthttp's
-> own shutdown against your context rather than draining in-flight requests against a deadline.
-> The API will change. See the [roadmap](docs/04-roadmap.md).
+> `make test-debug`) to turn that into a panic. `Shutdown` drains in-flight requests up to a
+> deadline and closes whatever is left when it passes, so nothing is served after it returns.
+> What remains is M8, the comparison against Gin, Echo and Fiber. The API will change. See the
+> [roadmap](docs/04-roadmap.md).
 
 ## Install
 
@@ -110,13 +111,52 @@ deliberate, measured exception to the "no cost for unused features" rule, record
 [ADR-0008](docs/adr/0008-rice-recovers-panics-in-core.md). A panic reaches the same
 `ErrorHandler` as everything else, wrapped in a `*PanicError`, and always answers 500.
 
+## Graceful shutdown
+
+`RunContext` serves until a context is done, then shuts down, giving in-flight requests a grace
+period to finish. rice does not catch signals itself; the standard library does, and the
+program picks which:
+
+```go
+func main() {
+	app := rice.New(
+		rice.WithReadTimeout(5*time.Second),
+		rice.WithWriteTimeout(10*time.Second),
+		rice.WithIdleTimeout(60*time.Second),
+	)
+	app.GET("/hello", func(c *rice.Ctx) error { return c.String(200, "hello") })
+
+	db := openDB()
+	app.OnShutdown(func(ctx context.Context) error { return db.Close() })
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if err := app.RunContext(ctx, ":8080", 10*time.Second); err != nil {
+		log.Fatal(err)
+	}
+}
+```
+
+When the grace period runs out, rice closes every connection still open and `RunContext`
+returns an error wrapping `rice.ErrShutdownTimeout`. Either way, nothing is served once it has
+returned, and the `OnShutdown` hooks — run in reverse registration order, after the drain —
+can release what requests were using. fasthttp's own shutdown would let a busy keep-alive
+connection keep serving after a timeout; closing it costs about 2.5 ns on every request, and
+[ADR-0009](docs/adr/0009-shutdown-force-closes-at-deadline.md) records why it is paid. The
+drain polls every 100 ms, so a shutdown takes about that long even with nothing in flight.
+
+Set all three timeouts in production. They default to zero, which means unlimited: without a
+read timeout, a client that sends half a request holds its connection for as long as it likes.
+The values above are an example, not a recommendation for any particular service.
+
 ## Two phases
 
 rice separates **registration** from **serving** with an explicit build step. Registration
 validates and inserts routes; `Build` then folds each route's middleware into a single
 closure, so a request dispatches through one call rather than a loop over a slice.
 
-`Run`, `Serve` and `FasthttpHandler` all call `Build` for you. Calling it yourself is only
+`Run`, `RunContext`, `Serve` and `FasthttpHandler` all call `Build` for you. Calling it yourself is only
 useful to make a configuration error surface before the listener opens:
 
 ```go
@@ -197,7 +237,7 @@ publishing them earlier would mean publishing them from an unfinished framework.
 | [04 — Roadmap](docs/04-roadmap.md) | nine milestones, and what each one answers |
 | [05 — Performance model](docs/05-performance-model.md) | the allocation budget, per method |
 | [06 — Glossary](docs/06-glossary.md) | terms used precisely in these docs |
-| [ADRs](docs/adr/) | eight decisions, with the alternatives that lost |
+| [ADRs](docs/adr/) | nine decisions, with the alternatives that lost |
 | [Milestones](docs/milestones/) | retrospectives: what was measured, what surprised |
 | [Journal](docs/progress.md) | the running record, including the wrong turns |
 
@@ -206,7 +246,7 @@ publishing them earlier would mean publishing them from an unfinished framework.
 ```
 make test        # go test ./... -race
 make test-debug  # the same suite under -tags ricedebug
-make cover       # coverage, currently 98.9%
+make cover       # coverage, currently 99.2%
 make lint        # gofmt and go vet
 make bench       # runs the suite and records to bench/results/
 ```

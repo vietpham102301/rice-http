@@ -129,12 +129,23 @@ func (a *App) Addr() string {
 // finish, or for ctx to end, whichever comes first. It returns nil after a clean
 // drain and an error wrapping ErrShutdownTimeout when ctx ended first.
 //
+// Nothing is served after Shutdown returns, whatever it returns. When ctx ends
+// before the drain does, Shutdown closes every connection still open, busy or
+// not; fasthttp alone would let a busy keep-alive connection go on serving new
+// requests. The handlers on those connections run to completion, because a
+// goroutine cannot be stopped, and their responses are lost: when such a
+// handler returns, its write fails and fasthttp logs one "error when serving
+// connection ... use of closed network connection" line for that connection.
+// See docs/adr/0009-shutdown-force-closes-at-deadline.md.
+//
 // The drain is fasthttp's: it closes idle keep-alive connections and polls for
 // the rest every 100ms, so Shutdown may return up to that long after the last
-// request finished.
+// request finished. It usually waits one poll even when only idle connections
+// are open, because fasthttp counts a closed connection as gone only once its
+// serving goroutine has exited.
 //
-// OnShutdown hooks then run, after the drain; their errors are joined with the
-// drain's into the result. See OnShutdown.
+// OnShutdown hooks then run, after the drain and any force-close; their errors
+// are joined with the drain's into the result. See OnShutdown.
 func (a *App) Shutdown(ctx context.Context) error {
 	a.mu.Lock()
 	a.closed = true

@@ -16,6 +16,64 @@ Each entry uses this shape:
 
 ---
 
+## 2026-09-18 — M7 — Lifecycle: a shutdown that stops, and two predictions the measurements corrected
+
+**Did:** `Shutdown` now delegates the drain to fasthttp's `ShutdownWithContext`, and when its
+deadline passes closes every connection still open, tracked through a `ConnState` hook
+installed in `New` (`conns.go`); a connection reported after the sweep is closed on arrival.
+Nothing is served after `Shutdown` returns, whatever it returns, and `ErrShutdownTimeout` now
+wraps the context's error. `OnStart` hooks run in order before the first accept; `OnShutdown`
+hooks run in reverse after the drain and force-close, once, with errors joined
+(`lifecycle.go`). A `closed` flag shared by `Serve` and `Shutdown` means an App serves once and
+a `Shutdown` that arrives before fasthttp has recorded the listener cannot leave `Serve`
+blocked. `RunContext(ctx, addr, grace)` is the signal helper, for `signal.NotifyContext`; core
+does not import `os/signal`. `WithReadTimeout`, `WithWriteTimeout` and `WithIdleTimeout`
+expose fasthttp's fields. Documented in [M7-lifecycle.md](milestones/M7-lifecycle.md) and
+[ADR-0009](adr/0009-shutdown-force-closes-at-deadline.md).
+
+**Learned:** Four things.
+
+1. *fasthttp's timed-out shutdown leaves the server running.* `ShutdownWithContext` sets its
+   `stop` flag with `s.stop.Store(1)` and resets it with `defer s.stop.Store(0)`, so after a
+   timeout a busy keep-alive connection goes on serving new requests. Found by reading v1.73.0
+   before designing, and pinned by `TestNothingIsServedAfterATimedOutShutdown`, which without
+   the force-close fails with `the connection served a request after Shutdown returned`.
+   M1's comment that fasthttp's shutdown had "no deadline of its own" was also false.
+
+2. *The design said the hook would be within noise. It is not.* 36.94 → 39.41 ns, +6.69%,
+   p=0.000, 0 allocations: about 2.5 ns per request for the two calls fasthttp makes whenever a
+   `ConnState` hook is set. D2 said a result like this reopens the decision; it was reopened and
+   kept, because the only per-request-free alternative, wrapping the listener, silently
+   disables fasthttp's `TCPKeepalive` handling, and dropping tracking brings back point 1.
+
+3. *The design said an idle server would shut down at once. It takes one poll.* fasthttp
+   decrements its open count only when a connection's serving goroutine exits, and its accept
+   loop counts itself too, so the check right after closing idle connections still sees a
+   non-zero count and the drain waits one 100 ms tick.
+
+4. *The plan's tests could hang instead of failing.* Bare channel receives and deadline-less
+   pipe reads, taken verbatim from the plan, meant a regression hung `go test`; removing the
+   `forceClosed` guard did exactly that until the test was bounded, after which it fails in
+   1.00 s with `a connection reported after the sweep was tracked`. Every lifecycle wait is now
+   bounded. Separately, the guard for the cancelled-before-serving race is probabilistic:
+   removing the listener close in `Shutdown` passed at `-count=1` and was caught only in
+   `-count=500` runs (`RunContext returning (run 32) did not happen within 2s`). It is counted
+   as a guard that does not guard in CI; the count goes from thirteen to fourteen.
+
+**Measured:** `BenchmarkDispatchConnStateHook`, both arms in one session
+(`bench/results/M7-lifecycle.txt`): **36.94n ± 0% without the hook's calls, 39.41n ± 1% with
+them, +6.69% (p=0.000 n=10), 0 B and 0 allocs on both.** `BenchmarkShutdownLatency`, median of
+ten: **95.20 ms** after the last request (released 5 ms into `Shutdown`), **101.4 ms** with only
+an idle keep-alive connection — both one tick of fasthttp's 100 ms poll. `BenchmarkRiceDispatch`
+33.27n → 33.83n against M6, 0 → 0 allocations; the time half is cross-session drift, since
+`BenchmarkFasthttpBaseline`, which runs no rice code, moved +1.61% across the same pair.
+Root package coverage 99.2%.
+
+**Next:** M8 — the benchmark suite against Gin, Echo and Fiber, on the same routes, payloads
+and machine in one run, and the project retrospective.
+
+---
+
 ## 2026-09-18 — M6 — Context pooling: zero allocations, and a poisoning mechanism that would not have worked
 
 **Did:** Pooled the `Ctx`. One `sync.Pool` per `App`, created in `New` rather than `build`

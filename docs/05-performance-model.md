@@ -38,6 +38,7 @@ test, not a benchmark, so a regression fails CI rather than merely looking worse
 | Chain call, 0 middleware | 0 | MEASURED M4 |
 | Chain call, 5 middleware | 0 | MEASURED M4 |
 | Recovery installed, nothing panics | 0 extra | MEASURED M5 |
+| `ConnState` hook, per request (`StateActive` + `StateIdle`) | 0 | MEASURED M7 |
 | 404 through the funnel | 0 | MEASURED M6 |
 | Handler returns a fresh HTTPError | 1 | MEASURED M6 |
 | Panic recovered, stack captured | documented, not bounded | MEASURED M5 |
@@ -66,8 +67,8 @@ interface's data word, so `c.Set("k", s)` for a non-constant string costs one an
 a constant costs nothing. The budget test pins all three so the distinction cannot rot.
 
 Measured values come from the results files in `bench/results/`, most recently
-`bench/results/M6-context-pooling.txt`, and from the `AllocsPerRun` assertions in
-`alloc_test.go`. Re-run `make bench-record` on your own machine before comparing.
+`bench/results/M7-lifecycle.txt`, and from the `AllocsPerRun` assertions in
+`alloc_test.go` and, for the `ConnState` row, `lifecycle_internal_test.go`. Re-run `make bench-record` on your own machine before comparing.
 
 Two notes on reading the M6 file. `alloc_test.go` is built `!ricedebug`, because the debug
 build allocates a fresh `Ctx` per request on purpose — up to three objects through `newCtx`,
@@ -157,6 +158,45 @@ they point in opposite directions, which is what code-layout and session drift l
 what a cost looks like: a real per-call cost cannot make one benchmark faster. The claim this
 table supports is that the check compiles out, and that nothing at the sub-1.2% scale here is
 attributable to it either way.
+
+## What the lifecycle costs
+
+M7 added two costs, one on every request and one at shutdown. Both are from
+`bench/results/M7-lifecycle.txt`, ten samples each.
+
+**The `ConnState` hook, per request.** rice installs `fasthttp.Server.ConnState` to track open
+connections, so that a `Shutdown` whose deadline passes can close them
+([ADR-0009](adr/0009-shutdown-force-closes-at-deadline.md)). Once a hook is installed, fasthttp
+calls it twice per request, `StateActive` and `StateIdle`; both return before touching a lock
+or the map. `BenchmarkDispatchConnStateHook`, both arms in one session:
+
+```
+                         │ dispatch.txt │       dispatch+connstate.txt       │
+                         │    sec/op    │   sec/op     vs base               │
+DispatchConnStateHook-12    36.94n ± 0%   39.41n ± 1%  +6.69% (p=0.000 n=10)
+```
+
+0 B/op and 0 allocs/op on both arms, pinned as a budget by `TestConnStateActiveAndIdleAreFree`.
+The time is real: about 2.5 ns per request, significant at p=0.000. The design expected it to
+be within noise; it is not, and it is kept because the alternatives either break TCP keep-alive
+settings or let a connection serve after `Shutdown` returns. Like ADR-0008's `defer recover()`,
+every App pays it whether or not it uses what it buys. The benchmark calls `connState`
+directly, so the func-field load in fasthttp's `setState` is not in the figure.
+
+**Shutdown latency.** `Shutdown` delegates the drain to fasthttp's `ShutdownWithContext`, which
+checks for open connections, then again every 100 ms. `BenchmarkShutdownLatency`:
+
+| Case | Median | Range |
+| --- | ---: | --- |
+| `after-last-request` — `Shutdown` started, last request released ~5 ms later | 95.20 ms | 94.78–95.81 ms |
+| `idle-keepalive-only` — no request in flight, one idle keep-alive connection | 101.4 ms | 100.9–101.7 ms |
+
+Both are one tick of the poll. The first is the tick minus the benchmark's 5 ms head start; in
+a real shutdown it lands anywhere from 0 to 100 ms after the last request. The second is the
+more surprising: fasthttp closes idle connections before its first check, but counts a
+connection gone only when its serving goroutine exits, and that has not happened by the check
+that immediately follows, so an idle server still waits one tick. Shutdown is not a hot path
+and neither number is a target; they are what fasthttp gives for free.
 
 ## How it is measured
 
