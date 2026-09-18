@@ -38,12 +38,22 @@ func (a *App) connState(c net.Conn, s fasthttp.ConnState) {
 // closeConns closes every tracked connection and makes connState close any
 // connection reported after it. Each serving goroutine's next read or write
 // then fails, and fasthttp reports StateClosed, which untracks it.
+//
+// The closes happen outside connMu: a tls.Conn's Close can block for seconds
+// sending close_notify, and connState needs the lock for every connection that
+// opens or closes meanwhile. Setting forceClosed under the lock first is what
+// keeps that safe: a connection reported after it is closed on arrival, so
+// nothing escapes the copy.
 func (a *App) closeConns() {
 	a.connMu.Lock()
-	defer a.connMu.Unlock()
-
 	a.forceClosed = true
+	conns := make([]net.Conn, 0, len(a.conns))
 	for c := range a.conns {
+		conns = append(conns, c)
+	}
+	a.connMu.Unlock()
+
+	for _, c := range conns {
 		_ = c.Close()
 	}
 }

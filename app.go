@@ -145,6 +145,17 @@ type App struct {
 
 	// shutdownOnce makes the OnShutdown hooks run on the first Shutdown only.
 	shutdownOnce sync.Once
+
+	// shutdownSem, capacity 1, lets one Shutdown at a time drive fasthttp's
+	// drain, the force-close and the hooks. It is a channel rather than a mutex
+	// so that a Shutdown waiting for its turn can give up when its own ctx ends.
+	// See the M7 design doc, D4, as corrected after the whole-branch review.
+	shutdownSem chan struct{}
+
+	// shutdownDone is closed once the first Shutdown has drained and run the
+	// OnShutdown hooks. RunContext waits on it when a Shutdown called elsewhere
+	// stopped Serve.
+	shutdownDone chan struct{}
 }
 
 // route is one registration, recorded for Build to compile.
@@ -158,7 +169,11 @@ type route struct {
 
 // New creates an App.
 func New(opts ...Option) *App {
-	a := &App{errorHandler: DefaultErrorHandler}
+	a := &App{
+		errorHandler: DefaultErrorHandler,
+		shutdownSem:  make(chan struct{}, 1),
+		shutdownDone: make(chan struct{}),
+	}
 	a.pool.New = func() any { return a.newCtx() }
 	a.srv = &fasthttp.Server{
 		Handler:   a.handle,

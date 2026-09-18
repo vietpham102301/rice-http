@@ -86,6 +86,15 @@ func (a *App) Serve(ln net.Listener) error {
 //
 // A grace of zero cuts every in-flight request off at once. A negative grace
 // panics.
+//
+// If Shutdown is called elsewhere, RunContext waits for it to drain and run
+// the OnShutdown hooks, then returns nil; that Shutdown's result goes to its
+// own caller. If ctx ends during that wait, RunContext shuts down with grace
+// as usual, which cuts the other Shutdown's drain short at grace.
+//
+// RunContext can outlast grace in one case: when ctx ends while an OnStart
+// hook is running. Serve does not return until that hook does, and RunContext
+// waits for Serve.
 func (a *App) RunContext(ctx context.Context, addr string, grace time.Duration) error {
 	if grace < 0 {
 		panic("rice: RunContext: grace is negative")
@@ -102,16 +111,30 @@ func (a *App) RunContext(ctx context.Context, addr string, grace time.Duration) 
 
 	select {
 	case err := <-serveErr:
-		return err
+		if err != nil {
+			return err
+		}
+		// Serve returns nil only once a Shutdown has begun, so one was called
+		// elsewhere. Returning now would let main exit mid-drain.
+		select {
+		case <-a.shutdownDone:
+			return nil
+		case <-ctx.Done():
+			return a.shutdownWithin(grace)
+		}
 	case <-ctx.Done():
 	}
 
-	// Not derived from ctx: ctx is already done, and the grace period is new time.
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), grace)
-	defer cancel()
-
-	shutdownErr := a.Shutdown(shutdownCtx)
+	shutdownErr := a.shutdownWithin(grace)
 	return errors.Join(shutdownErr, <-serveErr)
+}
+
+// shutdownWithin calls Shutdown with grace to drain. The ctx is not derived
+// from RunContext's: that is already done, and the grace period is new time.
+func (a *App) shutdownWithin(grace time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), grace)
+	defer cancel()
+	return a.Shutdown(ctx)
 }
 
 // Addr returns the bound address, or the empty string if the App is not serving.
@@ -146,25 +169,59 @@ func (a *App) Addr() string {
 //
 // OnShutdown hooks then run, after the drain and any force-close; their errors
 // are joined with the drain's into the result. See OnShutdown.
+//
+// Shutdown is safe to call more than once and from several goroutines. Calls
+// take turns: one drains, force-closes if its ctx ends, and runs the hooks
+// before the next starts, so a call that waited its turn returns only after
+// all of that. A later call finds nothing left to drain, returns nil, and runs
+// no hooks. A call whose ctx ends while it waits does not wait on: it closes
+// every open connection, as at its own deadline, and returns an error wrapping
+// ErrShutdownTimeout. The call it was waiting for goes on, and returns once
+// the handlers it was draining have finished.
 func (a *App) Shutdown(ctx context.Context) error {
 	a.mu.Lock()
 	a.closed = true
 	ln := a.ln
 	a.mu.Unlock()
 
+	// Take the turn. The first select prefers it: a first Shutdown whose ctx
+	// has already ended must still close the listener and run the hooks.
+	select {
+	case a.shutdownSem <- struct{}{}:
+	default:
+		select {
+		case a.shutdownSem <- struct{}{}:
+		case <-ctx.Done():
+			a.closeConns()
+			return fmt.Errorf("%w: %w", ErrShutdownTimeout, ctx.Err())
+		}
+	}
+	defer func() { <-a.shutdownSem }()
+
 	err := a.srv.ShutdownWithContext(ctx)
+	if err == nil && ln != nil {
+		// Serve publishes ln before fasthttp records it. A ShutdownWithContext
+		// landing between the two finds no listener and returns nil without
+		// draining. Closing ln here makes fasthttp's Serve return nil rather than
+		// block. It must come after ShutdownWithContext: closing first makes
+		// fasthttp's own close fail, and it reports that error. When fasthttp
+		// did record ln this is a second close, and its error is noise.
+		_ = ln.Close()
+
+		// If fasthttp recorded ln after the drain above looked, it may have
+		// accepted connections that nothing drained, and its stop flag is
+		// reset, so they would go on serving. A second ShutdownWithContext
+		// finds ln recorded and drains them; fasthttp's open count includes
+		// its Serve loop until that returns, so none is missed. Otherwise it
+		// finds no listener and returns nil at once. Its only other error is
+		// from closing ln again, which is noise.
+		if err2 := a.srv.ShutdownWithContext(ctx); ctx.Err() != nil && errors.Is(err2, ctx.Err()) {
+			err = err2
+		}
+	}
 	if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(err, ctxErr) {
 		a.closeConns()
 		err = fmt.Errorf("%w: %w", ErrShutdownTimeout, ctxErr)
-	}
-
-	// A Serve that published ln but had not yet handed it to fasthttp is
-	// invisible to ShutdownWithContext, and would block forever. Closing ln here
-	// makes fasthttp's Serve return nil. It must come after ShutdownWithContext:
-	// closing first makes fasthttp's own close fail, and it reports that error.
-	// When fasthttp did record ln this is a second close, and its error is noise.
-	if ln != nil {
-		_ = ln.Close()
 	}
 
 	hookErrs := a.runShutdown(ctx)

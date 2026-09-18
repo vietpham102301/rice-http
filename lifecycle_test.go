@@ -767,3 +767,197 @@ func TestIdleTimeoutClosesAnIdleKeepAliveConnection(t *testing.T) {
 		t.Errorf("the idle connection was closed after %v, want about 100ms", elapsed)
 	}
 }
+
+// slowApp returns an App whose /slow handler signals inFlight and then blocks
+// until release is called. release is idempotent and also runs at cleanup, so
+// a failing test never leaves the handler blocked.
+func slowApp(t *testing.T) (app *rice.App, inFlight <-chan struct{}, release func()) {
+	t.Helper()
+	entered := make(chan struct{})
+	gate := make(chan struct{})
+	app = rice.New()
+	app.GET("/slow", func(c *rice.Ctx) error {
+		close(entered)
+		<-gate
+		return c.String(200, "slow")
+	})
+	release = sync.OnceFunc(func() { close(gate) })
+	t.Cleanup(release)
+	return app, entered, release
+}
+
+// sendSlow opens a connection to addr and sends GET /slow on it.
+func sendSlow(t *testing.T, addr string) net.Conn {
+	t.Helper()
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	fmt.Fprint(conn, "GET /slow HTTP/1.1\r\nHost: rice\r\n\r\n")
+	return conn
+}
+
+// waitUntilRefused polls until a dial to addr is refused: the listener has
+// closed, so a Shutdown is inside its drain.
+func waitUntilRefused(t *testing.T, addr string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
+		if err != nil {
+			return
+		}
+		_ = conn.Close()
+		if time.Now().After(deadline) {
+			t.Fatal("new connections were still accepted 2s into Shutdown")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// assertClosed fails unless the server has closed conn: a read must end, not
+// time out.
+func assertClosed(t *testing.T, conn net.Conn, what string) {
+	t.Helper()
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, err := io.ReadAll(conn)
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		t.Errorf("%s: the connection was still open 2s later", what)
+	}
+}
+
+// TestAShutdownWaitingForAnotherHonoursItsOwnContext is the first case of the
+// M7 final review's Important 1. A Shutdown called while another is draining
+// must return when its own ctx ends, having force-closed the connections, not
+// wait out the other's drain.
+func TestAShutdownWaitingForAnotherHonoursItsOwnContext(t *testing.T) {
+	app, inFlight, release := slowApp(t)
+	addr, errCh := serve(t, app)
+
+	conn := sendSlow(t, addr)
+	within(t, 2*time.Second, "the handler receiving the request", inFlight)
+
+	firstCh := make(chan error, 1)
+	go func() { firstCh <- app.Shutdown(context.Background()) }()
+	waitUntilRefused(t, addr)
+
+	secondCh := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+		secondCh <- app.Shutdown(ctx)
+	}()
+
+	err := within(t, 2*time.Second, "the second Shutdown returning at its own deadline", secondCh)
+	if missing := errorsIsAll(err, rice.ErrShutdownTimeout, context.DeadlineExceeded); len(missing) > 0 {
+		t.Errorf("second Shutdown returned %v, which does not match %v", err, missing)
+	}
+	assertClosed(t, conn, "after the second Shutdown timed out")
+
+	select {
+	case err := <-firstCh:
+		t.Fatalf("first Shutdown returned %v while its handler was still running", err)
+	default:
+	}
+
+	release()
+	if err := within(t, 2*time.Second, "the first Shutdown returning", firstCh); err != nil {
+		t.Errorf("first Shutdown returned %v once the handler finished, want nil", err)
+	}
+	if err := within(t, 2*time.Second, "Serve returning", errCh); err != nil {
+		t.Errorf("Serve returned %v, want nil", err)
+	}
+}
+
+// TestRunContextWaitsForAShutdownCalledElsewhere: Serve returns as soon as the
+// listener closes, but a RunContext returning then would let main exit
+// mid-drain, before the OnShutdown hooks ran.
+func TestRunContextWaitsForAShutdownCalledElsewhere(t *testing.T) {
+	app, inFlight, release := slowApp(t)
+	var hookRan atomic.Bool
+	app.OnShutdown(func(context.Context) error { hookRan.Store(true); return nil })
+
+	runCh := make(chan error, 1)
+	go func() { runCh <- app.RunContext(context.Background(), "127.0.0.1:0", time.Second) }()
+	addr := waitForAddr(t, app)
+
+	sendSlow(t, addr)
+	within(t, 2*time.Second, "the handler receiving the request", inFlight)
+
+	shutCh := make(chan error, 1)
+	go func() { shutCh <- app.Shutdown(context.Background()) }()
+	waitUntilRefused(t, addr)
+
+	select {
+	case err := <-runCh:
+		t.Fatalf("RunContext returned %v while a Shutdown called elsewhere was still draining", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	release()
+	if err := within(t, 2*time.Second, "Shutdown returning", shutCh); err != nil {
+		t.Errorf("Shutdown returned %v, want nil", err)
+	}
+	if err := within(t, 2*time.Second, "RunContext returning", runCh); err != nil {
+		t.Errorf("RunContext returned %v, want nil", err)
+	}
+	if !hookRan.Load() {
+		t.Error("RunContext returned before the OnShutdown hook ran")
+	}
+}
+
+// TestRunContextCutsAShutdownCalledElsewhereShortAtGrace: while RunContext
+// waits for a Shutdown called elsewhere, its own ctx ending still means what it
+// always does: shut down, giving in-flight requests grace and no more.
+func TestRunContextCutsAShutdownCalledElsewhereShortAtGrace(t *testing.T) {
+	app, inFlight, release := slowApp(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runCh := make(chan error, 1)
+	go func() { runCh <- app.RunContext(ctx, "127.0.0.1:0", 100*time.Millisecond) }()
+	addr := waitForAddr(t, app)
+
+	conn := sendSlow(t, addr)
+	within(t, 2*time.Second, "the handler receiving the request", inFlight)
+
+	shutCh := make(chan error, 1)
+	go func() { shutCh <- app.Shutdown(context.Background()) }()
+	waitUntilRefused(t, addr)
+
+	cancel()
+	err := within(t, 2*time.Second, "RunContext returning at grace", runCh)
+	if missing := errorsIsAll(err, rice.ErrShutdownTimeout, context.DeadlineExceeded); len(missing) > 0 {
+		t.Errorf("RunContext returned %v, which does not match %v", err, missing)
+	}
+	assertClosed(t, conn, "after RunContext's grace ran out")
+
+	release()
+	if err := within(t, 2*time.Second, "Shutdown returning", shutCh); err != nil {
+		t.Errorf("Shutdown returned %v, want nil", err)
+	}
+}
+
+// TestAFirstShutdownWithAnEndedContextStillRunsTheHooks: a Shutdown whose ctx
+// has already ended, with no other Shutdown in progress, is the one that does
+// the work: its turn must win over its ctx. Twenty runs make a coin-flip
+// select fail with probability 1 - 2^-20.
+func TestAFirstShutdownWithAnEndedContextStillRunsTheHooks(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	for i := 0; i < 20; i++ {
+		var ran atomic.Bool
+		app := rice.New()
+		app.OnShutdown(func(context.Context) error { ran.Store(true); return nil })
+
+		if err := app.Shutdown(ctx); err != nil {
+			t.Fatalf("run %d: Shutdown on an App that never served returned %v, want nil", i, err)
+		}
+		if !ran.Load() {
+			t.Fatalf("run %d: the OnShutdown hook did not run", i)
+		}
+	}
+}
