@@ -93,6 +93,18 @@ type App struct {
 	// closed is set by the first Shutdown. A Serve that sees it closes its
 	// listener and returns without serving: an App serves once.
 	closed bool
+
+	// connMu guards conns and forceClosed. connState takes it only when a
+	// connection opens or closes, never per request. See the M7 design doc, D2.
+	connMu sync.Mutex
+
+	// conns is every connection fasthttp has reported open and not yet closed.
+	// Shutdown closes them when its deadline passes. Allocated on first use.
+	conns map[net.Conn]struct{}
+
+	// forceClosed is set by the sweep. A connection reported open after it was
+	// accepted before the listener closed, and is closed on arrival.
+	forceClosed bool
 }
 
 // route is one registration, recorded for Build to compile.
@@ -109,8 +121,9 @@ func New(opts ...Option) *App {
 	a := &App{errorHandler: DefaultErrorHandler}
 	a.pool.New = func() any { return a.newCtx() }
 	a.srv = &fasthttp.Server{
-		Handler: a.handle,
-		Name:    "rice",
+		Handler:   a.handle,
+		Name:      "rice",
+		ConnState: a.connState,
 	}
 	for _, opt := range opts {
 		opt(a)

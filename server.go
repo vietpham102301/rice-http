@@ -78,6 +78,7 @@ func (a *App) Shutdown(ctx context.Context) error {
 
 	err := a.srv.ShutdownWithContext(ctx)
 	if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(err, ctxErr) {
+		a.closeConns()
 		err = fmt.Errorf("%w: %w", ErrShutdownTimeout, ctxErr)
 	}
 
