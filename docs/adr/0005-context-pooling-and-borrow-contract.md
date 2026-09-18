@@ -19,10 +19,10 @@ from it are valid only until the handler returns. Provide a copying alternative 
 borrowed accessor, named so the copy is the longer word (`Param` borrows, `ParamString`
 copies).
 
-Add a `ricedebug` build tag that poisons a released `Ctx` — clearing its pointers and
-setting a generation counter — so any later method call panics with a message naming the
-contract, instead of returning plausible garbage from another request. The check compiles
-out entirely in release builds.
+Add a `ricedebug` build tag under which a released `Ctx` is poisoned and **never returned
+to the pool**, so any later method call panics with a message naming the contract instead
+of returning plausible data from another request. The check compiles out entirely in
+release builds.
 
 ## Alternatives
 
@@ -42,7 +42,8 @@ response state — reintroduces the escape.
 
 **Runtime finalizer to detect retention.** Would catch escapes automatically without a build
 tag. Rejected: finalizers are unreliable, non-deterministic, and would themselves keep
-objects alive. The generation-counter poison is deterministic and free in release builds.
+objects alive. The poison is deterministic and free in release builds — though not by the
+generation counter this ADR originally named; see the M6 correction at the end of this file.
 
 ## Consequences
 
@@ -69,3 +70,34 @@ escapes on both paths. The prediction that the zero would not last was correct;
 the mechanism named for it was not the one that arrived. This is the clearest
 available argument for the rule M2 adopted — measure a zero, document why it
 holds, and do not pin it with a test unless the design guarantees it.
+
+**Corrected in M6.** This ADR originally decided to poison a released `Ctx` by "clearing its
+pointers and setting a generation counter" and did not say whether the poisoned object went
+back into the pool. If it does, the mechanism fails at the one moment it is needed: the next
+request acquires the same object, `reset` clears the poison, and a stale reference to it reads
+that request's data without panicking. A generation counter cannot help, because the code
+holding the stale pointer has no generation of its own to compare — the stale pointer and the
+reused object are the same pointer. The debug build now keeps poisoned contexts out of the pool
+entirely. Its price is a fresh `Ctx` for every request — up to three objects through `newCtx`:
+the `Ctx`, its store slice, and its parameter slice when the App has a parameterised route at all
+— paid in that build only.
+`TestARetainedCtxPanicsEvenAfterAnotherRequest` fails when the poisoned `Ctx` is returned to the
+pool, which is the empirical form of this correction. See the M6 design doc, D5.
+
+The test has to make the stale call from *inside* the next request's handler, while that request
+still holds the reused `Ctx`. That window is the original mechanism's blind spot — not any use
+after release. M6's first attempt at this test checked the retained `Ctx` only after both
+requests had finished, and it could not fail on its own fault: by then the shared object had
+been released again and re-poisoned, so it panicked whether or not the live window was
+protected. Modelling ADR-0005 faithfully — `poolReuse = true` plus clearing the poison on
+acquire — makes the corrected test fail like this:
+
+```
+$ go test . -tags ricedebug -run TestARetainedCtxPanicsEvenAfterAnotherRequest -count=1
+    ricedebug_test.go:111: stale call on request 1's Ctx while request 2 held it: recovered <nil> (returned "2"), want the use-after-release panic
+--- FAIL: TestARetainedCtxPanicsEvenAfterAnotherRequest (0.00s)
+```
+
+`recovered <nil>` is the point: nothing panicked. Request 1's retained `*Ctx` answered with
+request 2's parameter, `"2"` — silent cross-request data leakage, which is the bug the debug
+build exists to make loud.

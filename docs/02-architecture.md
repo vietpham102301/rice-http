@@ -23,8 +23,8 @@ The public layer is deliberately thin: it is mostly a facade that names things w
 owns lifetimes. The interesting algorithms are one layer down, unexported, and free to
 change.
 
-The diagram is the finished shape, not today's. As of M5, `internal/bytesconv` (M6) is named
-there but not built; the layout below marks precisely what exists.
+The diagram is the finished shape, not today's. As of M6, `internal/bytesconv` is named there
+but not built, and no milestone owns it; the layout below marks precisely what exists.
 
 ## Package layout
 
@@ -34,7 +34,7 @@ import. Splitting them into subdirectories would create separate packages and fo
 into several imports, which is the opposite of the thin single facade the layer diagram
 describes.
 
-**What exists today** (through M5):
+**What exists today** (through M6):
 
 ```
 rice-http/
@@ -44,6 +44,10 @@ rice-http/
 ├── ctx.go              Ctx: the per-request handle, reset, Method/Path
 ├── ctx_param.go        Ctx read side: route parameters, borrowed and copied
 ├── ctx_response.go     Ctx write side: Status, headers, String/Bytes
+├── ctx_store.go        Ctx per-request store: Set, Get, and its pre-sized slice
+├── pool.go             sync.Pool wiring: newCtx, acquire, release
+├── poison_debug.go     ricedebug: mark a released Ctx, panic on any later use
+├── poison_release.go   !ricedebug: the same API, empty, compiled away
 ├── route.go            registration for all eight verbs, App.Use, tree selection, lookup
 ├── group.go            Group: prefix and middleware scoping, and the registration guards
 ├── build.go            Build: chain compilation and tree rebuild, once
@@ -69,8 +73,7 @@ because they exist:
 
 ```
 ├── ctx_request.go      query and header accessors            (deferred, owned by no milestone)
-├── pool.go             sync.Pool wiring, acquire/release, debug poisoning   (M6)
-└── internal/bytesconv/ the only place unsafe string/[]byte views are allowed (M6)
+└── internal/bytesconv/ the only place unsafe string/[]byte views are allowed (unbuilt)
 ```
 
 `middleware/` is a separate package on purpose. Importing rice must not drag in anything
@@ -83,12 +86,11 @@ step. Almost everything expensive happens in the first phase.
 
 ```mermaid
 flowchart TD
-    A["rice.New()"] --> B["app.Use(mw...)<br/>app.GET/POST(...)<br/>app.Group(...)"]
+    A["rice.New()<br/>(creates the Ctx pool)"] --> B["app.Use(mw...)<br/>app.GET/POST(...)<br/>app.Group(...)<br/>→ tracks the max param count"]
     B --> C["app.build()<br/>(called once by Run or Test)"]
     C --> C1["compile middleware chains<br/>into one closure per route"]
     C --> C2["insert compiled handlers<br/>into per-method radix trees"]
-    C --> C3["compute max param count<br/>→ Ctx param slot sizing"]
-    C1 & C2 & C3 --> D["serving phase:<br/>tree lookup + one closure call"]
+    C1 & C2 --> D["serving phase:<br/>tree lookup + one closure call"]
 ```
 
 **Why a build step exists at all.** If chains were compiled at registration time, a
@@ -98,6 +100,14 @@ single `build()` means registration order does not matter, and it also gives one
 place to reject an invalid configuration before the socket is ever opened. `build()` runs
 under `sync.Once`; registering a route after build panics with a clear message rather than
 racing. See [ADR-0003](adr/0003-middleware-as-prebuilt-closure-chain.md).
+
+Two things deliberately sit outside the build step. The `Ctx` pool is created in `New`, because
+the dispatch path is reachable before `Build` — the package's own tests call `handle` on unbuilt
+Apps throughout, and a pool created in `build` would be nil there. And the maximum parameter
+count the pool sizes contexts from is tracked at each registration rather than computed at
+build, so a `Ctx` built at any point is sized from everything registered so far; one built
+before a larger route arrives grows once on its first oversized capture and keeps the larger
+slice.
 
 ## Request lifecycle
 

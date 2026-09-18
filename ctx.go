@@ -11,6 +11,10 @@ import (
 // It is valid only for the duration of the handler that received it, along with
 // every []byte it hands out. See the borrow contract in doc.go.
 type Ctx struct {
+	// poison is first on purpose. It is zero-sized in release builds, and Go pads
+	// a zero-sized final field so a pointer to it cannot point past the struct.
+	poison poison
+
 	fctx *fasthttp.RequestCtx
 	app  *App
 
@@ -18,37 +22,45 @@ type Ctx struct {
 	// parameters needs no allocation of its own. This is what ADR-0005's
 	// Lookup(path, *Params) signature exists to make possible, and it is why the
 	// Ctx must be constructed before the lookup runs.
-	//
-	// It costs size: Params is MaxParams fixed slots, so a Ctx is a few hundred
-	// bytes rather than sixteen. M6's pool makes that irrelevant by reusing the
-	// same Ctx across requests. Until then it is one larger allocation, not two.
 	params router.Params
+
+	// store backs Set and Get. newCtx pre-sizes it to storeCapacity.
+	store []entry
 }
 
-// reset rebinds the context to a new request.
+// reset binds the context to a request, or unbinds it when app and fctx are nil.
 //
-// M3 constructs a fresh Ctx per request, so reset is called exactly once per
-// instance. M6 introduces a sync.Pool, at which point reset becomes the point
-// where a recycled Ctx drops every reference to the previous request — which is
-// why it clears params rather than trusting them to be empty.
+// acquire calls it to bind a pooled Ctx and release calls it to unbind one, so
+// it clears everything a previous request could have left behind rather than
+// trusting it to be empty.
 func (c *Ctx) reset(app *App, fctx *fasthttp.RequestCtx) {
 	c.app = app
 	c.fctx = fctx
 	c.params.Reset()
+	c.resetStore()
 }
 
 // RequestCtx exposes the underlying fasthttp context.
 //
 // It is the escape hatch for anything rice does not wrap. Everything the
 // borrow contract says about Ctx applies to what you reach through it.
-func (c *Ctx) RequestCtx() *fasthttp.RequestCtx { return c.fctx }
+func (c *Ctx) RequestCtx() *fasthttp.RequestCtx {
+	c.poison.check()
+	return c.fctx
+}
 
 // Method returns the HTTP verb.
 //
 // Borrowed: the returned slice is valid only until the handler returns.
-func (c *Ctx) Method() []byte { return c.fctx.Method() }
+func (c *Ctx) Method() []byte {
+	c.poison.check()
+	return c.fctx.Method()
+}
 
 // Path returns the request path, without the query string.
 //
 // Borrowed: the returned slice is valid only until the handler returns.
-func (c *Ctx) Path() []byte { return c.fctx.Path() }
+func (c *Ctx) Path() []byte {
+	c.poison.check()
+	return c.fctx.Path()
+}

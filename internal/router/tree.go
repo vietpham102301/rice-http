@@ -193,29 +193,27 @@ func (n *node[H]) lookup(path []byte, params *Params) (H, bool) {
 		}
 		if i > 0 {
 			saved := params.Len()
-			if params.add(n.param.name, path[:i]) {
-				rest := path[i:]
-				if len(rest) == 0 {
-					if n.param.hasHandler {
-						return n.param.handler, true
-					}
-				} else if h, ok := n.param.lookup(rest, params); ok {
-					return h, true
+			params.add(n.param.name, path[:i])
+			rest := path[i:]
+			if len(rest) == 0 {
+				if n.param.hasHandler {
+					return n.param.handler, true
 				}
-				params.truncate(saved)
+			} else if h, ok := n.param.lookup(rest, params); ok {
+				return h, true
 			}
+			params.truncate(saved)
 		}
 	}
 
 	// Wildcard: consume the remainder, which must be non-empty.
 	if n.wildcard != nil {
 		saved := params.Len()
-		if params.add(n.wildcard.name, path) {
-			if n.wildcard.hasHandler {
-				return n.wildcard.handler, true
-			}
-			params.truncate(saved)
+		params.add(n.wildcard.name, path)
+		if n.wildcard.hasHandler {
+			return n.wildcard.handler, true
 		}
+		params.truncate(saved)
 	}
 
 	return zero, false

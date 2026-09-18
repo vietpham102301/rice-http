@@ -7,12 +7,103 @@ is a new entry that says what the old one got wrong.
 Each entry uses this shape:
 
 ```
-## YYYY-MM-DD — Mn — Short title
+## <ISO date> — Mn — Short title
 **Did:**       what changed
 **Learned:**   the non-obvious thing
 **Measured:**  numbers, if any
 **Next:**      the immediate next step
 ```
+
+---
+
+## 2026-09-18 — M6 — Context pooling: zero allocations, and a poisoning mechanism that would not have worked
+
+**Did:** Pooled the `Ctx`. One `sync.Pool` per `App`, created in `New` rather than `build`
+because the dispatch path is reachable before `Build`; `acquire` binds a pooled `Ctx` and
+`release` unbinds it from inside M5's existing deferred closure, after the `ErrorHandler`, on
+every path including a panic. `Params` is now a slice pre-sized by `MakeParams` from
+`Tree.MaxParams()`, so `add` cannot fail, the eight-parameter limit and `router.MaxParams` are
+gone, and a route may declare any number of parameters. `Set` and `Get` landed at last, backed by
+a four-entry slice of key/value pairs rather than a map. `-tags ricedebug` poisons a released
+`Ctx` and **keeps it out of the pool**, with `check()` first in all twelve exported `Ctx` methods
+and a reflection test that fails if a thirteenth is added without one; `make test-debug` runs the
+whole suite that way and CI runs it after `make test`. A 16-goroutine × 500-request test hammers
+the pool in both builds under `-race`. ADR-0005 is corrected in place. Documented in
+[M6-context-pooling.md](milestones/M6-context-pooling.md) and
+[ADR-0005](adr/0005-context-pooling-and-borrow-contract.md).
+
+**Learned:** Four things, and the first two are about guards rather than about pooling.
+
+1. *The safety mechanism in an accepted ADR would not have caught the bug it was written for.*
+   ADR-0005 specified poisoning a released `Ctx` by "clearing its pointers and setting a
+   generation counter," and never said whether the poisoned object went back into the pool. If it
+   does, the next request `Get`s the same object, `reset` clears the poison, and the stale
+   reference reads that request's data without panicking. A generation counter cannot help: the
+   code holding the stale pointer has no generation of its own, because the stale pointer and the
+   reused object are the same pointer. Found by reading the design, five milestones after the ADR
+   was accepted, and not by anyone running the framework in anger. The debug build now drops
+   poisoned contexts instead of pooling them, which costs a fresh `Ctx` per request there —
+   up to three objects through `newCtx` — the same count the unpooled benchmark arm reports, and
+   two rather than three for an App with no parameterised route.
+
+2. *The plan's own test could not fail on its own fault.* `TestARetainedCtxPanicsEvenAfterAnotherRequest`
+   was written from the argument in point 1, and Task 4's injection — return the poisoned `Ctx` to
+   the pool — left it green. The test drove both requests to completion before checking the
+   retained pointer, and `release` marks unconditionally, so request 2's own release had already
+   re-poisoned the shared object; it passed whether or not the live window was protected. The
+   implementer reported the mismatch instead of adjusting it away, a review confirmed the cause,
+   and the test now makes the stale call from *inside* request 2's handler. Against ADR-0005
+   modelled faithfully (`poolReuse = true` plus clearing the poison on acquire) it fails with
+   `stale call on request 1's Ctx while request 2 held it: recovered <nil> (returned "2")` —
+   nothing panicked, and request 1's reference was handed request 2's parameter. The blind spot is
+   the window while a later request holds the reused `Ctx`, not any use after release, and a test
+   written against the latter cannot see it. The plan's test was the defect; the guard count goes
+   from twelve to thirteen.
+
+3. *`testing.AllocsPerRun`'s warm-up call hides pre-sizing faults.* It runs `f` once before it
+   starts counting, and that call grows an undersized slice by `append`; every measured call then
+   reuses the grown backing array, because `Reset` truncates in place and keeps the capacity. Two
+   of this milestone's planned assertions were blind for exactly that reason. Both were replaced
+   or backed by a direct capacity assertion — which is why `Params.Cap()` exists — and the
+   injections confirmed the replacements go red where the originals did not.
+
+4. *A test-harness detail became a design constraint, and the constraint as first written was
+   wrong.* `make test` runs with `-race`, where `sync.Pool.Put` deliberately drops one object in
+   four; each drop sends the next `Get` to `newCtx`, so a zero-allocation dispatch really allocates
+   a fraction of a `Ctx` there. Measured at `GOMAXPROCS=1` over 200,000 iterations: **0.7492 per
+   call for a parameterised route, 0.4982 for a static one**, because `newCtx` allocates three
+   objects in the first case and two in the second — `MakeParams(0)` is a zero-capacity slice and
+   Go serves it from `runtime.zerobase` with no malloc. `AllocsPerRun` divides integer counts, so
+   both read as 0 while a genuine per-request allocation adds a full 1 and fails. Every version of
+   this milestone's docs and comments up to the final review then added that a *fourth* allocation
+   in `newCtx` "would break every zero budget under `make test`". It would not: injected, the
+   static figure reaches 0.7535 and still reads 0, and the parameterised one reaches 1.0017, close
+   enough to the boundary that three consecutive runs gave fail, fail, pass. The margin is real and
+   the ceiling matters, but no existing test enforced it —
+   `TestNewCtxStaysWithinThreeAllocations` now measures `newCtx` directly and fails
+   deterministically without the race detector. A comment is not a guard, which is the second time
+   this milestone learned that.
+
+**Measured:** What pooling saves, both arms in one session so no cross-session drift is in the
+number (`BenchmarkDispatchPooledVsUnpooled`, `bench/results/M6-context-pooling.txt`):
+**35.94 ns, 0 B, 0 allocs pooled against 82.11 ns, 240 B, 3 allocs unpooled.** Three, not one —
+the unpooled arm builds its `Ctx` through `newCtx` and pays for the parameter and store slices
+too, so this is not the same figure as M1's single-allocation baseline for a smaller, pre-pooling
+`Ctx`. Against M5's file, `BenchmarkRiceDispatch` moved 105.05n → 33.27n with allocations 1 → 0;
+the allocation half is exact, the time half directional only, because the host OS moved from
+Darwin 25.6.0 to Darwin 27.0.0 between the two recordings and `BenchmarkFasthttpBaseline`, which
+runs no rice code, moved −3.88% across the same pair. `DispatchHTTPError` went 2 → 1 allocations
+and `DispatchPanic` 4 → 3 without either path being opened: the one they lost is the `Ctx`. The
+`check()` calls cost nothing in the release build — `go build -gcflags=-m` reports
+`inlining call to (*poison).check` at every call site and the release body is empty — and the
+benchstat around them, two back-to-back runs on the same machine rather than one process, reads
+`RiceDispatch` −0.27% (p=0.001) against `CtxSetHeader`
++1.19% (p=0.000), both with 0 allocs on both sides. Two significant deltas with opposite signs are
+code layout and session drift, not a cost; a real per-call cost cannot make one benchmark faster.
+Root package coverage 98.9%.
+
+**Next:** M7 — graceful shutdown with a deadline, OnStart/OnShutdown hooks, server timeouts as
+options.
 
 ---
 

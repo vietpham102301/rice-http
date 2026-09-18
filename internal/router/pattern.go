@@ -101,10 +101,6 @@ func parsePattern(pattern string) ([]segment, error) {
 		segs = append(segs, segment{segStatic, pattern[start:]})
 	}
 
-	if len(names) > MaxParams {
-		return nil, fmt.Errorf("route path %s declares %d parameters; at most %d are supported", pattern, len(names), MaxParams)
-	}
-
 	return segs, nil
 }
 

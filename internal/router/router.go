@@ -26,6 +26,10 @@ var ErrDuplicate = errors.New("duplicate route")
 // The zero value is ready to use.
 type Tree[H any] struct {
 	t tree[H]
+
+	// maxParams is the largest parameter count of any accepted pattern. Package
+	// rice sizes pooled parameter storage from it.
+	maxParams int
 }
 
 // Insert registers h at pattern.
@@ -39,8 +43,25 @@ func (t *Tree[H]) Insert(pattern string, h H) error {
 	if err != nil {
 		return err
 	}
-	return t.t.insert(pattern, segs, h)
+	if err := t.t.insert(pattern, segs, h); err != nil {
+		return err
+	}
+
+	// Counted only after a successful insert, so a rejected pattern cannot size
+	// storage for a route that does not exist.
+	n := 0
+	for _, s := range segs {
+		if s.kind != segStatic {
+			n++
+		}
+	}
+	t.maxParams = max(t.maxParams, n)
+	return nil
 }
+
+// MaxParams returns the largest number of parameters, a wildcard included, that
+// any registered pattern captures.
+func (t *Tree[H]) MaxParams() int { return t.maxParams }
 
 // Lookup returns the handler registered for path, filling params with whatever
 // the matched route captured.

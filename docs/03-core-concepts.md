@@ -84,10 +84,14 @@ func (c *Ctx) Set(key string, v any)
 func (c *Ctx) Get(key string) (any, bool)
 ```
 
-Backed by a small inline slice of key/value pairs, not a map. Middleware typically stores
-one or two values, and a linear scan over three entries beats a map allocation. The slice
-grows to a heap allocation past its inline capacity; that is a documented cliff, not a
-secret.
+Backed by a small slice of key/value pairs, not a map, pre-sized to four entries on each
+pooled `Ctx`. Middleware typically stores one or two values, and a linear scan over a few
+entries beats a map allocation. A fifth key grows the slice — once per pooled `Ctx`, since
+the grown slice is kept. That is a documented cliff, not a secret.
+
+`Set` allocates nothing itself, but a non-pointer value is boxed into `any` at the call
+site, and that can allocate: `c.Set("id", someString)` costs one allocation, and it is the
+caller's. Store a pointer to avoid it.
 
 ### Lifetime
 
@@ -101,9 +105,14 @@ id := c.Param("id")                 // borrowed
 go audit(id)                        // BUG: reads a reused buffer
 ```
 
-Under `-tags ricedebug`, a released `Ctx` is poisoned and any later method call panics with
-a message pointing at this section. That check is compiled out of release builds entirely,
-so it costs nothing in production. See [ADR-0005](adr/0005-context-pooling-and-borrow-contract.md).
+Under `-tags ricedebug`, a released `Ctx` is poisoned and never reused, and any later method
+call panics with a message pointing at this section. That check is compiled out of release
+builds entirely, so it costs nothing in production.
+
+The debug build catches misuse of the `*Ctx`. It does **not** catch a retained `[]byte`: in
+the example above, `go audit(c.Param("id"))` reads a reused buffer and the debug build stays
+silent, because that slice points into fasthttp's memory rather than into anything rice can
+poison. See [ADR-0005](adr/0005-context-pooling-and-borrow-contract.md).
 
 ---
 

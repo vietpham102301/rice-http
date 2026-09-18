@@ -31,15 +31,15 @@ test, not a benchmark, so a regression fails CI rather than merely looking worse
 
 | Operation | Budget | Status |
 | --- | --- | --- |
-| Pool acquire + reset + release | 0 | TARGET (M6) |
+| Pool acquire + reset + release | 0 | MEASURED M6 |
 | Router lookup, static route | 0 | MEASURED M2 |
 | Router lookup, 1 parameter | 0 | MEASURED M3 |
-| Router lookup, 5 parameters | 0 | TARGET (M6, needs slot sizing) |
+| Router lookup, 5 parameters | 0 | MEASURED M6 |
 | Chain call, 0 middleware | 0 | MEASURED M4 |
 | Chain call, 5 middleware | 0 | MEASURED M4 |
 | Recovery installed, nothing panics | 0 extra | MEASURED M5 |
-| 404 through the funnel | 1 | MEASURED M5 |
-| Handler returns a fresh HTTPError | 2 | MEASURED M5 |
+| 404 through the funnel | 0 | MEASURED M6 |
+| Handler returns a fresh HTTPError | 1 | MEASURED M6 |
 | Panic recovered, stack captured | documented, not bounded | MEASURED M5 |
 | **End to end: single handler, unpooled Ctx (M1 baseline)** | 1 | MEASURED M1 |
 | `c.Method`, `c.Path` | 0 | MEASURED M1 |
@@ -47,14 +47,46 @@ test, not a benchmark, so a regression fails CI rather than merely looking worse
 | `c.Param` | 0 | MEASURED M3 |
 | `c.Query`, `c.Header` | 0 | TARGET (unscheduled) |
 | `c.ParamString` | 1 | MEASURED M3 |
-| `c.Set` / `c.Get`, up to inline capacity | 0 | TARGET (M6) |
-| **End to end: static route, no middleware, plaintext** | **0** | TARGET (M6) |
-| **End to end: `/users/:id`, 3 middleware, plaintext** | **0** | TARGET (M6) |
+| `c.Set` with a pointer value | 0 | MEASURED M6 |
+| `c.Get` | 0 | MEASURED M6 |
+| `c.Set` with a non-constant string (the caller's boxing) | 1 | MEASURED M6 |
+| **End to end: static route, no middleware, plaintext** | **0** | MEASURED M6 |
+| **End to end: `/users/:id`, plaintext, read with `Param`** | **0** | MEASURED M6 |
+| **End to end: static route, five middleware, plaintext** | **0** | MEASURED M6 |
 | `c.JSON` of a small struct | documented, not bounded | TARGET (M8) |
 
+The two rows that changed value rather than status did so because the `Ctx` stopped being an
+allocation. A 404 was 1 and is 0; a handler returning a fresh `HTTPError` was 2 and is 1, the
+one that remains being the `HTTPError` itself. Neither path was touched in M6 — the allocation
+that left them was the one every dispatch carried.
+
+`c.Set` is the one row where the number is not rice's. The store never grows within its
+capacity, but converting a non-pointer value to `any` at the *call site* allocates the
+interface's data word, so `c.Set("k", s)` for a non-constant string costs one and a pointer or
+a constant costs nothing. The budget test pins all three so the distinction cannot rot.
+
 Measured values come from the results files in `bench/results/`, most recently
-`bench/results/M5-error-handling.txt`, and from the `AllocsPerRun` assertions in
+`bench/results/M6-context-pooling.txt`, and from the `AllocsPerRun` assertions in
 `alloc_test.go`. Re-run `make bench-record` on your own machine before comparing.
+
+Two notes on reading the M6 file. `alloc_test.go` is built `!ricedebug`, because the debug
+build allocates a fresh `Ctx` per request on purpose — up to three objects through `newCtx`,
+since nothing is ever returned to the pool there. That is D5's price, documented rather than
+asserted. And `make test` runs with `-race`, where `sync.Pool` deliberately drops one `Put` in
+four; each drop sends the next `Get` to `newCtx`, so a zero-allocation dispatch really allocates
+a fraction of a `Ctx` per call there. Measured on this package: **0.75 per call for a route with
+a parameter, 0.50 for a static one** (0.7492 and 0.4982 exactly; the M6 retrospective records the
+method). The asymmetry is `newCtx` — three objects when the App has
+a parameterised route, two when it does not, because `MakeParams(0)` is a zero-capacity slice and
+Go serves that from `runtime.zerobase` without a malloc. `AllocsPerRun` divides integer counts and
+reports either fraction as 0, while a genuine per-request allocation adds a full 1 and fails. That
+is why a zero budget means something under the race detector.
+
+It is *not* why `newCtx` stays at three objects. A fourth takes the parameterised figure to about
+1.0 — the boundary, so those budgets go red on some runs and green on others, and the static
+budgets keep passing outright. Measured, with a fourth allocation injected: the parameterised
+dispatch budget failed on two runs out of three and the static one on none.
+`TestNewCtxStaysWithinThreeAllocations` is the guard, and it needs no race detector to fail.
 
 Raising a budget is a design change. It requires a note in the pull request explaining what
 was bought with the allocation, and if the reasoning is interesting, an ADR.
@@ -69,11 +101,14 @@ that the compiler cannot catch. Mitigated by the `ricedebug` poisoning build.
 
 **Caller-supplied parameter slices.** `Lookup` fills a `*Params` the caller owns instead of
 returning a fresh slice. Buys: one slice allocation per parameterised request. Costs: an
-awkward signature, and a maximum parameter count that must be computed at build time.
+awkward signature, and a maximum parameter count tracked during registration to size the
+pool's contexts.
 
-**Inline arrays before heap slices.** Route parameters and the per-request store both start
-as small fixed arrays inside the pooled `Ctx`. Buys: the common case entirely. Costs: a
-performance cliff at the inline capacity, which must be documented rather than discovered.
+**Pre-sized slices on the pooled `Ctx`.** Route parameters and the per-request store are
+slices allocated once when the pool builds a `Ctx`, sized from the largest registered route
+and to four store entries. Buys: the common case entirely, and no fixed limit on parameters.
+Costs: a cliff at the store's capacity, paid once per pooled `Ctx` rather than per request,
+and a `Ctx` built before a larger route was registered grows once on first use.
 
 **Byte views instead of strings.** Buys: one allocation per accessor call. Costs: the
 entire read-side API is `[]byte`, which is less pleasant than `string` and is the most
@@ -86,6 +121,42 @@ the rule that routes cannot be registered after the server starts.
 a `[]byte` is used as a map key or compared to a string. Costs: genuine memory-safety risk
 if the underlying bytes are mutated. Confined to one file, used only for values proven
 immutable for the duration, and every call site carries a comment naming why it is safe.
+
+## Pooled versus unpooled, same session
+
+What the pool actually buys, measured with both arms in one process and one session, so no
+cross-session drift is in the number (`BenchmarkDispatchPooledVsUnpooled`,
+`bench/results/M6-context-pooling.txt`, ten samples each, read through `benchstat`):
+
+| | sec/op | B/op | allocs/op |
+| --- | ---: | ---: | ---: |
+| `pooled` | 35.94n ± 0% | 0 | 0 |
+| `unpooled` | 82.11n ± 4% | 240 | 3 |
+
+Three allocations, not one: the unpooled arm builds the `Ctx` through `newCtx`, so it pays for
+the struct, the pre-sized parameter slice and the pre-sized store slice. That is the honest
+comparison — today's `Ctx` shape with and without a pool in the same run — and it is not the
+same figure as M1's single-allocation baseline, which measured a smaller, pre-pooling `Ctx`
+with no separate storage to allocate.
+
+The `check()` calls the `ricedebug` build needs in every exported `Ctx` method cost nothing in
+the release build. `go build -gcflags=-m` shows `(*poison).check` inlined at every call site,
+which is the direct evidence: the method body is empty, so the inlined call is nothing. A
+benchstat of dispatch before and after the calls were added — two back-to-back runs on the same
+machine, minutes apart, not one process like the table above — reads:
+
+```
+                │  precheck.txt  │              postcheck.txt              │
+                │     sec/op     │    sec/op     vs base                   │
+RiceDispatch-12    31.88n ± 1%       31.80n ± 0%  -0.27% (p=0.001 n=10)
+CtxSetHeader-12     72.22n ± 0%      73.08n ± 0%  +1.19% (p=0.000 n=10)
+```
+
+with 0 B/op and 0 allocs/op on both sides of both rows. Both deltas are flagged significant and
+they point in opposite directions, which is what code-layout and session drift look like, not
+what a cost looks like: a real per-call cost cannot make one benchmark faster. The claim this
+table supports is that the check compiles out, and that nothing at the sub-1.2% scale here is
+attributable to it either way.
 
 ## How it is measured
 

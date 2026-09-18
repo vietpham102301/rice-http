@@ -100,7 +100,8 @@ func (a *App) register(method, path string, h Handler, g *Group, mw []Middleware
 	// Insert the raw handler now, so a malformed pattern or a conflicting route
 	// panics from the call that wrote it. Build discards this tree and rebuilds
 	// with the compiled chain.
-	if err := a.treeFor(method).Insert(path, h); err != nil {
+	t := a.treeFor(method)
+	if err := t.Insert(path, h); err != nil {
 		if errors.Is(err, router.ErrDuplicate) {
 			// ErrDuplicate carries no path or method of its own (see its doc
 			// comment), so the message is built here, in the same "route path
@@ -113,6 +114,7 @@ func (a *App) register(method, path string, h Handler, g *Group, mw []Middleware
 		// pattern and say what to write instead, so they are surfaced verbatim.
 		panic("rice: " + err.Error())
 	}
+	a.maxParams = max(a.maxParams, t.MaxParams())
 
 	a.routes = append(a.routes, route{
 		method: method,

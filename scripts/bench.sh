@@ -18,7 +18,7 @@ mkdir -p bench/results
     echo "# cpu:  $(grep -m1 'model name' /proc/cpuinfo 2>/dev/null | cut -d: -f2- | sed 's/^ *//' || echo unknown)"
   fi
   echo
-  go test ./bench/... -run '^$' -bench . -benchmem -count=10
+  go test . ./bench/... -run '^$' -bench . -benchmem -count=10
 } | tee "${out}"
 
 echo "wrote ${out}"

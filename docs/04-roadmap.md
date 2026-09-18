@@ -103,14 +103,16 @@ string never appears in the response body.
 
 ---
 
-### ☐ M6 — Context pooling and the borrow contract
+### ☑ M6 — Context pooling and the borrow contract
 
 The milestone the whole project builds toward.
 
 - `sync.Pool` for `Ctx`, `reset` and `release`
-- Parameter slots sized from the max parameter count seen at build time
-- Inline key/value store
-- `ricedebug` build tag: poisoning released contexts, panicking on use-after-release
+- Parameter storage pre-sized from the largest parameter count seen during registration, with
+  the fixed eight-parameter limit removed
+- A pre-sized key/value store behind `Set` and `Get`
+- `ricedebug` build tag: poisoning released contexts, keeping them out of the pool, and
+  panicking on use-after-release
 
 **Exit criteria:** `AllocsPerRun` asserts **0 allocations** for a static route and for a
 parameterised route read as bytes. A `ricedebug` test proves use-after-release is caught. A
@@ -161,3 +163,6 @@ Not scheduled, not promised. Each would need its own brainstorm.
   [03-core-concepts.md](03-core-concepts.md) and budgeted in
   [05-performance-model.md](05-performance-model.md), but owned by no milestone.
   Noticed while writing M3.
+- Typed per-request store keys (`rice.Key[T]` with a `Get` returning `T`), safer than
+  `Set(string, any)` and immune to key collisions between middleware. Rejected for M6 because
+  the documented API was already `string`/`any`.
