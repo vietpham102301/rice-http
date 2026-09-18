@@ -178,6 +178,47 @@ rather than returning as soon as the listener closes; and the docs say that `Run
 outlast `grace` while an `OnStart` hook runs and that, after a timeout, an `OnShutdown` hook may
 run while a cut-off handler is still running. Nothing on the per-request path changed.
 
+### Corrected in M7's follow-up
+
+The fix wave's own re-review left four things open, and a follow-up branch closed them after
+M7 merged. Each has a test that failed on the merged code first, except the fourth, which pins
+behaviour that was already there.
+
+- **A later `Shutdown` could return "use of closed network connection".** The fix for
+  Important 2 closed the publish-record window for serving, but not for bookkeeping: if fasthttp
+  records the listener only after the second `ShutdownWithContext`, it keeps the closed listener
+  in its list and the next `ShutdownWithContext` closes it again and reports the error. Nothing
+  was served — the error was spurious, and it contradicted the doc's "returns `nil`". `Shutdown`
+  now drops an error that `errors.Is(err, net.ErrClosed)`: rice closed that listener on purpose,
+  and a context error never matches. `TestShutdownAfterFasthttpRecordedAClosedListenerReturnsNil`
+  reproduces the reviewer's probe.
+- **`RunContext` could return while another `Shutdown`'s hooks ran.** When its ctx ended while it
+  waited on a `Shutdown` called elsewhere, its own `Shutdown` gave up at `grace` and `RunContext`
+  returned, so `main` could exit mid-teardown. `RunContext` now waits for hooks that have
+  started, whichever call runs them — that was already true of its own `Shutdown`'s hooks — so
+  `grace` bounds the drain, not the hooks (`TestRunContextWaitsForAnotherShutdownsHooksAfterGrace`).
+  The first version waited for the other call to finish outright, and the fix wave's
+  `TestRunContextCutsAShutdownCalledElsewhereShortAtGrace` caught what that meant: a handler that
+  never returns holds fasthttp's drain open even after the force-close, because fasthttp counts
+  a connection gone only when its serving goroutine exits, so the other call's hooks never start
+  and `RunContext` waited forever. It now waits only once the hooks have started (a
+  `hooksStarted` channel closed as they begin); a drain still held up at `grace` is not waited
+  on, and hooks that start after `RunContext` returned may be cut short by the program's exit.
+  The follow-up's own review found one more path: an `OnStart` hook failing while a `Shutdown`
+  called elsewhere runs the hooks made `RunContext` return the error at once. It now waits there
+  too (`TestRunContextWaitsForRunningHooksWhenStartFails`).
+- **A second concurrent `Serve` was not rejected.** It ran the `OnStart` hooks a second time and
+  handed a second listener to fasthttp. `Serve` now returns the new `ErrAlreadyServing`, closing
+  the listener it was given, while another `Serve` runs. The flag is cleared when `Serve`
+  returns, so a `Serve` whose `OnStart` hook failed can still be retried, as it could before;
+  `closed` is checked first, so `Serve` after `Shutdown` still returns `nil`.
+  `TestASecondConcurrentServeIsRejected`, `TestServeCanBeRetriedAfterAFailedStart` — the second
+  failed with the flag's reset removed.
+- **A hook calling `Shutdown` with a ctx that never ends deadlocks.** Documented, not changed:
+  the hook runs while its own `Shutdown` holds the turn, and rice cannot tell a nested call from a
+  concurrent one on another goroutine. `TestShutdownFromAHookWaitsOnlyUntilItsOwnCtxEnds` pins
+  what does happen with a deadline: the inner call returns `ErrShutdownTimeout`.
+
 ### Things a user needs to know, written where a user will find them
 
 Three behaviours found during review are documented in `Shutdown`'s and `OnShutdown`'s doc

@@ -116,14 +116,19 @@ type App struct {
 
 	srv *fasthttp.Server
 
-	// mu guards ln and closed, which Serve and Shutdown use to agree on whether
-	// serving may begin. See the M7 design doc, D5.
+	// mu guards ln, closed and serving, which Serve and Shutdown use to agree on
+	// whether serving may begin. See the M7 design doc, D5.
 	mu sync.Mutex
 	ln net.Listener
 
 	// closed is set by the first Shutdown. A Serve that sees it closes its
 	// listener and returns without serving: an App serves once.
 	closed bool
+
+	// serving is set while a Serve call runs, from before its OnStart hooks
+	// until it returns. A second Serve that sees it is rejected with
+	// ErrAlreadyServing.
+	serving bool
 
 	// connMu guards conns and forceClosed. connState takes it only when a
 	// connection opens or closes, never per request. See the M7 design doc, D2.
@@ -156,6 +161,11 @@ type App struct {
 	// OnShutdown hooks. RunContext waits on it when a Shutdown called elsewhere
 	// stopped Serve.
 	shutdownDone chan struct{}
+
+	// hooksStarted is closed when the first Shutdown begins running the
+	// OnShutdown hooks. RunContext uses it to wait for hooks that are running
+	// without waiting on a drain that may never end.
+	hooksStarted chan struct{}
 }
 
 // route is one registration, recorded for Build to compile.
@@ -173,6 +183,7 @@ func New(opts ...Option) *App {
 		errorHandler: DefaultErrorHandler,
 		shutdownSem:  make(chan struct{}, 1),
 		shutdownDone: make(chan struct{}),
+		hooksStarted: make(chan struct{}),
 	}
 	a.pool.New = func() any { return a.newCtx() }
 	a.srv = &fasthttp.Server{

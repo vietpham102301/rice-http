@@ -18,6 +18,11 @@ import (
 // completion, because a goroutine cannot be stopped; their responses are lost.
 var ErrShutdownTimeout = errors.New("rice: shutdown timed out")
 
+// ErrAlreadyServing is returned by Serve, Run and RunContext when the App is
+// already serving. An App serves once: the listener passed to the rejected
+// call is closed.
+var ErrAlreadyServing = errors.New("rice: App is already serving")
+
 // Run binds addr and serves until Shutdown is called.
 //
 // It blocks. Use "127.0.0.1:0" to bind an ephemeral port and read the result
@@ -37,7 +42,9 @@ func (a *App) Run(addr string) error {
 // builds first, so it is safe to call directly without going through Run.
 //
 // An App serves once. If Shutdown has already been called, Serve closes ln and
-// returns nil without serving.
+// returns nil without serving. If another Serve is running, Serve closes ln and
+// returns ErrAlreadyServing. A Serve that returned without being shut down —
+// an OnStart hook failed, or serving failed — can be called again.
 //
 // OnStart hooks run first, before any connection is accepted. If one fails,
 // Serve closes ln and returns its error.
@@ -45,12 +52,27 @@ func (a *App) Serve(ln net.Listener) error {
 	a.Build()
 
 	a.mu.Lock()
-	closed := a.closed
-	a.mu.Unlock()
-	if closed {
+	if a.closed {
+		a.mu.Unlock()
 		_ = ln.Close()
 		return nil
 	}
+	if a.serving {
+		a.mu.Unlock()
+		_ = ln.Close()
+		return ErrAlreadyServing
+	}
+	a.serving = true
+	a.mu.Unlock()
+
+	// Cleared on every return, so a Serve that failed to start — an OnStart
+	// error, a serve error — can be retried. After a Shutdown, closed stops
+	// the retry instead.
+	defer func() {
+		a.mu.Lock()
+		a.serving = false
+		a.mu.Unlock()
+	}()
 
 	if err := a.runStart(); err != nil {
 		_ = ln.Close()
@@ -92,9 +114,15 @@ func (a *App) Serve(ln net.Listener) error {
 // own caller. If ctx ends during that wait, RunContext shuts down with grace
 // as usual, which cuts the other Shutdown's drain short at grace.
 //
-// RunContext can outlast grace in one case: when ctx ends while an OnStart
-// hook is running. Serve does not return until that hook does, and RunContext
-// waits for Serve.
+// RunContext never returns while OnShutdown hooks are running, whichever
+// Shutdown runs them, so a program that exits when RunContext returns does not
+// exit mid-teardown. Grace bounds the drain, not the hooks: RunContext can
+// outlast grace by as long as the hooks take. It does not wait on another
+// Shutdown's drain past grace, though: if that drain is still held up by a
+// handler that will not return, RunContext returns, and that Shutdown's hooks,
+// when they do start, may be cut short by the program's exit. RunContext can
+// also outlast grace when ctx ends while an OnStart hook is running: Serve does
+// not return until that hook does, and RunContext waits for Serve.
 func (a *App) RunContext(ctx context.Context, addr string, grace time.Duration) error {
 	if grace < 0 {
 		panic("rice: RunContext: grace is negative")
@@ -112,6 +140,11 @@ func (a *App) RunContext(ctx context.Context, addr string, grace time.Duration) 
 	select {
 	case err := <-serveErr:
 		if err != nil {
+			// An OnStart hook can fail after a Shutdown called elsewhere has
+			// started the OnShutdown hooks, since Shutdown does not wait for a
+			// running OnStart hook. With no Shutdown in progress this returns
+			// at once.
+			a.awaitRunningHooks()
 			return err
 		}
 		// Serve returns nil only once a Shutdown has begun, so one was called
@@ -120,13 +153,30 @@ func (a *App) RunContext(ctx context.Context, addr string, grace time.Duration) 
 		case <-a.shutdownDone:
 			return nil
 		case <-ctx.Done():
-			return a.shutdownWithin(grace)
+			err := a.shutdownWithin(grace)
+			a.awaitRunningHooks()
+			return err
 		}
 	case <-ctx.Done():
 	}
 
 	shutdownErr := a.shutdownWithin(grace)
-	return errors.Join(shutdownErr, <-serveErr)
+	err = errors.Join(shutdownErr, <-serveErr)
+	a.awaitRunningHooks()
+	return err
+}
+
+// awaitRunningHooks waits for the OnShutdown hooks if they have started, and
+// returns at once if they have not. After RunContext's own Shutdown returns,
+// hooks that have not started belong to another Shutdown still draining — one
+// held up by a handler that will not return, after grace force-closed its
+// connection. Waiting on that drain could mean waiting forever.
+func (a *App) awaitRunningHooks() {
+	select {
+	case <-a.hooksStarted:
+		<-a.shutdownDone
+	default:
+	}
 }
 
 // shutdownWithin calls Shutdown with grace to drain. The ctx is not derived
@@ -199,6 +249,15 @@ func (a *App) Shutdown(ctx context.Context) error {
 	defer func() { <-a.shutdownSem }()
 
 	err := a.srv.ShutdownWithContext(ctx)
+	if errors.Is(err, net.ErrClosed) {
+		// fasthttp can record ln after an earlier Shutdown closed it — the
+		// publish-record window below — and then closes it again here. Rice
+		// closed that listener on purpose, so the error is noise. It is never
+		// a context error, so a timeout still gets through. fasthttp keeps only
+		// the first close error of its listeners, but an App serves one
+		// listener at a time, so no other close error can hide behind it.
+		err = nil
+	}
 	if err == nil && ln != nil {
 		// Serve publishes ln before fasthttp records it. A ShutdownWithContext
 		// landing between the two finds no listener and returns nil without

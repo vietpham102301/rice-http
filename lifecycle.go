@@ -41,6 +41,14 @@ func (a *App) OnStart(fn func() error) {
 // is running, the OnShutdown hooks run, and Shutdown returns, before that
 // OnStart hook does; anything the OnStart hook opens after that point is never
 // released by an OnShutdown hook.
+//
+// A hook must not call Shutdown with a ctx that never ends. Hooks run while
+// the Shutdown that runs them holds its turn, so a Shutdown called from inside
+// a hook waits for a turn that is only released after the hook returns: it
+// blocks until its own ctx ends, and with context.Background() it blocks
+// forever. When its ctx does end it behaves as any Shutdown whose ctx ends
+// while it waits: it closes every open connection, including any a handler
+// cut off by a timed-out drain is still using.
 func (a *App) OnShutdown(fn func(context.Context) error) {
 	if fn == nil {
 		panic("rice: OnShutdown: hook is nil")
@@ -68,6 +76,7 @@ func (a *App) runShutdown(ctx context.Context) []error {
 	var errs []error
 	a.shutdownOnce.Do(func() {
 		defer close(a.shutdownDone)
+		close(a.hooksStarted)
 		for i := len(a.onShutdown) - 1; i >= 0; i-- {
 			if err := a.onShutdown[i](ctx); err != nil {
 				errs = append(errs, err)

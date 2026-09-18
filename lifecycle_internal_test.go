@@ -517,3 +517,37 @@ func TestShutdownForceClosesAConnectionAcceptedBeforeFasthttpRecordedTheListener
 		t.Errorf("fasthttp's Serve returned %v, want nil", err)
 	}
 }
+
+// TestShutdownAfterFasthttpRecordedAClosedListenerReturnsNil is the M7
+// follow-up's first item. When fasthttp records ln only after a Shutdown has
+// closed it, fasthttp keeps the closed listener in its list, and the next
+// ShutdownWithContext closes it again and reports "use of closed network
+// connection". That listener is one rice closed on purpose: the error is
+// noise, and a later Shutdown must still return nil.
+func TestShutdownAfterFasthttpRecordedAClosedListenerReturnsNil(t *testing.T) {
+	a := New()
+	a.Build()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	a.mu.Lock()
+	a.ln = ln // Serve's publish step; fasthttp has not been handed ln yet.
+	a.mu.Unlock()
+
+	if err := a.Shutdown(context.Background()); err != nil {
+		t.Fatalf("first Shutdown returned %v, want nil", err)
+	}
+
+	// fasthttp now records the listener rice has already closed.
+	serveCh := make(chan error, 1)
+	go func() { serveCh <- a.srv.Serve(ln) }()
+	if err := recv(t, 2*time.Second, "fasthttp's Serve returning", serveCh); err != nil {
+		t.Fatalf("fasthttp's Serve returned %v, want nil", err)
+	}
+
+	if err := a.Shutdown(context.Background()); err != nil {
+		t.Errorf("second Shutdown returned %v, want nil", err)
+	}
+}
