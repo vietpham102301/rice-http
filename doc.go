@@ -27,4 +27,22 @@
 // build will not report it.
 //
 // See docs/adr/0005-context-pooling-and-borrow-contract.md.
+//
+// # Lifecycle
+//
+// RunContext serves until its context is done, then calls Shutdown with a grace
+// period; pair it with signal.NotifyContext to stop on SIGINT or SIGTERM. rice
+// itself does not catch signals.
+//
+// OnStart hooks run in registration order before the first connection is
+// accepted, and the first error stops serving. OnShutdown hooks run in reverse
+// registration order after the drain, on the first Shutdown only, and every one
+// runs even when another fails.
+//
+// Nothing is served after Shutdown returns. If in-flight requests have not
+// finished when its context ends, Shutdown closes their connections and returns
+// an error wrapping ErrShutdownTimeout; the handlers run to completion and their
+// responses are lost. See docs/adr/0009-shutdown-force-closes-at-deadline.md.
+// Shutdown may be called more than once and concurrently: the calls take
+// turns, and one whose context ends while it waits force-closes and returns.
 package rice

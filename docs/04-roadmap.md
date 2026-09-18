@@ -122,7 +122,7 @@ of bug does it introduce in exchange?
 
 ---
 
-### ☐ M7 — Lifecycle
+### ☑ M7 — Lifecycle
 
 - Graceful shutdown with deadline, draining in-flight requests
 - `OnStart` and `OnShutdown` hooks

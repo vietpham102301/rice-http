@@ -23,7 +23,7 @@ The public layer is deliberately thin: it is mostly a facade that names things w
 owns lifetimes. The interesting algorithms are one layer down, unexported, and free to
 change.
 
-The diagram is the finished shape, not today's. As of M6, `internal/bytesconv` is named there
+The diagram is the finished shape, not today's. As of M7, `internal/bytesconv` is named there
 but not built, and no milestone owns it; the layout below marks precisely what exists.
 
 ## Package layout
@@ -34,11 +34,11 @@ import. Splitting them into subdirectories would create separate packages and fo
 into several imports, which is the opposite of the thin single facade the layer diagram
 describes.
 
-**What exists today** (through M6):
+**What exists today** (through M7):
 
 ```
 rice-http/
-├── app.go              App, Option, New, the fasthttp handler boundary, the error funnel
+├── app.go              App, New (builds the fasthttp.Server), Option and the timeouts, dispatch, the funnel
 ├── handler.go          Handler
 ├── middleware.go       Middleware
 ├── ctx.go              Ctx: the per-request handle, reset, Method/Path
@@ -53,7 +53,9 @@ rice-http/
 ├── build.go            Build: chain compilation and tree rebuild, once
 ├── method.go           the method enum and the fixed-array index
 ├── errors.go           HTTPError, PanicError, ErrNotFound, ErrorHandler, DefaultErrorHandler
-├── server.go           fasthttp.Server construction, Run/Serve/Shutdown
+├── server.go           Run, Serve, RunContext, Addr, Shutdown, ErrShutdownTimeout
+├── lifecycle.go        OnStart and OnShutdown: registration, and running them in order
+├── conns.go            connection tracking through ConnState, and the force-close at the deadline
 ├── doc.go              package documentation
 ├── internal/
 │   ├── router/         radix tree: insert, lookup, param capture, priority

@@ -1,10 +1,12 @@
 package rice
 
 import (
+	"context"
 	"log"
 	"net"
 	"runtime/debug"
 	"sync"
+	"time"
 
 	"github.com/valyala/fasthttp"
 
@@ -14,7 +16,7 @@ import (
 // Option configures an App at construction time.
 //
 // Configuration happens here rather than through setters so that a serving App
-// cannot be reconfigured underneath a request. M7 adds server timeouts.
+// cannot be reconfigured underneath a request.
 type Option func(*App)
 
 // WithErrorHandler replaces the ErrorHandler an App uses for every failure:
@@ -27,6 +29,35 @@ func WithErrorHandler(h ErrorHandler) Option {
 		panic("rice: WithErrorHandler: handler is nil")
 	}
 	return func(a *App) { a.errorHandler = h }
+}
+
+// WithReadTimeout limits how long the server waits to read a full request,
+// including its body. Zero, the default, means no limit. Set it in production:
+// without it a client that sends half a request holds its connection forever.
+func WithReadTimeout(d time.Duration) Option {
+	if d < 0 {
+		panic("rice: WithReadTimeout: duration is negative")
+	}
+	return func(a *App) { a.srv.ReadTimeout = d }
+}
+
+// WithWriteTimeout limits how long the server spends writing a response. The
+// clock starts after the handler returns. Zero, the default, means no limit.
+func WithWriteTimeout(d time.Duration) Option {
+	if d < 0 {
+		panic("rice: WithWriteTimeout: duration is negative")
+	}
+	return func(a *App) { a.srv.WriteTimeout = d }
+}
+
+// WithIdleTimeout limits how long a keep-alive connection may sit idle between
+// requests. Zero, the default, falls back to the read timeout, and so means no
+// limit when that is unset too.
+func WithIdleTimeout(d time.Duration) Option {
+	if d < 0 {
+		panic("rice: WithIdleTimeout: duration is negative")
+	}
+	return func(a *App) { a.srv.IdleTimeout = d }
 }
 
 // App is the root of a rice application. It owns the routes, the fasthttp
@@ -85,8 +116,46 @@ type App struct {
 
 	srv *fasthttp.Server
 
+	// mu guards ln and closed, which Serve and Shutdown use to agree on whether
+	// serving may begin. See the M7 design doc, D5.
 	mu sync.Mutex
 	ln net.Listener
+
+	// closed is set by the first Shutdown. A Serve that sees it closes its
+	// listener and returns without serving: an App serves once.
+	closed bool
+
+	// connMu guards conns and forceClosed. connState takes it only when a
+	// connection opens or closes, never per request. See the M7 design doc, D2.
+	connMu sync.Mutex
+
+	// conns is every connection fasthttp has reported open and not yet closed.
+	// Shutdown closes them when its deadline passes. Allocated on first use.
+	conns map[net.Conn]struct{}
+
+	// forceClosed is set by the sweep. A connection accepted before the
+	// listener closed but reported after the sweep is closed on arrival.
+	forceClosed bool
+
+	// onStart and onShutdown are the lifecycle hooks, in registration order.
+	// They are written during registration and read by Serve and Shutdown with
+	// no lock, on the same argument as built: registration ends before serving.
+	onStart    []func() error
+	onShutdown []func(context.Context) error
+
+	// shutdownOnce makes the OnShutdown hooks run on the first Shutdown only.
+	shutdownOnce sync.Once
+
+	// shutdownSem, capacity 1, lets one Shutdown at a time drive fasthttp's
+	// drain, the force-close and the hooks. It is a channel rather than a mutex
+	// so that a Shutdown waiting for its turn can give up when its own ctx ends.
+	// See the M7 design doc, D4, as corrected after the whole-branch review.
+	shutdownSem chan struct{}
+
+	// shutdownDone is closed once the first Shutdown has drained and run the
+	// OnShutdown hooks. RunContext waits on it when a Shutdown called elsewhere
+	// stopped Serve.
+	shutdownDone chan struct{}
 }
 
 // route is one registration, recorded for Build to compile.
@@ -100,11 +169,16 @@ type route struct {
 
 // New creates an App.
 func New(opts ...Option) *App {
-	a := &App{errorHandler: DefaultErrorHandler}
+	a := &App{
+		errorHandler: DefaultErrorHandler,
+		shutdownSem:  make(chan struct{}, 1),
+		shutdownDone: make(chan struct{}),
+	}
 	a.pool.New = func() any { return a.newCtx() }
 	a.srv = &fasthttp.Server{
-		Handler: a.handle,
-		Name:    "rice",
+		Handler:   a.handle,
+		Name:      "rice",
+		ConnState: a.connState,
 	}
 	for _, opt := range opts {
 		opt(a)
