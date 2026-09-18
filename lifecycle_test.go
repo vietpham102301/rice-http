@@ -74,7 +74,7 @@ func TestShutdownDrainsAnInFlightRequestAndRefusesNewConnections(t *testing.T) {
 		b, err := io.ReadAll(resp.Body)
 		resCh <- result{resp.StatusCode, string(b), err}
 	}()
-	<-inFlight
+	within(t, 2*time.Second, "the handler receiving the request", inFlight)
 
 	shutCh := make(chan error, 1)
 	go func() {
@@ -203,7 +203,7 @@ func TestNothingIsServedAfterATimedOutShutdown(t *testing.T) {
 
 	// Request 2 blocks in its handler past the deadline.
 	fmt.Fprint(conn, "GET /slow HTTP/1.1\r\nHost: rice\r\n\r\n")
-	<-inFlight
+	within(t, 2*time.Second, "the handler receiving the request", inFlight)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -433,7 +433,7 @@ func TestOnShutdownHooksRunInReverseAfterTheDrain(t *testing.T) {
 			_ = resp.Body.Close()
 		}
 	}()
-	<-inFlight
+	within(t, 2*time.Second, "the handler receiving the request", inFlight)
 
 	ctx, cancel := context.WithTimeout(context.WithValue(context.Background(), ctxKey{}, "shutdown ctx"), 5*time.Second)
 	defer cancel()
@@ -492,7 +492,7 @@ func TestOnShutdownErrorsJoinADrainTimeout(t *testing.T) {
 			_ = resp.Body.Close()
 		}
 	}()
-	<-inFlight
+	within(t, 2*time.Second, "the handler receiving the request", inFlight)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
@@ -556,7 +556,7 @@ func TestShutdownDuringOnStartStopsServe(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() { errCh <- app.Serve(ln) }()
 
-	<-entered
+	within(t, 2*time.Second, "the OnStart hook running", entered)
 	if err := app.Shutdown(context.Background()); err != nil {
 		t.Fatalf("Shutdown returned %v, want nil", err)
 	}

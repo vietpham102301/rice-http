@@ -154,7 +154,7 @@ func TestShutdownReturnsErrShutdownTimeoutWhenTheDeadlinePasses(t *testing.T) {
 		}
 	}()
 
-	<-inFlight // the handler is now blocked
+	within(t, 2*time.Second, "the handler receiving the request", inFlight)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
