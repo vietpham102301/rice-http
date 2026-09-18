@@ -73,6 +73,11 @@ func TestCloseConnsClosesTrackedAndLateConnections(t *testing.T) {
 
 	a.closeConns()
 
+	// A bounded deadline turns "closeConns didn't close it" into a fast,
+	// visible failure instead of a hang: net.Pipe supports deadlines, and a
+	// regression here (e.g. dropping the close loop) must fail the suite, not
+	// stall it.
+	_ = trackedPeer.SetReadDeadline(time.Now().Add(time.Second))
 	if _, err := trackedPeer.Read(make([]byte, 1)); err != io.EOF {
 		t.Errorf("reading the peer of a force-closed connection: %v, want io.EOF", err)
 	}
@@ -83,11 +88,16 @@ func TestCloseConnsClosesTrackedAndLateConnections(t *testing.T) {
 	defer latePeer.Close()
 	a.connState(late, fasthttp.StateNew)
 
-	if _, err := latePeer.Read(make([]byte, 1)); err != io.EOF {
-		t.Errorf("reading the peer of a late connection: %v, want io.EOF", err)
-	}
+	// Checked before the read so a regression that tracks (rather than closes)
+	// a late connection fails on this named assertion first, rather than
+	// blocking in the read below.
 	if _, ok := a.conns[late]; ok {
 		t.Error("a connection reported after the sweep was tracked")
+	}
+
+	_ = latePeer.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := latePeer.Read(make([]byte, 1)); err != io.EOF {
+		t.Errorf("reading the peer of a late connection: %v, want io.EOF", err)
 	}
 }
 
