@@ -54,13 +54,16 @@ Rice tracks open connections through `fasthttp.Server.ConnState`, installed in `
   touching the lock.
 
 When `ShutdownWithContext` returns the context's error, `Shutdown` calls `closeConns`: under
-`a.connMu` it sets `a.forceClosed = true` and closes every tracked connection. The blocked
+`a.connMu` it sets `a.forceClosed = true` and copies the tracked set, then closes every copied
+connection after releasing the lock — a `tls.Conn`'s `Close` can block for seconds, and
+`connState` needs the lock for every connection that opens or closes meanwhile. The blocked
 read or write in that connection's `serveConn` fails, the goroutine exits, and fasthttp's
 `StateClosed` untracks it.
 
 **The late-connection rule.** A connection fasthttp accepted before the listener closed can be
 reported with `StateNew` *after* the sweep. Because `forceClosed` is set under the same lock
-the sweep holds, `connState` closes such a connection on arrival instead of tracking it. That
+the sweep copies the set under, `connState` closes such a connection on arrival instead of
+tracking it, and no connection can fall between the copy and the flag. That
 closes the window without depending on timing, and
 `TestCloseConnsClosesTrackedAndLateConnections` pins it.
 
@@ -92,8 +95,30 @@ rice could write would set it.
 ## Consequences
 
 **Makes easy:** `Shutdown` has one guarantee, with no "unless": when it returns, nothing more
-is served, so an `OnShutdown` hook can release a resource without racing a request that is
-still using it. Hooks run after the drain and after the force-close for that reason.
+is served, so no new request can reach a resource an `OnShutdown` hook releases. Hooks run
+after the drain and after the force-close for that reason. After a clean drain no handler is
+running either; after a timeout, a handler that was cut off may still be, because a goroutine
+cannot be stopped (below), and a hook releasing something handlers use must allow for that.
+
+**The guarantee holds for concurrent calls.** `Shutdown` calls take turns through a
+capacity-one channel, `a.shutdownSem`: one call drives `ShutdownWithContext`, the force-close
+and the hooks before the next starts, so a call that waited returns only after all of that.
+A call whose own ctx ends while it waits does not wait on: it runs `closeConns`, which is safe
+to run at any moment because `forceClosed` is sticky, and returns an error wrapping
+`ErrShutdownTimeout`. Before M7's whole-branch review the calls did not take turns, and
+`ShutdownWithContext`, which holds fasthttp's lock for its whole drain, made a second call
+wait out the first's drain whatever its own ctx said, then return `nil` — possibly before the
+first call's force-close.
+
+**The guarantee holds when `Shutdown` lands as `Serve` starts.** `Serve` publishes its
+listener for `Shutdown` to find, then hands it to fasthttp, which records it under its own
+lock. A `ShutdownWithContext` between the two finds no listener and returns at once; if
+fasthttp then records the listener and accepts a connection before rice closes it, that
+connection was never drained, and fasthttp's `stop` flag has been reset. So after closing the
+listener, `Shutdown` calls `ShutdownWithContext` again: it finds the late listener and drains
+what it accepted — fasthttp's open count covers its accept loop until that returns, so nothing
+slips past — or finds nothing and returns at once.
+`TestShutdownDrainsAConnectionAcceptedBeforeFasthttpRecordedTheListener` pins it.
 
 **Handlers are not stopped.** Go cannot kill a goroutine. A handler running at the deadline
 runs to completion; its connection is gone, so its response is lost, and its pooled `Ctx` is
@@ -117,7 +142,7 @@ connections open, `closeIdleConns` closes them before the first check, but the f
 still sees a non-zero count: fasthttp decrements `s.open` only when a connection's serving
 goroutine exits (`serveConnCleanup`, `server.go:2302`) and when its own accept loop exits
 (`defer s.open.Add(-1)`, `server.go:1994`). Both run on other goroutines, woken by the closes,
-and in all ten samples they had not finished by the check that immediately follows. So even an
+and in all ten samples the count was still non-zero at the check that immediately follows. So even an
 idle server takes one tick to shut down.
 
 **Every request pays for the hook.** fasthttp's `setState` is

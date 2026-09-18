@@ -140,9 +140,12 @@ func main() {
 
 When the grace period runs out, rice closes every connection still open and `RunContext`
 returns an error wrapping `rice.ErrShutdownTimeout`. Either way, nothing is served once it has
-returned, and the `OnShutdown` hooks — run in reverse registration order, after the drain —
-can release what requests were using. fasthttp's own shutdown would let a busy keep-alive
-connection keep serving after a timeout; closing it costs about 2.5 ns on every request, and
+returned, and the `OnShutdown` hooks run in reverse registration order, after the drain. After
+a clean drain they can release what requests were using. After a timeout, a handler that was
+cut off may still be running, because a goroutine cannot be stopped, so a hook must not assume
+nothing is using the resource. fasthttp's own shutdown would let a busy keep-alive
+connection keep serving after a timeout; tracking open connections so rice can close them
+costs about 2.5 ns on every request, and
 [ADR-0009](docs/adr/0009-shutdown-force-closes-at-deadline.md) records why it is paid. The
 drain polls every 100 ms, so a shutdown takes about that long even with nothing in flight.
 

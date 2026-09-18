@@ -189,7 +189,7 @@ var ErrShutdownTimeout error
 ```
 
 `Build` compiles every route's middleware chain once and is called automatically by `Run`,
-`Serve` and `FasthttpHandler`; calling it early is only useful to make a configuration error
+`RunContext`, `Serve` and `FasthttpHandler`; calling it early is only useful to make a configuration error
 surface before the listener opens. Registration after `Build` panics.
 
 The root object. It owns the route trees, the global middleware list, the context pool, the
@@ -212,6 +212,13 @@ and its measured cost of about 2.5 ns per request, is
 `Shutdown` returns up to about 100 ms after the last request finishes, and takes about one poll
 even when only idle connections are open.
 
+`Shutdown` may be called more than once, and from several goroutines. The calls take turns: one
+drains, force-closes if its `ctx` ends, and runs the hooks before the next starts, so a call that
+waited its turn returns only after all of that, finds nothing left to drain, and returns `nil`.
+A call whose `ctx` ends while it waits does not wait on: it closes every open connection, as at
+its own deadline, and returns an error wrapping `ErrShutdownTimeout`. Either way the guarantee
+holds for every call — nothing is served after it returns.
+
 Hooks let a program order its own setup and teardown against the server's:
 
 - **`OnStart`** hooks run in registration order inside `Serve`, after the listener is bound and
@@ -221,7 +228,9 @@ Hooks let a program order its own setup and teardown against the server's:
   after any force-close, each with the `ctx` passed to `Shutdown` — which is already done if the
   drain timed out. Every hook runs even when an earlier one fails, their errors are joined into
   `Shutdown`'s result, and they run on the first `Shutdown` only, including on an App that never
-  served. A panicking hook is not recovered.
+  served. A panicking hook is not recovered. After a timed-out drain, a handler that was cut off
+  may still be running when the hooks do, so a hook releasing something handlers use must allow
+  for that.
 - Registering a nil hook, or any hook after `Build`, panics.
 - `Shutdown` does not wait for an `OnStart` hook that is still running: its `OnShutdown` hooks
   run, and it returns, before that hook does.
@@ -238,6 +247,12 @@ err := app.RunContext(ctx, ":8080", 10*time.Second)
 ```
 
 A `grace` of zero force-closes at once; a negative one panics.
+
+If `Shutdown` is called elsewhere, `RunContext` waits for it to drain and run the `OnShutdown`
+hooks, then returns `nil`, so `main` does not exit mid-drain; if its own `ctx` ends during that
+wait, it shuts down with `grace` as usual, which cuts the other drain short. `RunContext` can
+outlast `grace` in one case: when `ctx` ends while an `OnStart` hook is still running, because
+`Serve` returns only after that hook does.
 
 The three timeout options set the matching `fasthttp.Server` fields. Zero, the default, means
 unlimited, and a zero idle timeout falls back to the read timeout, as in fasthttp. A negative

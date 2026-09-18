@@ -23,7 +23,7 @@ The public layer is deliberately thin: it is mostly a facade that names things w
 owns lifetimes. The interesting algorithms are one layer down, unexported, and free to
 change.
 
-The diagram is the finished shape, not today's. As of M6, `internal/bytesconv` is named there
+The diagram is the finished shape, not today's. As of M7, `internal/bytesconv` is named there
 but not built, and no milestone owns it; the layout below marks precisely what exists.
 
 ## Package layout

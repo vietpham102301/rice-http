@@ -43,4 +43,6 @@
 // finished when its context ends, Shutdown closes their connections and returns
 // an error wrapping ErrShutdownTimeout; the handlers run to completion and their
 // responses are lost. See docs/adr/0009-shutdown-force-closes-at-deadline.md.
+// Shutdown may be called more than once and concurrently: the calls take
+// turns, and one whose context ends while it waits force-closes and returns.
 package rice

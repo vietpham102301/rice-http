@@ -170,6 +170,40 @@ func (a *App) OnShutdown(fn func(context.Context) error)
 `Addr` keeps its meaning — the bound address once serving has been reached — and now becomes
 non-empty only after `OnStart` succeeded, which is what the tests' `waitForAddr` wants.
 
+**Corrected after M7's whole-branch review.** Two parts of D4 and D5 did not hold, and both
+broke the guarantee that nothing is served after `Shutdown` returns:
+
+- **D4's "a second `Shutdown` still drains and force-closes" was false for concurrent calls.**
+  `ShutdownWithContext` holds fasthttp's server lock for its whole drain and forgets the
+  listeners on the first call. A second concurrent `Shutdown` blocked on that lock for the whole
+  first drain regardless of its own ctx, then found no listener, returned `nil` without
+  force-closing, and raced the first call into the hooks' `sync.Once` — so it could return, and
+  run the hooks, before the first call's force-close. `Shutdown` now takes a turn on a
+  capacity-one channel, `a.shutdownSem`, before step 2, and holds it through steps 2–4. A call
+  whose ctx ends while it waits runs D2's force-close — safe at any moment, because
+  `forceClosed` is sticky — and returns an error wrapping `ErrShutdownTimeout` without waiting
+  for the hooks. The turn is preferred over the ctx when both are ready, so a first call with
+  an already-ended ctx still drains and runs the hooks. A call that waited its turn returns only
+  after the previous call's drain, force-close and hooks.
+- **D5 step 3 left a window in which a connection could be served after `Shutdown` returned.**
+  The `closed` flag narrows finding 4 to the gap between step 4 of `Serve` (publishing `a.ln`)
+  and fasthttp's `Serve` recording the listener, but a `ShutdownWithContext` landing in that gap
+  still returns `nil` with nothing drained and fasthttp's `stop` flag reset. If fasthttp then
+  records the listener and accepts before step 3's close, that connection is served on a
+  keep-alive loop nothing waits for. Step 3 now continues: when step 2 returned `nil`, after
+  closing `ln`, call `ShutdownWithContext(ctx)` again. If fasthttp recorded `ln` late it drains
+  what was accepted — its open count includes the accept loop until `Serve` returns, so no
+  connection escapes — and a timeout force-closes as in D2; otherwise it finds no listener and
+  returns at once. Its only non-context error is the second close of `ln`, and it is discarded.
+
+D2's sweep also changed: it copies the tracked set under `a.connMu`, sets `forceClosed` in the
+same critical section, and closes the connections after releasing the lock, because a
+`tls.Conn`'s `Close` can block for seconds and `connState` needs the lock meanwhile. D6's
+`RunContext`, when `Serve` returns `nil` because a `Shutdown` was called elsewhere, now waits for
+that `Shutdown`'s drain and hooks (a `shutdownDone` channel closed after the hooks), or for its
+own ctx, which shuts down with `grace` as usual. `a.mu` and `a.connMu` are still never held
+together; the new channel is taken with neither held.
+
 ### D6: `RunContext` is the signal helper; core does not import `os/signal`
 
 ```go

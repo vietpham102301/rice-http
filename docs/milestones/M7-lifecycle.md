@@ -42,9 +42,13 @@ fasthttp v1.73.0's source while writing the design, before any code:
 4. **A cancelled-before-serving race.** If `Shutdown` runs after rice's `Serve` has decided to
    serve but before fasthttp's `Serve` has recorded the listener, `ShutdownWithContext` finds no
    listener, returns `nil`, and the `Serve` that follows blocks forever. `RunContext` with an
-   already-cancelled context walks straight into it. **Built:** the `closed` flag, and a
-   listener close in `Shutdown` *after* `ShutdownWithContext` — fasthttp's `Serve` maps "use of
-   closed network connection" to a `nil` return.
+   already-cancelled context can hit it. **Built:** the `closed` flag, which narrows the race to
+   the window between rice publishing the listener and fasthttp recording it — rare enough that
+   its guard fails only one run in thousands (see the guard count below) — and a listener close
+   in `Shutdown` *after* `ShutdownWithContext`, because fasthttp's `Serve` maps "use of closed
+   network connection" to a `nil` return. That window held a second problem, fixed after the
+   whole-branch review: a connection accepted inside it could be served after `Shutdown`
+   returned (see the correction below).
 
 So the drain and the timeouts are free, and so are the hooks' raw material. What had to be
 built is the guarantee: that `Shutdown` returning means the server has stopped. It costs about
@@ -84,7 +88,8 @@ measurement had something to be checked against.
 
 ### Correction: an idle server still waits one poll
 
-The design expected `Shutdown` with only idle keep-alive connections to return "near 0",
+The plan expected `Shutdown` with only idle keep-alive connections to return "near 0" — it
+attributed the figure to the design, which says only that `Shutdown` "returns promptly" —
 because fasthttp closes idle connections before its first poll. Measured median **101.4 ms**
 (`idle-keepalive-only`, range 100.9–101.7 ms). Reading `ShutdownWithContext` again explains
 it: the loop is `closeIdleConns()`, then `if open := s.open.Load(); open == 0 { return }`,
@@ -92,8 +97,8 @@ then wait for the ticker. Closing an idle connection does not decrement `s.open`
 drops only when the connection's serving goroutine exits (`serveConnCleanup`,
 `server.go:2302`), and fasthttp's accept loop counts itself as open too, decrementing only when
 its own `Serve` returns (`defer s.open.Add(-1)`, `server.go:1994`). Both run on other
-goroutines, woken by the closes, and in all ten samples neither had finished by the check that
-immediately follows. So the first check sees a non-zero count, and the drain waits one
+goroutines, woken by the closes, and in all ten samples the count was still non-zero at the
+check that immediately follows. So the first check sees a non-zero count, and the drain waits one
 100 ms tick.
 
 The other case, `after-last-request`, reads **95.20 ms** median (94.78–95.81 ms). The
@@ -126,6 +131,52 @@ a bounded `select`. The same injection now fails in 1.00 s with the assertion th
 predicted. The lesson is about the plan, not the code: a plan that specifies a fault injection
 should also specify how long the test may take to report it, because a test that hangs is
 indistinguishable in CI from a slow one.
+
+### Corrected after M7's whole-branch review
+
+The whole-branch review found two ways the headline guarantee — nothing is served after
+`Shutdown` returns — still failed, and both are fixed rather than documented.
+
+**Concurrent `Shutdown` calls did not honour their own ctx (Important 1).** fasthttp's
+`ShutdownWithContext` holds its server lock for the whole drain and forgets its listeners on
+the first call. A second concurrent `Shutdown` therefore blocked on that lock for the whole of
+the first call's drain, whatever its own ctx said, and then found no listener, returned `nil`
+without force-closing, and raced the first call to the `OnShutdown` hooks — so it could return,
+and run the hooks, before the first call's force-close. The realistic trigger is `RunContext`'s
+grace silently ignored because something else had already called
+`Shutdown(context.Background())`. Now the calls take turns through a capacity-one channel,
+`a.shutdownSem`: the call holding it drives the drain, the force-close and the hooks before the
+next starts, and a call whose ctx ends while waiting force-closes every connection and returns
+an error wrapping `ErrShutdownTimeout`. The force-close is safe at any moment because
+`forceClosed` is sticky: from then on every connection fasthttp reports is closed on arrival.
+The first `select` prefers the turn over the ctx, so a first `Shutdown` with an already-ended
+ctx still does the work. `TestAShutdownWaitingForAnotherHonoursItsOwnContext` and
+`TestAConcurrentShutdownReturnsOnlyAfterTheForceClose` reproduce the review's two cases and
+failed on the pre-fix code.
+
+**A connection accepted between `Serve` publishing its listener and fasthttp recording it could
+be served after `Shutdown` returned (Important 2).** The `closed` flag narrows finding 4 to that
+window but does not close it. A `ShutdownWithContext` landing inside it finds no listener,
+returns `nil` and resets fasthttp's `stop` flag; if fasthttp then records the listener and
+accepts before rice's listener close, that connection is on a keep-alive loop that nothing
+drains or force-closes. The review found it by reasoning. Now `Shutdown`, after closing the
+listener, calls `ShutdownWithContext` a second time: if fasthttp recorded the listener late, it
+drains what was accepted — fasthttp's open count includes its own accept loop until `Serve`
+returns, so nothing slips past — and a timeout force-closes as usual; otherwise it finds no
+listener and returns at once. Its only other error is the second close of the listener, which is
+discarded. `TestShutdownDrainsAConnectionAcceptedBeforeFasthttpRecordedTheListener` and its
+timed-out twin hold a test inside the window deterministically, by playing `Serve`'s part in
+the package: they publish `a.ln` as `Serve` does, pause `Shutdown`'s listener close, and only
+then hand the listener to fasthttp. The same test is the deterministic companion finding 4's
+listener close lacked: with that close removed it fails at once instead of one run in
+thousands.
+
+Bundled with those: `closeConns` now copies the tracked set under `connMu` and closes outside it,
+because a `tls.Conn`'s `Close` can block for seconds and `connState` needs the lock meanwhile;
+`RunContext` waits for a `Shutdown` called elsewhere to drain and run the hooks before returning,
+rather than returning as soon as the listener closes; and the docs say that `RunContext` can
+outlast `grace` while an `OnStart` hook runs and that, after a timeout, an `OnShutdown` hook may
+run while a cut-off handler is still running. Nothing on the per-request path changed.
 
 ### Things a user needs to know, written where a user will find them
 
@@ -195,8 +246,8 @@ Raw output: [`bench/results/M7-lifecycle.txt`](../../bench/results/M7-lifecycle.
 
 **What surprised me:**
 
-*The design's two numeric predictions were both wrong, and in the same direction.* It predicted
-the hook would be free and an idle shutdown instant. The hook costs 2.5 ns; the idle shutdown
+*The two numeric predictions were both wrong, and in the same direction.* The design predicted
+the hook would be free, and the plan an idle shutdown instant. The hook costs 2.5 ns; the idle shutdown
 takes a full tick. Both predictions came from reading code and reasoning about what it would
 cost, and both missed something the code does not say on its face — how much two calls weigh
 against a 37 ns dispatch, and that "closed" and "counted as closed" are different moments in
@@ -236,7 +287,7 @@ watched to fail.
 
 **Fault injections, and what each printed.**
 
-Every guard below was broken on purpose, the listed test run, and the code restored.
+Every guard below was broken on purpose, the listed test was run, and the code was restored.
 
 1. **Task 1 — listener close moved before `ShutdownWithContext`.**
    ```
