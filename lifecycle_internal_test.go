@@ -144,6 +144,15 @@ func TestConnectionsAreUntrackedAfterACleanDrain(t *testing.T) {
 	}
 }
 
+func TestRunContextPanicsOnNegativeGrace(t *testing.T) {
+	v := mustPanic(t, "RunContext(-1)", func() {
+		_ = New().RunContext(context.Background(), "127.0.0.1:0", -1)
+	})
+	if s, ok := v.(string); !ok || s[:6] != "rice: " {
+		t.Errorf("panicked with %v, want a string starting %q", v, "rice: ")
+	}
+}
+
 func TestHookRegistrationPanics(t *testing.T) {
 	cases := []struct {
 		name string

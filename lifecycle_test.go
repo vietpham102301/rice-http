@@ -116,6 +116,141 @@ func TestShutdownDrainsAnInFlightRequestAndRefusesNewConnections(t *testing.T) {
 }
 
 // TestServeAfterShutdownReturnsWithoutServing is spec D5: an App serves once.
+func TestRunContextServesUntilTheContextIsCancelled(t *testing.T) {
+	app := rice.New()
+	app.GET("/", func(c *rice.Ctx) error { return c.String(200, "up") })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() { errCh <- app.RunContext(ctx, "127.0.0.1:0", time.Second) }()
+
+	addr := waitForAddr(t, app)
+	if status, body := get(t, addr, "/"); status != 200 || body != "up" {
+		t.Fatalf("got %d %q, want 200 %q", status, body, "up")
+	}
+
+	cancel()
+	if err := within(t, 2*time.Second, "RunContext returning", errCh); err != nil {
+		t.Errorf("RunContext returned %v, want nil", err)
+	}
+}
+
+func TestRunContextLetsAnInFlightRequestFinishWithinGrace(t *testing.T) {
+	release := make(chan struct{})
+	inFlight := make(chan struct{})
+	app := rice.New()
+	app.GET("/slow", func(c *rice.Ctx) error {
+		close(inFlight)
+		<-release
+		return c.String(200, "finished")
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() { errCh <- app.RunContext(ctx, "127.0.0.1:0", 5*time.Second) }()
+	addr := waitForAddr(t, app)
+
+	bodyCh := make(chan string, 1)
+	go func() {
+		resp, err := http.Get("http://" + addr + "/slow")
+		if err != nil {
+			bodyCh <- "error: " + err.Error()
+			return
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		bodyCh <- string(b)
+	}()
+	within(t, 2*time.Second, "the handler receiving the request", inFlight)
+
+	cancel()
+	time.Sleep(50 * time.Millisecond) // RunContext is now draining
+	close(release)
+
+	if body := within(t, 2*time.Second, "the in-flight response", bodyCh); body != "finished" {
+		t.Errorf("in-flight body = %q, want %q", body, "finished")
+	}
+	if err := within(t, 2*time.Second, "RunContext returning", errCh); err != nil {
+		t.Errorf("RunContext returned %v, want nil", err)
+	}
+}
+
+func TestRunContextWithZeroGraceForceClosesAtOnce(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	inFlight := make(chan struct{})
+	app := rice.New()
+	app.GET("/slow", func(c *rice.Ctx) error {
+		close(inFlight)
+		<-release
+		return c.String(200, "never seen")
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() { errCh <- app.RunContext(ctx, "127.0.0.1:0", 0) }()
+	addr := waitForAddr(t, app)
+
+	go func() {
+		resp, err := http.Get("http://" + addr + "/slow")
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+	}()
+	within(t, 2*time.Second, "the handler receiving the request", inFlight)
+
+	cancel()
+	err := within(t, time.Second, "RunContext returning", errCh)
+	if missing := errorsIsAll(err, rice.ErrShutdownTimeout, context.DeadlineExceeded); len(missing) > 0 {
+		t.Errorf("RunContext returned %v, which does not match %v", err, missing)
+	}
+}
+
+func TestRunContextReturnsABindErrorAtOnce(t *testing.T) {
+	app := rice.New()
+	errCh := make(chan error, 1)
+	// Port 1 requires privileges this test does not have.
+	go func() { errCh <- app.RunContext(context.Background(), "127.0.0.1:1", time.Second) }()
+
+	if err := within(t, 2*time.Second, "RunContext returning", errCh); err == nil {
+		t.Error("RunContext returned nil for an unbindable address, want an error")
+	}
+}
+
+func TestRunContextReturnsAnOnStartErrorAtOnce(t *testing.T) {
+	errBoom := errors.New("boom")
+	app := rice.New()
+	app.OnStart(func() error { return errBoom })
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- app.RunContext(context.Background(), "127.0.0.1:0", time.Second) }()
+
+	if err := within(t, 2*time.Second, "RunContext returning", errCh); !errors.Is(err, errBoom) {
+		t.Errorf("RunContext returned %v, want the OnStart error", err)
+	}
+}
+
+// TestRunContextWithACancelledContextReturns is finding 4 of the M7 design:
+// Shutdown can run before fasthttp's Serve has recorded the listener. The
+// window is narrow, so the test goes through it many times.
+func TestRunContextWithACancelledContextReturns(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	for i := 0; i < 50; i++ {
+		app := rice.New()
+		errCh := make(chan error, 1)
+		go func() { errCh <- app.RunContext(ctx, "127.0.0.1:0", time.Second) }()
+
+		if err := within(t, 2*time.Second, fmt.Sprintf("RunContext returning (run %d)", i), errCh); err != nil {
+			t.Fatalf("run %d: RunContext returned %v, want nil", i, err)
+		}
+	}
+}
+
 func TestServeAfterShutdownReturnsWithoutServing(t *testing.T) {
 	app := rice.New()
 	if err := app.Shutdown(context.Background()); err != nil {

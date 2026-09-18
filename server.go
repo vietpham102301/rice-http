@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"time"
 )
 
 // ErrShutdownTimeout is returned by Shutdown when in-flight requests did not
@@ -68,6 +69,49 @@ func (a *App) Serve(ln net.Listener) error {
 	a.mu.Unlock()
 
 	return a.srv.Serve(ln)
+}
+
+// RunContext binds addr and serves until ctx is done, then shuts down, giving
+// in-flight requests up to grace to finish. It returns once serving has
+// stopped: nil after a clean shutdown, an error wrapping ErrShutdownTimeout if
+// grace ran out, or the error that stopped serving early, such as a failed
+// bind or OnStart hook.
+//
+// It is the building block for signal handling, which rice leaves to the
+// standard library so the program chooses the signals:
+//
+//	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+//	defer stop()
+//	err := app.RunContext(ctx, ":8080", 10*time.Second)
+//
+// A grace of zero cuts every in-flight request off at once. A negative grace
+// panics.
+func (a *App) RunContext(ctx context.Context, addr string, grace time.Duration) error {
+	if grace < 0 {
+		panic("rice: RunContext: grace is negative")
+	}
+	a.Build()
+
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- a.Serve(ln) }()
+
+	select {
+	case err := <-serveErr:
+		return err
+	case <-ctx.Done():
+	}
+
+	// Not derived from ctx: ctx is already done, and the grace period is new time.
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), grace)
+	defer cancel()
+
+	shutdownErr := a.Shutdown(shutdownCtx)
+	return errors.Join(shutdownErr, <-serveErr)
 }
 
 // Addr returns the bound address, or the empty string if the App is not serving.
