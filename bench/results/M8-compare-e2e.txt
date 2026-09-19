@@ -1,0 +1,221 @@
+# rice benchmark results: M8-compare-e2e
+# date: 2026-09-19T04:36:05Z
+# go:   go version go1.25.6 darwin/arm64
+# os:   Darwin 27.0.0 arm64
+# cpu:  Apple M2 Pro
+# power: 'Battery Power'
+# rice: b131556 (local, via replace)
+# github.com/gin-gonic/gin v1.12.0
+# github.com/labstack/echo/v5 v5.3.1
+# github.com/gofiber/fiber/v3 v3.5.0
+# github.com/valyala/fasthttp v1.73.0
+# cpus: 12 (server GOMAXPROCS=6, loadgen GOMAXPROCS=6)
+# load: 64 keep-alive connections, closed loop, warmup 5s, measured 10s, 5 rounds
+
+## static
+
+| framework | req/s (median) | req/s (min–max) | p50 µs (median) | p99 µs (median) |
+| --- | ---: | --- | ---: | ---: |
+| rice | 166225 | 161877–166764 | 360 | 753 |
+| gin | 158881 | 151338–161259 | 376 | 1048 |
+| echo | 158679 | 150137–160669 | 376 | 1114 |
+| fiber | 165912 | 149253–166974 | 360 | 655 |
+
+## param
+
+| framework | req/s (median) | req/s (min–max) | p50 µs (median) | p99 µs (median) |
+| --- | ---: | --- | ---: | ---: |
+| rice | 163887 | 161457–165908 | 376 | 688 |
+| gin | 157517 | 155468–161188 | 360 | 1114 |
+| echo | 156542 | 138758–160271 | 360 | 1114 |
+| fiber | 164914 | 164077–166875 | 376 | 655 |
+
+## middleware5
+
+| framework | req/s (median) | req/s (min–max) | p50 µs (median) | p99 µs (median) |
+| --- | ---: | --- | ---: | ---: |
+| rice | 164991 | 163908–166514 | 360 | 655 |
+| gin | 157775 | 156217–160820 | 360 | 1114 |
+| echo | 159246 | 157076–160873 | 360 | 1048 |
+| fiber | 165962 | 164447–166642 | 360 | 688 |
+
+## notfound
+
+| framework | req/s (median) | req/s (min–max) | p50 µs (median) | p99 µs (median) |
+| --- | ---: | --- | ---: | ---: |
+| rice | 166419 | 160808–167255 | 360 | 786 |
+| gin | 159097 | 156621–161418 | 360 | 1048 |
+| echo | 157572 | 152633–158425 | 360 | 1114 |
+| fiber | 165240 | 158807–167133 | 360 | 720 |
+
+## githubapi
+
+| framework | req/s (median) | req/s (min–max) | p50 µs (median) | p99 µs (median) |
+| --- | ---: | --- | ---: | ---: |
+| rice | 165815 | 161387–166240 | 360 | 688 |
+| gin | 155352 | 145705–159139 | 376 | 1179 |
+| echo | 157110 | 150848–158935 | 360 | 1179 |
+| fiber | 165535 | 154656–166636 | 360 | 753 |
+
+## json
+
+| framework | req/s (median) | req/s (min–max) | p50 µs (median) | p99 µs (median) |
+| --- | ---: | --- | ---: | ---: |
+| rice | 163747 | 157451–165981 | 376 | 688 |
+| gin | 156801 | 137053–160004 | 360 | 1179 |
+| echo | 155638 | 150737–159548 | 376 | 1114 |
+| fiber | 166272 | 164000–167521 | 360 | 622 |
+
+## body64k
+
+| framework | req/s (median) | req/s (min–max) | p50 µs (median) | p99 µs (median) |
+| --- | ---: | --- | ---: | ---: |
+| rice | 85777 | 83355–87333 | 720 | 1114 |
+| gin | 19062 | 18491–19767 | 3014 | 15728 |
+| echo | 18982 | 18570–19474 | 3014 | 15728 |
+| fiber | 85930 | 79155–87042 | 720 | 1114 |
+
+## raw
+
+```
+rice static 1 166225 360 655
+gin static 1 159650 360 1048
+echo static 1 150137 376 1310
+fiber static 1 149253 376 1376
+rice param 1 162949 376 786
+gin param 1 155468 360 1179
+echo param 1 138758 360 1835
+fiber param 1 164077 360 819
+rice middleware5 1 163908 360 786
+gin middleware5 1 157588 360 1310
+echo middleware5 1 158205 360 1245
+fiber middleware5 1 166568 360 753
+rice notfound 1 165123 360 786
+gin notfound 1 158147 360 1310
+echo notfound 1 155503 360 1376
+fiber notfound 1 160992 360 983
+rice githubapi 1 165815 360 753
+gin githubapi 1 145705 376 1507
+echo githubapi 1 150848 360 1376
+fiber githubapi 1 165535 360 753
+rice json 1 157451 376 917
+gin json 1 151423 376 1310
+echo json 1 159548 360 1048
+fiber json 1 166887 360 622
+rice body64k 1 87333 720 983
+gin body64k 1 19767 3014 14680
+echo body64k 1 19474 3014 15204
+fiber body64k 1 87042 720 950
+gin static 2 158881 376 1048
+echo static 2 159399 376 1048
+fiber static 2 164667 360 753
+rice static 2 164488 360 753
+gin param 2 156249 360 1179
+echo param 2 156112 360 1179
+fiber param 2 165343 376 655
+rice param 2 161457 360 950
+gin middleware5 2 157775 360 1179
+echo middleware5 2 157076 360 1179
+fiber middleware5 2 165962 360 720
+rice middleware5 2 166514 360 720
+gin notfound 2 156621 360 1310
+echo notfound 2 152633 360 1441
+fiber notfound 2 167133 360 720
+rice notfound 2 167255 360 786
+gin githubapi 2 157513 360 1179
+echo githubapi 2 157110 360 1245
+fiber githubapi 2 166306 360 688
+rice githubapi 2 165231 376 688
+gin json 2 156801 360 1179
+echo json 2 150737 360 1376
+fiber json 2 164000 376 720
+rice json 2 163747 376 688
+gin body64k 2 18491 3014 16252
+echo body64k 2 18876 2883 15728
+fiber body64k 2 85930 720 1441
+rice body64k 2 86409 720 1114
+echo static 3 158679 360 1114
+fiber static 3 165912 360 655
+rice static 3 166764 360 753
+gin static 3 156587 376 1114
+echo param 3 156738 376 1114
+fiber param 3 164799 376 720
+rice param 3 165404 376 688
+gin param 3 157517 376 1114
+echo middleware5 3 159246 376 1048
+fiber middleware5 3 165197 360 688
+rice middleware5 3 164991 376 655
+gin middleware5 3 156217 376 1114
+echo notfound 3 158425 360 1048
+fiber notfound 3 165240 376 622
+rice notfound 3 160808 376 786
+gin notfound 3 159097 360 1048
+echo githubapi 3 158935 360 1114
+fiber githubapi 3 166636 360 655
+rice githubapi 3 166240 360 622
+gin githubapi 3 159139 360 1048
+echo json 3 155638 376 1114
+fiber json 3 166272 360 622
+rice json 3 165962 360 622
+gin json 3 157681 360 1114
+echo body64k 3 18982 3014 15728
+fiber body64k 3 79155 720 2228
+rice body64k 3 83868 720 1507
+gin body64k 3 19459 3014 15204
+fiber static 4 166974 360 622
+rice static 4 166734 360 589
+gin static 4 161259 360 1015
+echo static 4 160669 360 1015
+fiber param 4 166875 360 622
+rice param 4 165908 376 622
+gin param 4 161188 360 1015
+echo param 4 160271 376 1015
+fiber middleware5 4 166642 360 622
+rice middleware5 4 166361 360 589
+gin middleware5 4 160820 360 983
+echo middleware5 4 160873 360 983
+fiber notfound 4 166722 360 622
+rice notfound 4 167102 360 622
+gin notfound 4 161418 360 1015
+echo notfound 4 157572 376 1048
+fiber githubapi 4 154656 376 1048
+rice githubapi 4 166156 360 655
+gin githubapi 4 155352 376 1179
+echo githubapi 4 154530 376 1179
+fiber json 4 167521 360 622
+rice json 4 165981 360 622
+gin json 4 137053 376 1769
+echo json 4 157510 376 1048
+fiber body64k 4 85861 720 1114
+rice body64k 4 83355 720 1441
+gin body64k 4 18893 3014 15728
+echo body64k 4 19006 3014 15728
+rice static 5 161877 376 786
+gin static 5 151338 376 1245
+echo static 5 155485 376 1114
+fiber static 5 165927 360 655
+rice param 5 163887 376 688
+gin param 5 159084 360 1048
+echo param 5 156542 360 1114
+fiber param 5 164914 376 655
+rice middleware5 5 164587 360 655
+gin middleware5 5 159079 360 1048
+echo middleware5 5 159835 360 1048
+fiber middleware5 5 164447 376 688
+rice notfound 5 166419 360 655
+gin notfound 5 160674 360 1015
+echo notfound 5 157805 360 1114
+fiber notfound 5 158807 376 884
+rice githubapi 5 161387 376 819
+gin githubapi 5 153744 376 1179
+echo githubapi 5 157730 360 1114
+fiber githubapi 5 161288 376 851
+rice json 5 162262 376 786
+gin json 5 160004 360 1048
+echo json 5 153325 376 1245
+fiber json 5 164127 360 720
+rice body64k 5 85777 720 1114
+gin body64k 5 19062 3014 15728
+echo body64k 5 18570 3014 16252
+fiber body64k 5 86480 720 1048
+```
