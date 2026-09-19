@@ -44,6 +44,7 @@ for (( round = 1; round <= rounds; round++ )); do
       if ! GOMAXPROCS="${half}" "${bin}/loadgen" -addr "${addr}" -scenario "${scenario}" -framework "${fw}" \
           -round "${round}" -conns "${conns}" -warmup "${warmup}" -duration "${duration}" >> "${raw}"; then
         kill "${pid}" 2>/dev/null || true
+        wait "${pid}" 2>/dev/null || true
         echo "e2e: ${fw} ${scenario} round ${round} failed" >&2
         exit 1
       fi
