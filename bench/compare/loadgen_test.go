@@ -206,3 +206,15 @@ func TestSummarizeRejectsAMalformedLine(t *testing.T) {
 		t.Error("Summarize accepted a round that is not a number")
 	}
 }
+
+func TestSummarizeRejectsAnUnknownName(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"rice static 1 100 10 20\nchi static 1 100 10 20\n", `line 2: unknown framework "chi"`},
+		{"rice statik 1 100 10 20\n", `line 1: unknown scenario "statik"`},
+	} {
+		err := Summarize(strings.NewReader(tc.in), &bytes.Buffer{})
+		if err == nil || err.Error() != tc.want {
+			t.Errorf("Summarize(%q) = %v, want %s", tc.in, err, tc.want)
+		}
+	}
+}

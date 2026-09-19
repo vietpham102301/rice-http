@@ -20,7 +20,9 @@ type sample struct {
 //
 // and writes one Markdown table per scenario that has samples, in Scenarios()
 // order, with one row per framework in Targets() order: the median req/s, its
-// min–max across rounds, and the median p50 and p99 in microseconds.
+// min–max across rounds, and the median p50 and p99 in microseconds. A line
+// naming a framework not in Targets() or a scenario not in Scenarios() is an
+// error, not a line to drop.
 func Summarize(r io.Reader, w io.Writer) error {
 	samples := map[string]map[string][]sample{} // scenario → framework → rounds
 	sc := bufio.NewScanner(r)
@@ -44,6 +46,12 @@ func Summarize(r io.Reader, w io.Writer) error {
 			nums[i] = v
 		}
 		fw, scen := f[0], f[1]
+		if _, ok := TargetByName(fw); !ok {
+			return fmt.Errorf("line %d: unknown framework %q", line, fw)
+		}
+		if _, ok := ScenarioByName(scen); !ok {
+			return fmt.Errorf("line %d: unknown scenario %q", line, scen)
+		}
 		if samples[scen] == nil {
 			samples[scen] = map[string][]sample{}
 		}

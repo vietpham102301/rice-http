@@ -27,10 +27,11 @@ func BenchmarkHandler(b *testing.B) {
 	for _, s := range Scenarios() {
 		for _, tg := range Targets() {
 			b.Run(s.Name+"/"+tg.Name, func(b *testing.B) {
-				if err := Check(tg, s); err != nil {
+				srv := tg.Build(s.App)
+				// The gate runs on the instance that is timed, not a fresh one.
+				if err := CheckServer(tg.Name, srv, s); err != nil {
 					b.Fatalf("equivalence gate: %v", err)
 				}
-				srv := tg.Build(s.App)
 				if srv.HTTP != nil {
 					benchHTTP(b, srv.HTTP, s)
 				} else {
