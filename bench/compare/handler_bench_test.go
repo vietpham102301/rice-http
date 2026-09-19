@@ -14,6 +14,15 @@ import (
 // (Fiber, rice) are driven through different request objects, so this level
 // excludes parsing for both and compares the rest; the end-to-end level exists
 // because of that.
+//
+// body64k is the exception: net/http hands the handler an unread body
+// stream by design, so Gin and Echo pay the cost of reading the 64 KiB body
+// inside the handler, and that read is timed here. A fasthttp server instead
+// reads the body into its buffer while parsing the request, before the
+// handler runs, and this level excludes parsing — so Fiber and rice are
+// timed without that read. The handler-level body64k row therefore measures
+// net/http's handler-side body read, not framework overhead; the end-to-end
+// level is the fair comparison for body64k.
 func BenchmarkHandler(b *testing.B) {
 	for _, s := range Scenarios() {
 		for _, tg := range Targets() {
@@ -68,10 +77,12 @@ func benchFasthttp(b *testing.B, h fasthttp.RequestHandler, s Scenario) {
 		ctx.Request.SetBody(s.Body)
 	}
 
+	ctx.Response.Reset()
 	h(&ctx) // warm
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
+		ctx.Response.Reset()
 		h(&ctx)
 	}
 	b.StopTimer()

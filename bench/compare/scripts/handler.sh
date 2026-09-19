@@ -9,7 +9,7 @@ out=../results/M8-compare-handler.txt
 {
   ./scripts/header.sh M8-compare-handler
   echo
-  go test . -run '^$' -bench '^BenchmarkHandler$' -benchmem -count=10
+  go test . -run '^$' -bench '^BenchmarkHandler$' -benchmem -count=10 -timeout 30m
 } | tee "${out}"
 
 echo "wrote bench/results/M8-compare-handler.txt"
