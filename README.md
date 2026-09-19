@@ -145,6 +145,7 @@ func main() {
 		rice.WithReadTimeout(5*time.Second),
 		rice.WithWriteTimeout(10*time.Second),
 		rice.WithIdleTimeout(60*time.Second),
+		rice.WithMaxBodySize(1<<20), // 1 MiB; a larger body gets 413 before any handler runs
 	)
 	app.GET("/hello", func(c *rice.Ctx) error { return c.String(200, "hello") })
 
