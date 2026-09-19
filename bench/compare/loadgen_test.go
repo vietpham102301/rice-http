@@ -3,6 +3,8 @@ package compare
 import (
 	"net"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -90,29 +92,49 @@ func TestLoadFailsOnAStatusMismatch(t *testing.T) {
 	}
 }
 
+// TestLoadFailsWhenTheServerNeverAnswers asserts, deterministically, that a
+// worker which hits an error makes exactly one attempt and stops: it counts
+// the connections accepted rather than timing the run, because with
+// fasthttp's default retries the run still finishes inside a generous time
+// bound, only slower — a timing assertion cannot tell "retried" from "slow".
 func TestLoadFailsWhenTheServerNeverAnswers(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
 	t.Cleanup(func() { _ = ln.Close() })
+
+	var accepted atomic.Int32
+	var mu sync.Mutex
+	var conns []net.Conn
 	go func() {
 		for {
 			conn, err := ln.Accept()
 			if err != nil {
 				return
 			}
-			t.Cleanup(func() { _ = conn.Close() })
+			accepted.Add(1)
+			mu.Lock()
+			conns = append(conns, conn)
+			mu.Unlock()
 			// Accept the connection and never write a response.
 		}
 	}()
+	t.Cleanup(func() {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, c := range conns {
+			_ = c.Close()
+		}
+	})
 
 	s, _ := ScenarioByName("static")
+	const wantConns = 2
 	start := time.Now()
 	res, err := Load(LoadConfig{
 		Addr:     ln.Addr().String(),
 		Scenario: s,
-		Conns:    2,
+		Conns:    wantConns,
 		Warmup:   0,
 		Duration: 300 * time.Millisecond,
 		Timeout:  100 * time.Millisecond,
@@ -126,6 +148,13 @@ func TestLoadFailsWhenTheServerNeverAnswers(t *testing.T) {
 	}
 	if elapsed > 2*time.Second {
 		t.Errorf("Load took %v, want it to return within 2s", elapsed)
+	}
+	// Each worker makes one attempt and stops at its first error, so exactly
+	// Conns connections are accepted. With fasthttp's default retries
+	// (MaxIdemponentCallAttempts = 5) each worker redials on every failed
+	// attempt, so the count would climb toward Conns * 5 = 10.
+	if got := accepted.Load(); got != wantConns {
+		t.Errorf("accepted %d connections, want exactly %d (one attempt per worker, no retries)", got, wantConns)
 	}
 }
 
