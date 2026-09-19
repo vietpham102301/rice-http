@@ -84,3 +84,46 @@ func TestBodyIsOverwrittenNotAppendedOnSecondWrite(t *testing.T) {
 		t.Errorf("body = %q, want %q; writes must replace, not append", got, "second")
 	}
 }
+
+func TestJSONWritesStatusBodyAndContentType(t *testing.T) {
+	c, fctx := newTestCtx("GET", "/json")
+
+	v := struct {
+		ID   int      `json:"id"`
+		Name string   `json:"name"`
+		Tags []string `json:"tags"`
+	}{42, "rice", []string{"a", "b"}}
+	if err := c.JSON(201, v); err != nil {
+		t.Fatalf("JSON returned %v, want nil", err)
+	}
+
+	if got := fctx.Response.StatusCode(); got != 201 {
+		t.Errorf("status = %d, want 201", got)
+	}
+	// No trailing newline: JSON marshals, it does not stream through an Encoder.
+	if got, want := string(fctx.Response.Body()), `{"id":42,"name":"rice","tags":["a","b"]}`; got != want {
+		t.Errorf("body = %q, want %q", got, want)
+	}
+	if got := string(fctx.Response.Header.ContentType()); got != MIMEApplicationJSON {
+		t.Errorf("content type = %q, want %q", got, MIMEApplicationJSON)
+	}
+}
+
+func TestJSONLeavesTheResponseAloneWhenEncodingFails(t *testing.T) {
+	c, fctx := newTestCtx("GET", "/json")
+	_ = c.String(202, "before")
+
+	if err := c.JSON(200, make(chan int)); err == nil {
+		t.Fatal("JSON of a channel returned nil, want the encoding error")
+	}
+
+	if got := fctx.Response.StatusCode(); got != 202 {
+		t.Errorf("status = %d, want the untouched 202", got)
+	}
+	if got := string(fctx.Response.Body()); got != "before" {
+		t.Errorf("body = %q, want the untouched %q", got, "before")
+	}
+	if got := string(fctx.Response.Header.ContentType()); got != MIMETextPlainUTF8 {
+		t.Errorf("content type = %q, want the untouched %q", got, MIMETextPlainUTF8)
+	}
+}

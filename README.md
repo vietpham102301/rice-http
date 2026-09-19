@@ -79,6 +79,27 @@ Order is fixed and does not depend on registration order: **app → outer group 
 a route still applies to it, because chains are compiled once at build time rather than
 walked per request ([ADR-0003](docs/adr/0003-middleware-as-prebuilt-closure-chain.md)).
 
+## Reading requests, writing JSON
+
+```go
+app.POST("/users", func(c *rice.Ctx) error {
+	var in struct{ Name string }
+	if err := json.Unmarshal(c.Body(), &in); err != nil {
+		return rice.NewHTTPError(400, "bad JSON")
+	}
+	page := c.Query("page")           // []byte, empty if absent
+	trace := c.Header("X-Request-Id") // case-insensitive
+	log.Printf("page=%s trace=%s", page, trace)
+	return c.JSON(201, &User{Name: in.Name})
+})
+```
+
+`Query`, `Header` and `Body` return borrowed bytes: free, and valid only until the handler
+returns. Copy what you keep — `string(b)` does — and do not hand them to a goroutine that
+outlives the handler. `json.Unmarshal` copies into its target, so the decoded value is yours.
+`JSON` is the one allocating helper in core, and there is no binding: decoding is a line you
+write ([ADR-0006](docs/adr/0006-no-reflection-in-core.md)).
+
 ## Error handling
 
 A handler returns an error, and every error — from routing, from middleware, from the

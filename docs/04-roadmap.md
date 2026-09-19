@@ -159,13 +159,17 @@ Not scheduled, not promised. Each would need its own brainstorm.
 - Static file serving
 - Content negotiation
 - Streaming and server-sent events
-- `c.Query` and `c.Header`, the remaining borrowed read accessors. Committed in
-  [03-core-concepts.md](03-core-concepts.md) and listed as not implemented in
-  [05-performance-model.md](05-performance-model.md), but owned by no milestone.
-  Noticed while writing M3.
-- `c.JSON`, a JSON response helper. Shown in [00-overview.md](00-overview.md)'s example and
-  budgeted for M8, which settled that it measures rather than builds; a handler encodes with
-  `encoding/json` and writes with `c.Bytes` today, as the comparison's `json` scenario does.
 - Typed per-request store keys (`rice.Key[T]` with a `Get` returning `T`), safer than
   `Set(string, any)` and immune to key collisions between middleware. Rejected for M6 because
   the documented API was already `string`/`any`.
+
+## Done after M8
+
+Outside any milestone, because the API was already written down in
+[03-core-concepts.md](03-core-concepts.md) and needed building, not designing:
+
+- `c.Query`, `c.Header` and `c.Body`, the borrowed read accessors. `Query` and `Header` had sat
+  on the list above since M3; `Body` was committed in the same table and missing from this
+  list too. Each is held at zero allocations by a budget test.
+- `c.JSON`, the JSON response helper, as ADR-0006's one `encoding/json` exception. Its
+  allocations are pinned in [05-performance-model.md](05-performance-model.md).
