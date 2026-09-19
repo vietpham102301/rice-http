@@ -218,6 +218,25 @@ func TestTimeoutOptionsPanicOnNegativeDurations(t *testing.T) {
 	}
 }
 
+func TestWithMaxBodySizeReachesTheServer(t *testing.T) {
+	if a := New(WithMaxBodySize(1 << 20)); a.srv.MaxRequestBodySize != 1<<20 {
+		t.Errorf("MaxRequestBodySize = %d, want %d", a.srv.MaxRequestBodySize, 1<<20)
+	}
+	if d := New(); d.srv.MaxRequestBodySize != 0 {
+		t.Errorf("an App without WithMaxBodySize has MaxRequestBodySize %d, want 0 (fasthttp's default)", d.srv.MaxRequestBodySize)
+	}
+}
+
+func TestWithMaxBodySizePanicsOnZeroAndNegative(t *testing.T) {
+	for _, n := range []int{0, -1} {
+		name := fmt.Sprintf("WithMaxBodySize(%d)", n)
+		v := mustPanic(t, name, func() { WithMaxBodySize(n) })
+		if s, ok := v.(string); !ok || !strings.HasPrefix(s, "rice: ") {
+			t.Errorf("%s panicked with %v, want a string starting %q", name, v, "rice: ")
+		}
+	}
+}
+
 // recv returns the next value from ch, or fails the test if none arrives in d.
 func recv[T any](t *testing.T, d time.Duration, what string, ch <-chan T) T {
 	t.Helper()
