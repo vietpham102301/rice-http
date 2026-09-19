@@ -250,7 +250,7 @@ The table is copied verbatim from julienschmidt/go-http-routing-benchmark at a p
 
 ```bash
 SRCVER=v0.0.0-20200726193010-d8f3b8589958
-( cd "$(mktemp -d)" && go mod download github.com/julienschmidt/go-http-routing-benchmark@$SRCVER )
+( cd "$(mktemp -d)" && go mod init tmp >/dev/null 2>&1 && go mod download github.com/julienschmidt/go-http-routing-benchmark@$SRCVER )
 SRC=$(go env GOMODCACHE)/github.com/julienschmidt/go-http-routing-benchmark@$SRCVER
 {
   cat <<'EOF'
