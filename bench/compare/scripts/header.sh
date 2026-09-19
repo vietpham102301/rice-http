@@ -16,6 +16,9 @@ if [ "$(uname -s)" = "Darwin" ]; then
 else
   echo "# cpu:  $(grep -m1 'model name' /proc/cpuinfo 2>/dev/null | cut -d: -f2- | sed 's/^ *//' || echo unknown)"
 fi
+if [ "$(uname -s)" = "Darwin" ]; then
+  echo "# power: $(pmset -g batt 2>/dev/null | head -1 | sed "s/^Now drawing from //" || echo unknown)"
+fi
 echo "# rice: $(git -C ../.. rev-parse --short HEAD) (local, via replace)"
 for m in github.com/gin-gonic/gin github.com/labstack/echo/v5 github.com/gofiber/fiber/v3 github.com/valyala/fasthttp; do
   echo "# $(go list -m "$m")"
