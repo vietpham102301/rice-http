@@ -97,11 +97,12 @@ the test that was meant to catch it.
 **3. What a client sees is the transport — [M8](milestones/M8-benchmark-suite.md),
 [ADR-0001](adr/0001-use-fasthttp-as-transport.md).** Seven milestones went into the per-request
 cost of routing, middleware, errors and the context, and at the handler level it shows: rice is
-fastest in five scenarios, zero allocations in the light ones, and on the 203-route GitHub table —
+fastest in five scenarios, zero allocations everywhere but `json` and `body64k`, and on the 203-route GitHub table —
 chosen because rice was expected to lose it — rice resolved the route in 118.8 ns while Fiber took
 680.6. End to end none of that is visible. At about 166,000 requests a second each request has up
-to about 36 µs of server CPU, and the frameworks differ by 0.01 to 0.6 µs; rice and Fiber trade
-places round by round, and so do Gin and Echo. The only line a client sees is the one between
+to about 36 µs of server CPU, and the frameworks differ by 0.01 to 0.6 µs; no order between rice and
+Fiber, or between Gin and Echo, can be claimed from five rounds — not even in `json`, where Fiber
+was ahead in all five. The only line a client sees is the one between
 fasthttp and `net/http` — 3.6–6.8% in the light scenarios, about 4.5 times for a 64 KiB body —
 and ADR-0001 drew it before any code existed. The overview said throughput would be reported and
 was not a criterion; I had not expected the report to say that the one decision taken before the

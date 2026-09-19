@@ -17,7 +17,8 @@ Everything else in this document exists to make that claim precise, testable and
 
 The claim is narrow on purpose. It does **not** cover:
 
-- Allocations inside the user's handler, including `c.JSON`, which encodes a user value.
+- Allocations inside the user's handler, including JSON encoding the handler does itself, for
+  example with `encoding/json`.
 - The first requests after start, while the pool warms and the trees are cold in cache.
 - Request bodies large enough that fasthttp allocates rather than reusing its buffer.
 - `ParamString`, `QueryString` and every other method whose name says it copies.
@@ -316,14 +317,19 @@ handler-level differences between frameworks are 0.01 to 0.6 µs. Routing, middl
 costs are invisible at this level by construction: Fiber's `githubapi` is ten times its `static`
 at the handler level (680.6 against 65.20 ns) and serves the same end-to-end rate (165,535
 against 165,912 req/s). Within one transport, rice against Fiber and Gin against Echo, the
-same-round differences change sign from round to round, typically by 1–3%, and the medians
-differ by less than the min–max across rounds. rice was ahead of Fiber in 12 of the 30 same-round
-pairs of the six light scenarios. The end-to-end numbers do not rank frameworks within a
-transport, and nothing here does.
+medians differ by less than the min–max across rounds, and across all six light scenarios the
+same-round differences go both ways, typically by 1–3%: rice was ahead of Fiber in 12 of the 30
+same-round pairs, Gin ahead of Echo in 19 of 30. Per scenario they do not always change sign.
+**In `json`, Fiber was ahead of rice in all five rounds**, by 0.2% to 6.0% of rice's rate; Gin was
+ahead of Echo in all five rounds of `param` and of `notfound`. Five rounds with overlapping ranges
+are not enough to claim an order from those — a sign test on five of five is p ≈ 0.06 — and none is
+claimed; nor is the opposite. The end-to-end numbers do not rank frameworks within a transport,
+and nothing here does.
 
 **The light scenarios share a ceiling, and this setup cannot say whose it is.** rice and Fiber
-reach the same top in all six — their best rounds are between 166,636 and 167,521 req/s — and
-neither process saturated its six CPUs. Server and client share
+reach about the same top in all six — rice's best round per scenario is between 165,908 and
+167,255 req/s, Fiber's between 166,636 and 167,521 — and, in an unrecorded spot check during the
+recording's review, neither process saturated its six CPUs. Server and client share
 the machine's memory bandwidth and caches — splitting the CPUs removes scheduler contention, not
 that — and the loopback path is shared too. Latency, connections and throughput agree with each
 other (64 connections at about 166,000 req/s is about 385 µs a request, and the p50 is 360–376 µs),
@@ -377,7 +383,7 @@ no-op middleware, against 53.66 ns and 0 for `static`; the chain is folded into 
 build time ([ADR-0003](adr/0003-middleware-as-prebuilt-closure-chain.md)), so a request walks no
 slice and carries no cursor. The route and body differ from `static` too, so the difference in
 time is not the middleware's alone. None of the four frameworks allocates more with five
-middleware than without. End to end: indistinguishable within each transport.
+middleware than without. End to end: no order within either transport can be claimed.
 
 **`notfound` — rice at zero allocations; Gin roughly level; Echo's default is expensive.** rice's
 miss goes through the same funnel as every error, answering with the prebuilt `ErrNotFound`
@@ -406,8 +412,12 @@ rice's row is `encoding/json` in the handler plus `c.Bytes`, not a rice JSON pat
 `c.JSON` ([ADR-0006](adr/0006-no-reflection-in-core.md) keeps reflection out of core). Its 2
 allocations and 96 bytes are the handler's `json.Marshal` call — dispatch, `SetContentType` and
 `Bytes` are each held at zero by their budget tests. Why the standard encoder called this way is
-ahead of the other frameworks' helpers is **not explained**. End to end: indistinguishable within
-each transport.
+ahead of the other frameworks' helpers is **not explained**. End to end, the one rice–Fiber
+result that did not change sign: **Fiber served more than rice in all five `json` rounds**, by
+0.2% to 6.0% of rice's rate (medians 166,272 against 163,747, ranges overlapping). With five
+rounds that is not enough to claim an order — a sign test on five of five is p ≈ 0.06 — so
+none is claimed, in either direction; it is stated because it is the only scenario in which
+rice was behind in every round.
 
 **`body64k` — the one scenario that separates the transports by a factor, and rice is level with
 Fiber.** End to end, rice (85,777 req/s) and Fiber (85,930) serve about 4.5 times what Gin
@@ -427,7 +437,8 @@ handler makes the same call (`fiber.go`).
 a margin the data can separate — and that is not the same as rice being faster where a client
 can see it. The three cases chosen because rice was expected to lose did not produce a loss:
 `githubapi` and `json` went to rice at the handler level, and `body64k` is a tie with Fiber
-decided by the transport. End to end, rice cannot be told apart from Fiber in any scenario; its
+decided by the transport. End to end, no order between rice and Fiber can be claimed in any
+scenario — in `json` Fiber was ahead in all five rounds, too few to claim an order; its
 handler-level lead of 11.5–13 ns over Fiber on `static` and `param` is below what a client over a
 socket can observe here, and the one gap a client does see, `body64k`, belongs to fasthttp. What
 the design decisions buy is visible in the allocation column and at the handler level. What a

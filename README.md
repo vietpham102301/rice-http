@@ -245,7 +245,8 @@ load generator in a separate process, 64 connections, median of five rounds — 
 | `static`, end to end: req/s | 166,225 | 165,912 | 158,881 | 158,679 |
 
 At the handler level rice is the fastest of the four here. End to end that ordering does not
-survive: rice and Fiber cannot be told apart, and both lead Gin and Echo because fasthttp leads
+survive: no order between rice and Fiber can be claimed from five rounds (in `json` Fiber was
+ahead in all five, by 0.2–6.0% — too few to call it an order either way), and both lead Gin and Echo because fasthttp leads
 `net/http`, not because of anything rice does. Fiber's `githubapi` figure is specific to that
 route's place in Fiber's route buckets. The tables for all seven scenarios, what each level can
 and cannot compare, and the reason for each result are in the performance model's

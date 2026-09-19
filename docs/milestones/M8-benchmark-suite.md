@@ -24,14 +24,16 @@ implemented" instead of carrying a target. No rice code changed. The project ret
 Where does rice stand, and — more importantly — why, in terms of the design decisions recorded in
 the ADRs?
 
-**At the handler level, ahead of all three in five scenarios and at zero allocations; end to end,
+**At the handler level, ahead of all three in five scenarios, at zero allocations in every
+scenario but `json` and `body64k`; end to end,
 level with Fiber and ahead of Gin and Echo by the transport.** In full, with the tables, in
 [05-performance-model.md — Where rice stands](../05-performance-model.md#where-rice-stands). In
 short:
 
 - Handler level, framework code on top of a parsed request: rice is fastest in `static`,
   `param`, `middleware5`, `githubapi` and `json`, every difference real (the ten runs of any
-  two frameworks never overlap), and allocates nothing in the first five. That is
+  two frameworks never overlap), and allocates nothing in the first four (in `json` its 2
+allocations are the handler's `json.Marshal`). That is
   [ADR-0005](../adr/0005-context-pooling-and-borrow-contract.md) — the pooled `Ctx` and borrowed
   parameters — in the allocation column,
   [ADR-0003](../adr/0003-middleware-as-prebuilt-closure-chain.md) in `middleware5` and
@@ -40,8 +42,9 @@ short:
 - End to end, a client in another process: the level separates the two transports and nothing
   finer. rice and Fiber serve 3.6–6.8% more requests a second than Gin and Echo in the six light
   scenarios, and about 4.5 times as many in `body64k`. That is
-  [ADR-0001](../adr/0001-use-fasthttp-as-transport.md). rice against Fiber cannot be told apart
-  in any scenario.
+  [ADR-0001](../adr/0001-use-fasthttp-as-transport.md). No order between rice and Fiber can be
+  claimed in any scenario. In `json` Fiber was ahead in all five rounds, by 0.2–6.0%; five
+  rounds with overlapping ranges are too few to claim an order, and none is claimed.
 
 So the "why" divides cleanly by level. What rice's own decisions buy shows in the allocation
 column and in nanoseconds of framework code; what a client over a socket sees in this setup is
@@ -77,7 +80,7 @@ entries.
 `Check` sends a scenario to a fresh app and compares status and body; `TestEveryFrameworkAnswersEveryScenarioAlike`
 runs it for all 28 pairs, and `BenchmarkHandler` calls it before timing each one, so a broken
 adapter fails the run instead of producing a number for different work. Two exceptions, both
-written into `check.go` and the results. It ignores one trailing newline, because Echo's JSON
+written into `check.go`. It ignores one trailing newline, because Echo's JSON
 encoder ends its output with one and the others do not — a difference in bytes, not in work.
 And `notfound` is compared by status only, because each framework answers with its default 404
 and overriding those would stop measuring the default miss path: rice and Fiber `Not Found`
@@ -134,6 +137,20 @@ header, which both files carry: `'Battery Power'`, 75% at the start and 17% at t
 interleave them, so relative positions are the claim; the absolute figures may be lower or
 noisier than on mains power. The per-round mean across all 28 end-to-end pairs moved 1.8%, with
 no downward trend.
+
+### Smaller rulings
+
+- **The GitHub table's regeneration command was fixed in the plan.** `githubapi.go`'s header
+  points readers at the plan's command for regenerating the table, and that command ran
+  `go mod download` in an empty temporary directory, which fails there. It gained
+  `go mod init tmp` first, so the pointer leads to a command that works; the generated file was
+  unchanged.
+- **`cmd/loadgen` rejects bad flags.** `-duration` of zero or less, a negative `-warmup` and an
+  empty `-framework` exit 2 with a message. An empty framework name would have produced a result
+  line with five fields instead of six, which the summariser rejects only after a whole run.
+- **The recording ran in the background.** `make compare-record` takes about 40 minutes, longer
+  than one foreground tool call may run, so it was started in the background and its completion
+  awaited rather than polled.
 
 ## Exit criteria
 
@@ -221,8 +238,10 @@ measuring found that out.
 
 *The end-to-end level erased almost everything the handler level found.* The handler-level
 table orders the four frameworks cleanly, with no overlap between any two in five scenarios.
-End to end, rice and Fiber trade places round by round, Gin and Echo do the same, and the only
-line that survives is the one between fasthttp and `net/http`. Two numbers per scenario were
+End to end, rice's and Fiber's ranges overlap, and so do Gin's and Echo's; across the light
+scenarios the same-round differences go both ways, though not in every scenario — Fiber was
+ahead of rice in all five `json` rounds, Gin ahead of Echo in all five of `param` and of
+`notfound`, too few rounds to claim an order. The only line that survives is the one between fasthttp and `net/http`. Two numbers per scenario were
 planned; the setup delivered one per transport. The difference between a nanosecond-scale
 framework cost and a microsecond-scale request is not subtle once written down, and it was not
 written down before the recording.
@@ -378,7 +397,7 @@ guard:
 **What I still do not understand:**
 
 Why rice's handler-level time is below Fiber's. Both are on fasthttp v1.73.0, both allocate
-nothing in the light scenarios, and rice is 11.5–13 ns faster in `static` and `param` with no
+nothing in every scenario but `json` and `body64k`, and rice is 11.5–13 ns faster in `static` and `param` with no
 overlap in ten runs. No profile was taken of either. It joins the unexplained list with M1's
 43 ns header write, M2's ~9 ns of routing, M3's 15.93 ns of tree scaling and M4's ~1.1 ns per
 middleware — and like them it is bounded and reproducible and has no mechanism behind it.
@@ -390,5 +409,6 @@ its CPU — a description of where the time goes, not why. It was not profiled, 
 Echo's code rather than rice's, but it is the largest gap the comparison found.
 
 Which side of the end-to-end setup is the limit in the light scenarios. The fasthttp frameworks
-reach the same top in every one, neither process saturated its CPUs, and the numbers are
+reach about the same top in every one, neither process saturated its CPUs in an unrecorded
+spot check during the recording's review, and the numbers are
 self-consistent. A second machine for the client would answer it; this project had one.
