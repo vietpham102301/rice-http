@@ -52,14 +52,26 @@ Every exported method of `Ctx`, one row each.
 | `c.Set` with a pointer value | 0 | MEASURED M6 | `TestAllocBudgetCtxSetPointer` |
 | `c.Set` with a non-constant string (the caller's boxing) | 1, exactly | MEASURED M6 | `TestAllocBudgetCtxSetString` |
 | `c.Get` | 0 | MEASURED M6 | `TestAllocBudgetCtxGet` |
-| `c.Query`, `c.Header` | — | not implemented — see the roadmap's [Explicitly deferred](04-roadmap.md#explicitly-deferred) | — |
-| `c.JSON` | — | not implemented — see the roadmap's [Explicitly deferred](04-roadmap.md#explicitly-deferred) | — |
+| `c.Query` | 0 | MEASURED after M8 | `TestAllocBudgetQueryHeaderBody` |
+| `c.Header` | 0 | MEASURED after M8 | `TestAllocBudgetQueryHeaderBody` |
+| `c.Body` | 0 | MEASURED after M8 | `TestAllocBudgetQueryHeaderBody` |
+| `c.JSON` with a pointer | 1, exactly (the encoded bytes) | MEASURED after M8 | `TestAllocBudgetJSON` |
+| `c.JSON` with a struct value (the caller's boxing) | 2, exactly | MEASURED after M8 | `TestAllocBudgetJSON` |
 
 The four M8 rows are new tests, not new code: `Status`, `SetHeader` and `SetContentType` write
 into fasthttp's reused response header, and `RequestCtx` returns a field. Each was broken once on
 purpose with an allocating line and failed — for example
 `Ctx.RequestCtx allocated 9.0 objects per call, budget is 0`; the four texts are in the
 [M8 retrospective](milestones/M8-benchmark-suite.md).
+
+The five rows marked after M8 came with the code they measure: `Query`, `Header` and `Body` peek
+into fasthttp's parsed request, and `JSON` is `json.Marshal` followed by `SetBody`. The `JSON`
+figures are for the `json` scenario's payload (an int, a string, a two-element slice) and are
+pinned exactly, so an encoder that got cheaper fails too and the row is corrected rather than left
+stale. A larger or deeper value costs whatever `encoding/json` charges for its shape. Each budget
+was broken once on purpose and failed — for example
+`Ctx.Header allocated 1.0 objects per call, budget is 0` and
+`Ctx.JSON with a pointer allocated 2.0 objects per call, want exactly 1`.
 
 ### Request path — dispatch
 
@@ -358,8 +370,10 @@ nothing. p99 is coarse too: two p99 figures one bucket apart differ by a single 
   `Not Found` (9 bytes), Fiber `Not Found` (9 bytes), Gin `404 page not found` (18 bytes), Echo
   `{"message":"Not Found"}` plus a newline (24 bytes). Overriding them would stop measuring each
   framework's default miss path.
-- `json` uses each framework's own JSON helper; rice has none, so its handler calls
-  `json.Marshal` and `c.Bytes`. rice's row measures the standard library's encoder.
+- `json` uses each framework's own JSON helper; rice had none when M8 was recorded, so its
+  handler calls `json.Marshal` and `c.Bytes`, and still does so that the recorded row stays
+  reproducible. rice's row measures the standard library's encoder. `c.JSON`, added after M8,
+  is that same `json.Marshal` plus a `SetBody`.
 - `middleware5` registers exactly five no-op middleware in every adapter. That count is held by
   review, not by a test: removing one changes no output, so the equivalence gate cannot see it.
 - The load generator verifies every response's status and fails the run on any mismatch or
@@ -420,8 +434,9 @@ show: every framework is within its transport's range.
 
 **`json` — rice ahead, narrowly, on the standard library's encoder.** rice 216.8 ns, Fiber 225.1,
 Gin 243.6, Echo 270.1 — every difference significant, but rice leads Fiber by only about 4%, and
-rice's row is `encoding/json` in the handler plus `c.Bytes`, not a rice JSON path: core has no
-`c.JSON` ([ADR-0006](adr/0006-no-reflection-in-core.md) keeps reflection out of core). Its 2
+rice's row is `encoding/json` in the handler plus `c.Bytes`, not a rice JSON path: core had no
+`c.JSON` when this was recorded ([ADR-0006](adr/0006-no-reflection-in-core.md) keeps reflection
+out of core, with `c.JSON` as its one exception). Its 2
 allocations and 96 bytes are the handler's `json.Marshal` call — dispatch, `SetContentType` and
 `Bytes` are each held at zero by their budget tests. Why the standard encoder called this way is
 ahead of the other frameworks' helpers is **not explained**. End to end, the one rice–Fiber
