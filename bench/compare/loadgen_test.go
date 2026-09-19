@@ -90,6 +90,45 @@ func TestLoadFailsOnAStatusMismatch(t *testing.T) {
 	}
 }
 
+func TestLoadFailsWhenTheServerNeverAnswers(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			t.Cleanup(func() { _ = conn.Close() })
+			// Accept the connection and never write a response.
+		}
+	}()
+
+	s, _ := ScenarioByName("static")
+	start := time.Now()
+	res, err := Load(LoadConfig{
+		Addr:     ln.Addr().String(),
+		Scenario: s,
+		Conns:    2,
+		Warmup:   0,
+		Duration: 300 * time.Millisecond,
+		Timeout:  100 * time.Millisecond,
+	})
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Error("Load returned nil, want an error when the server never answers")
+	}
+	if res.Errors == 0 {
+		t.Error("Errors = 0, want the read timeouts counted")
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("Load took %v, want it to return within 2s", elapsed)
+	}
+}
+
 func TestWaitReadyTimesOut(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

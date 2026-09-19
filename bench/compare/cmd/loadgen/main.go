@@ -30,6 +30,18 @@ func main() {
 		}
 		return
 	}
+	if *framework == "" {
+		fmt.Fprintln(os.Stderr, "loadgen: -framework is required")
+		os.Exit(2)
+	}
+	if *duration <= 0 {
+		fmt.Fprintf(os.Stderr, "loadgen: -duration must be positive, got %v\n", *duration)
+		os.Exit(2)
+	}
+	if *warmup < 0 {
+		fmt.Fprintf(os.Stderr, "loadgen: -warmup must not be negative, got %v\n", *warmup)
+		os.Exit(2)
+	}
 	s, ok := compare.ScenarioByName(*scenario)
 	if !ok {
 		fmt.Fprintf(os.Stderr, "loadgen: unknown scenario %q\n", *scenario)

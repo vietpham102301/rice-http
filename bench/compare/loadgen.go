@@ -18,6 +18,8 @@ type LoadConfig struct {
 	// Warmup is run and discarded before Duration is measured.
 	Warmup   time.Duration
 	Duration time.Duration
+	// Timeout is the per-request read and write timeout. Zero means 10s.
+	Timeout time.Duration
 }
 
 // LoadResult is what a run measured. Requests, RPS and the percentiles cover
@@ -46,12 +48,23 @@ func Load(cfg LoadConfig) (LoadResult, error) {
 	if cfg.Conns < 1 {
 		return LoadResult{}, fmt.Errorf("conns must be at least 1, got %d", cfg.Conns)
 	}
+	timeout := cfg.Timeout
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
 	hc := &fasthttp.HostClient{
-		Addr:                cfg.Addr,
-		MaxConns:            cfg.Conns,
-		ReadTimeout:         10 * time.Second,
-		WriteTimeout:        10 * time.Second,
-		MaxIdleConnDuration: time.Minute,
+		Addr:     cfg.Addr,
+		MaxConns: cfg.Conns,
+		// MaxIdemponentCallAttempts defaults to 5 and retries GET/HEAD/PUT
+		// silently on any read error, including a timeout or a closed
+		// keep-alive connection. That would hide a dropped connection inside
+		// latency instead of counting it as an error, and could let one
+		// stuck Do take up to 5x the timeout past end. Every failure must
+		// reach w.errors exactly once.
+		MaxIdemponentCallAttempts: 1,
+		ReadTimeout:               timeout,
+		WriteTimeout:              timeout,
+		MaxIdleConnDuration:       time.Minute,
 	}
 	s := cfg.Scenario
 	measureFrom := time.Now().Add(cfg.Warmup)
@@ -81,7 +94,9 @@ func Load(cfg LoadConfig) (LoadResult, error) {
 				t1 := time.Now()
 				if err != nil {
 					w.errors++
-					continue
+					// The run already fails; spinning until end only burns
+					// the client's CPU on a connection that just failed.
+					return
 				}
 				if resp.StatusCode() != s.Status {
 					w.mismatches++
