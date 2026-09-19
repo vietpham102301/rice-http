@@ -31,6 +31,7 @@ Read them in order the first time. After that, use them as reference.
 | [04-roadmap.md](04-roadmap.md) | Milestones M0 to M8 with exit criteria |
 | [05-performance-model.md](05-performance-model.md) | Allocation budgets and how they are enforced |
 | [06-glossary.md](06-glossary.md) | Terms used with a specific meaning here |
+| [07-retrospective.md](07-retrospective.md) | What the project learned, what surprised it, what it would change |
 | [adr/](adr/) | One file per irreversible-ish decision, with the reasoning |
 | [progress.md](progress.md) | Dated journal: what was built, what was learned |
 | [milestones/](milestones/) | Per-milestone design notes and retrospectives |

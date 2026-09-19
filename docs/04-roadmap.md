@@ -136,7 +136,7 @@ the deadline is honoured when a request refuses to finish.
 
 ---
 
-### ☐ M8 — Benchmark suite and retrospective
+### ☑ M8 — Benchmark suite and retrospective
 
 - Comparison against Gin, Echo and Fiber on identical routes and payloads
 - Allocation budget table for every public method, committed
@@ -160,9 +160,12 @@ Not scheduled, not promised. Each would need its own brainstorm.
 - Content negotiation
 - Streaming and server-sent events
 - `c.Query` and `c.Header`, the remaining borrowed read accessors. Committed in
-  [03-core-concepts.md](03-core-concepts.md) and budgeted in
+  [03-core-concepts.md](03-core-concepts.md) and listed as not implemented in
   [05-performance-model.md](05-performance-model.md), but owned by no milestone.
   Noticed while writing M3.
+- `c.JSON`, a JSON response helper. Shown in [00-overview.md](00-overview.md)'s example and
+  budgeted for M8, which settled that it measures rather than builds; a handler encodes with
+  `encoding/json` and writes with `c.Bytes` today, as the comparison's `json` scenario does.
 - Typed per-request store keys (`rice.Key[T]` with a `Get` returning `T`), safer than
   `Set(string, any)` and immune to key collisions between middleware. Rejected for M6 because
   the documented API was already `string`/`any`.

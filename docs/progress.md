@@ -16,6 +16,60 @@ Each entry uses this shape:
 
 ---
 
+## 2026-09-19 — M8 — Benchmark suite: rice against Gin, Echo and Fiber, and the transport is what a client sees
+
+**Did:** Built `bench/compare/`, a separate Go module so rice's own `go.mod` still lists fasthttp
+alone: one scenario table (`static`, `param`, `middleware5`, `notfound`, `githubapi` on the
+203-route GitHub table, `json`, `body64k`), one adapter per framework building two apps each,
+an equivalence gate every benchmark passes before it is timed, handler-level benchmarks, a
+closed-loop load generator with retries off, a server binary and a summariser. `make compare`
+runs the gate and a smoke run and CI runs it; `make compare-record` wrote
+`bench/results/M8-compare-handler.txt` and `bench/results/M8-compare-e2e.txt`, on battery by the
+user's choice, as both headers say. Four budget tests (`Status`, `SetHeader`, `SetContentType`,
+`RequestCtx`) give every exported `Ctx` method a row, and the performance model has no target
+left. No rice code changed. Documented in
+[M8-benchmark-suite.md](milestones/M8-benchmark-suite.md), the performance model's
+[Where rice stands](05-performance-model.md#where-rice-stands), and the project retrospective,
+[07-retrospective.md](07-retrospective.md).
+
+**Learned:** Three things.
+
+1. *The end-to-end level separates transports, not frameworks.* At about 166,000 requests a
+   second on six server CPUs each request has up to about 36 µs of server CPU, and the
+   frameworks' handler-level differences are 0.01 to 0.6 µs. rice and Fiber trade places round by
+   round, as do Gin and Echo; the one line a client sees is fasthttp against `net/http`. The
+   design planned two numbers per scenario and the setup delivered one per transport. A division
+   in the design would have said so.
+
+2. *The cases chosen as losses were not losses.* `githubapi` and `json` went to rice at the
+   handler level; `body64k` is a tie with Fiber, decided by the transport. On the GitHub table the
+   loser was Fiber, 680.6 ns, because it buckets routes by method and the first three characters
+   of the path and scans the bucket, and this route is 28th of 60 `GET /re…` routes. Kept and
+   reported as they came out: a prediction that failed is a finding.
+
+3. *A load generator that verifies every response can still hide failures.* fasthttp's
+   `HostClient` retries idempotent requests five times by default, so a dropped connection counted
+   as a success. Retries are off now. The test first written to guard that setting still passed
+   with it removed — its 2 s bound accepted five 100 ms attempts — and was rewritten to count
+   accepted connections, after which the injection fails with `accepted 10 connections, want
+   exactly 2`. The guard count goes from fourteen to fifteen.
+
+**Measured:** Handler level, median of ten (`benchstat`), rice / Fiber / Gin / Echo: `static`
+53.66 / 65.20 / 84.83 / 107.5 ns with 0 / 0 / 1 / 1 allocations; `githubapi` 118.8 / 680.6 /
+133.9 / 177.5 ns; `json` 216.8 / 225.1 / 243.6 / 270.1 ns. Every pairwise difference in `static`,
+`param`, `middleware5`, `githubapi` and `json` is outside the other's ten runs. Gin's `notfound`
+runs are bimodal (± 23%) and level with rice's. End to end, median of five rounds: rice and Fiber
+3.6–6.8% ahead of Gin and Echo in the six light scenarios, p99 622–786 µs against 1,048–1,179 µs;
+`body64k` 85,777 and 85,930 req/s against 19,062 and 18,982, rice ahead of Gin by 331–367% in
+every round. The handler-level `body64k` row is `net/http`'s body read inside the handler, not
+framework overhead. Recorded on battery, 75% to 17%; the per-round mean moved 1.8% with no
+trend. Root package coverage 99.3%; the root suite was not re-recorded.
+
+**Next:** None scheduled. The roadmap is complete; its Explicitly deferred list stays
+unscheduled, and [07-retrospective.md](07-retrospective.md) names the first step if work resumes.
+
+---
+
 ## 2026-09-18 — M7 — Follow-up: four loose ends the fix wave's re-review left
 
 **Did:** Closed the four items M7's final re-review parked. A later `Shutdown` no longer returns

@@ -8,12 +8,13 @@ it. The design decisions are written down in [ADRs](docs/adr/) before they are i
 and each milestone ends with a [retrospective](docs/milestones/) naming what the
 measurements changed.
 
-> **Status: not production ready.** Eight of nine milestones are done (M0–M7). The `Ctx` is
-> pooled and dispatch allocates nothing, which makes the borrow contract real: a `*Ctx` kept
-> past its handler reads another request's data. Build with `-tags ricedebug` (or run
-> `make test-debug`) to turn that into a panic. `Shutdown` drains in-flight requests up to a
-> deadline and closes whatever is left when it passes, so nothing is served after it returns.
-> What remains is M8, the comparison against Gin, Echo and Fiber. The API will change. See the
+> **Status: not production ready.** All nine milestones are done (M0–M8), and nothing further
+> is scheduled. The `Ctx` is pooled and dispatch allocates nothing, which makes the borrow
+> contract real: a `*Ctx` kept past its handler reads another request's data. Build with
+> `-tags ricedebug` (or run `make test-debug`) to turn that into a panic. `Shutdown` drains
+> in-flight requests up to a deadline and closes whatever is left when it passes, so nothing is
+> served after it returns. The comparison against Gin, Echo and Fiber is below, and the
+> [project retrospective](docs/07-retrospective.md) says what was learned. See the
 > [roadmap](docs/04-roadmap.md).
 
 ## Install
@@ -226,8 +227,29 @@ Darwin 25.6.0 to Darwin 27.0.0 between the M5 and M6 recordings, and even benchm
 rice code on their path moved a few percent. The `allocs/op` column is exact and carries no such
 caveat.
 
-Numbers rice does not yet have: comparisons against Gin, Echo or Fiber. Those are M8, and
-publishing them earlier would mean publishing them from an unfinished framework.
+### Against Gin, Echo and Fiber
+
+Same routes and payloads, one machine, one recording (M8, on battery power), Gin v1.12.0, Echo
+v5.3.1, Fiber v3.5.0, fasthttp v1.73.0. Handler level — each framework's own code on a request
+already parsed, median of ten runs — from
+[`bench/results/M8-compare-handler.txt`](bench/results/M8-compare-handler.txt); end to end — a
+load generator in a separate process, 64 connections, median of five rounds — from
+[`bench/results/M8-compare-e2e.txt`](bench/results/M8-compare-e2e.txt).
+
+| | rice | Fiber | Gin | Echo |
+|---|---:|---:|---:|---:|
+| `static`, handler: ns/op | 53.66 | 65.20 | 84.83 | 107.5 |
+| `static`, handler: allocs/op | 0 | 0 | 1 | 1 |
+| `githubapi` (203 routes), handler: ns/op | 118.8 | 680.6 | 133.9 | 177.5 |
+| `githubapi` (203 routes), handler: allocs/op | 0 | 0 | 1 | 1 |
+| `static`, end to end: req/s | 166,225 | 165,912 | 158,881 | 158,679 |
+
+At the handler level rice is the fastest of the four here. End to end that ordering does not
+survive: rice and Fiber cannot be told apart, and both lead Gin and Echo because fasthttp leads
+`net/http`, not because of anything rice does. Fiber's `githubapi` figure is specific to that
+route's place in Fiber's route buckets. The tables for all seven scenarios, what each level can
+and cannot compare, and the reason for each result are in the performance model's
+[Where rice stands](docs/05-performance-model.md#where-rice-stands).
 
 ## Documentation
 
@@ -240,6 +262,7 @@ publishing them earlier would mean publishing them from an unfinished framework.
 | [04 — Roadmap](docs/04-roadmap.md) | nine milestones, and what each one answers |
 | [05 — Performance model](docs/05-performance-model.md) | the allocation budget, per method |
 | [06 — Glossary](docs/06-glossary.md) | terms used precisely in these docs |
+| [07 — Retrospective](docs/07-retrospective.md) | what the project learned, and what surprised it |
 | [ADRs](docs/adr/) | nine decisions, with the alternatives that lost |
 | [Milestones](docs/milestones/) | retrospectives: what was measured, what surprised |
 | [Journal](docs/progress.md) | the running record, including the wrong turns |
@@ -252,6 +275,7 @@ make test-debug  # the same suite under -tags ricedebug
 make cover       # coverage, currently 99.2%
 make lint        # gofmt and go vet
 make bench       # runs the suite and records to bench/results/
+make compare     # the comparison against Gin, Echo and Fiber: equivalence gate and smoke run
 ```
 
 `make test-debug` is not a duplicate of `make test`: the `ricedebug` build never returns a
