@@ -1,6 +1,6 @@
 GO ?= go
 
-.PHONY: test test-debug bench bench-record cover lint tidy
+.PHONY: test test-debug bench bench-record cover lint tidy compare compare-record
 
 ## test: run all tests with the race detector, no cache
 test:
@@ -18,6 +18,15 @@ bench:
 ## usage: make bench-record LABEL=M1-minimal-server
 bench-record:
 	./scripts/bench.sh $(LABEL)
+
+## compare: the framework comparison's equivalence gate, vet, and a handler-level smoke run
+compare:
+	cd bench/compare && $(GO) vet ./... && $(GO) test ./... -count=1 -bench . -benchtime=100ms
+
+## compare-record: record both comparison results files (about 40 minutes)
+compare-record:
+	./bench/compare/scripts/handler.sh
+	./bench/compare/scripts/e2e.sh
 
 ## cover: test coverage summary
 cover:
