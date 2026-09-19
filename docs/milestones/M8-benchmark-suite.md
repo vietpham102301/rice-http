@@ -200,8 +200,8 @@ Handler level recorded starting 2026-09-19T03:54:28Z; the end-to-end file's `# d
 battery state at the end — the committed `e2e.sh` wrote its header after the run, unlike
 `handler.sh` and `scripts/bench.sh`, which stamp at the start. `e2e.sh` now takes its header
 before the run and adds the line that server and load generator share memory bandwidth and
-caches; the committed file predates that fix and lacks the line, and it was not re-recorded. Gin v1.12.0, Echo
-v5.3.1, Fiber v3.5.0, fasthttp v1.73.0; rice at `b131556`.
+caches; the committed file predates that fix and lacks the line, and it was not re-recorded. Gin
+v1.12.0, Echo v5.3.1, Fiber v3.5.0, fasthttp v1.73.0; rice at `b131556`.
 Raw output: [`bench/results/M8-compare-handler.txt`](../../bench/results/M8-compare-handler.txt),
 [`bench/results/M8-compare-e2e.txt`](../../bench/results/M8-compare-e2e.txt).
 
@@ -218,9 +218,9 @@ finding about the prediction, and dropping it would be tuning the suite after th
 **The design's "where is two numbers per scenario".** The design expected each scenario to be
 placed twice. End to end places it only by transport: at about 166,000 requests a second on six
 server CPUs each request has up to about 36 µs of server CPU, and the frameworks' handler-level
-differences in the light scenarios are 0.01 to 0.6 µs. Fiber's `githubapi`, ten times its `static` at the handler level,
-serves the same end-to-end rate. The second number per scenario is really one number per
-transport.
+differences in the light scenarios are 0.01 to 0.6 µs. Fiber's `githubapi`, ten times its
+`static` at the handler level, serves the same end-to-end rate. The second number per scenario is
+really one number per transport.
 
 **The benchmark's own comment,** "excludes parsing for both", which was false for `body64k`, as
 above.
@@ -379,9 +379,9 @@ Every guard below was broken on purpose, the listed test run, and the code resto
     loadgen_test.go:217: Summarize("rice static 1 100 10 20\nchi static 1 100 10 20\n") = <nil>, want line 2: unknown framework "chi"
     loadgen_test.go:217: Summarize("rice statik 1 100 10 20\n") = <nil>, want line 1: unknown scenario "statik"
     ```
-21. **Final-review fixes — `BenchmarkHandler` timing the GitHub app** (`tg.Build(GitHub)` in place
-    of `tg.Build(s.App)`), now that the gate runs on the timed instance. Before the fix the gate
-    built its own app and this injection would have passed. For every framework:
+21. **Final-review fixes — `BenchmarkHandler` timing the GitHub app** (`tg.Build(GitHub)` in
+    place of `tg.Build(s.App)`), now that the gate runs on the timed instance. Before the fix the
+    gate built its own app and this injection would have passed. For every framework:
     ```
     handler_bench_test.go:33: equivalence gate: rice param: body "ok", want "42"
     ```

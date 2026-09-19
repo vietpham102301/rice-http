@@ -36,12 +36,12 @@ left. No rice code changed. Documented in
 
 1. *The end-to-end level separates transports, not frameworks.* At about 166,000 requests a
    second on six server CPUs each request has up to about 36 µs of server CPU, and the
-   frameworks' handler-level differences in the light scenarios are 0.01 to 0.6 µs. No order between rice and Fiber, or
-   Gin and Echo, can be claimed from five rounds with overlapping ranges — including `json`,
-   where Fiber was ahead of rice in all five rounds, by 0.2–6.0%. The one line a client sees is
-   fasthttp against `net/http`. The
-   design planned two numbers per scenario and the setup delivered one per transport. A division
-   in the design would have said so.
+   frameworks' handler-level differences in the light scenarios are 0.01 to 0.6 µs. No order
+   between rice and Fiber, or Gin and Echo, can be claimed from five rounds with overlapping
+   ranges — including `json`, where Fiber was ahead of rice in all five rounds, by 0.2–6.0%. The
+   one line a client sees is fasthttp against `net/http`. The design planned two numbers per
+   scenario and the setup delivered one per transport. A division in the design would have said
+   so.
 
 2. *The cases chosen as losses were not losses.* `githubapi` and `json` went to rice at the
    handler level; `body64k` is a tie with Fiber, decided by the transport. On the GitHub table the

@@ -315,18 +315,18 @@ read, not framework overhead. The end-to-end row is the comparison for `body64k`
 
 **The end-to-end level separates the two transports and nothing finer.** At about 166,000
 requests a second on six server CPUs, each request has up to about 36 µs of server CPU; the
-handler-level differences between frameworks in the light scenarios are 0.01 to 0.6 µs. Routing, middleware and JSON
-costs are invisible at this level by construction: Fiber's `githubapi` is ten times its `static`
-at the handler level (680.6 against 65.20 ns) and serves the same end-to-end rate (165,535
-against 165,912 req/s). Within one transport, rice against Fiber and Gin against Echo, the
-medians differ by less than the min–max across rounds, and across all six light scenarios the
-same-round differences go both ways, typically by 1–3%: rice was ahead of Fiber in 12 of the 30
-same-round pairs, Gin ahead of Echo in 19 of 30. Per scenario they do not always change sign.
-**In `json`, Fiber was ahead of rice in all five rounds**, by 0.2% to 6.0% of rice's rate; Gin was
-ahead of Echo in all five rounds of `param` and of `notfound`. Five rounds with overlapping ranges
-are not enough to claim an order from those — a sign test on five of five is p ≈ 0.06 — and none is
-claimed; nor is the opposite. The end-to-end numbers do not rank frameworks within a transport,
-and nothing here does.
+handler-level differences between frameworks in the light scenarios are 0.01 to 0.6 µs. Routing,
+middleware and JSON costs are invisible at this level by construction: Fiber's `githubapi` is ten
+times its `static` at the handler level (680.6 against 65.20 ns) and serves the same end-to-end
+rate (165,535 against 165,912 req/s). Within one transport, rice against Fiber and Gin against
+Echo, the medians differ by less than the min–max across rounds, and across all six light
+scenarios the same-round differences go both ways, typically by 1–3%: rice was ahead of Fiber in
+12 of the 30 same-round pairs, Gin ahead of Echo in 19 of 30. Per scenario they do not always
+change sign. **In `json`, Fiber was ahead of rice in all five rounds**, by 0.2% to 6.0% of rice's
+rate; Gin was ahead of Echo in all five rounds of `param` and of `notfound`. Five rounds with
+overlapping ranges are not enough to claim an order from those — a sign test on five of five is p
+≈ 0.06 — and none is claimed; nor is the opposite. The end-to-end numbers do not rank frameworks
+within a transport, and nothing here does.
 
 **The light scenarios share a ceiling, and this setup cannot say whose it is.** rice and Fiber
 reach about the same top in all six — rice's best round per scenario is between 165,908 and
@@ -366,8 +366,8 @@ nothing. p99 is coarse too: two p99 figures one bucket apart differ by a single 
   error; fasthttp's idempotent-request retries are turned off so a dropped connection is counted
   rather than hidden. All 64 of its workers share one `fasthttp.HostClient`, and so its
   connection-pool lock.
-- Response headers differ by framework. rice alone sends `Server: rice`; Gin, Echo and Fiber send no `Server`
-  header. The `Content-Type` charset differs too: text responses are `text/plain;
+- Response headers differ by framework. rice alone sends `Server: rice`; Gin, Echo and Fiber send
+  no `Server` header. The `Content-Type` charset differs too: text responses are `text/plain;
   charset=utf-8` from rice, Fiber and Gin and `text/plain; charset=UTF-8` from Echo, Gin's
   default 404 is `text/plain` with no charset, and `json` answers `application/json` from rice
   and Echo against `application/json; charset=utf-8` from Fiber and Gin. The equivalence gate
