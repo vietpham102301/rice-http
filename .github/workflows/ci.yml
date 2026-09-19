@@ -32,3 +32,12 @@ jobs:
 
       - name: Benchmark smoke run
         run: make bench
+
+      - name: Verify bench/compare go.mod is tidy
+        working-directory: bench/compare
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+      - name: Framework comparison (equivalence gate and smoke run)
+        run: make compare
