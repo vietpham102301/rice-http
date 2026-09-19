@@ -64,3 +64,30 @@ func (c *Ctx) Path() []byte {
 	c.poison.check()
 	return c.fctx.Path()
 }
+
+// Query returns the first value of the named query-string parameter, decoded,
+// or an empty slice if it is absent.
+//
+// Borrowed: the returned slice is valid only until the handler returns.
+func (c *Ctx) Query(name string) []byte {
+	c.poison.check()
+	return c.fctx.QueryArgs().Peek(name)
+}
+
+// Header returns the value of the named request header, or an empty slice if it
+// is absent. The name is matched case-insensitively.
+//
+// Borrowed: the returned slice is valid only until the handler returns.
+func (c *Ctx) Header(name string) []byte {
+	c.poison.check()
+	return c.fctx.Request.Header.Peek(name)
+}
+
+// Body returns the request body, or an empty slice if there is none.
+//
+// Borrowed: the returned slice is valid only until the handler returns. To
+// decode it, json.Unmarshal copies what it keeps, so the result is yours.
+func (c *Ctx) Body() []byte {
+	c.poison.check()
+	return c.fctx.PostBody()
+}

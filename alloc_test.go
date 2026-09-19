@@ -554,3 +554,52 @@ func TestAllocBudgetRequestCtx(t *testing.T) {
 
 	budget(t, "Ctx.RequestCtx", 0, func() { _ = c.RequestCtx() })
 }
+
+func TestAllocBudgetQueryHeaderBody(t *testing.T) {
+	fctx := &fasthttp.RequestCtx{}
+	fctx.Request.SetRequestURI("/search?q=rice&page=2")
+	fctx.Request.Header.Set("X-Request-Id", "abc123")
+	fctx.Request.SetBodyString(`{"name":"rice"}`)
+	c := &Ctx{}
+	c.reset(nil, fctx)
+
+	budget(t, "Ctx.Query", 0, func() { _ = c.Query("page") })
+	budget(t, "Ctx.Header", 0, func() { _ = c.Header("x-request-id") })
+	budget(t, "Ctx.Body", 0, func() { _ = c.Body() })
+}
+
+// jsonPayload is the shape the comparison's json scenario encodes.
+type jsonPayload struct {
+	ID   int      `json:"id"`
+	Name string   `json:"name"`
+	Tags []string `json:"tags"`
+}
+
+// TestAllocBudgetJSON pins JSON's cost exactly, in both directions, as
+// TestAllocBudgetCtxParamString does: a drop would mean the encoder changed under
+// us and the documented number is stale. Through a pointer the one allocation is
+// the encoded bytes; passing the struct by value adds the caller's boxing into
+// v any, which is the caller's cost and is recorded so it is not mistaken for
+// rice's.
+func TestAllocBudgetJSON(t *testing.T) {
+	fctx := &fasthttp.RequestCtx{}
+	c := &Ctx{}
+	c.reset(nil, fctx)
+
+	ptr := &jsonPayload{ID: 42, Name: "rice", Tags: []string{"a", "b"}}
+	val := *ptr
+
+	for _, tc := range []struct {
+		name string
+		want float64
+		fn   func()
+	}{
+		{"Ctx.JSON with a pointer", 1, func() { _ = c.JSON(200, ptr) }},
+		{"Ctx.JSON with a struct value (the caller's boxing)", 2, func() { _ = c.JSON(200, val) }},
+	} {
+		tc.fn() // warm
+		if got := testing.AllocsPerRun(1000, tc.fn); got != tc.want {
+			t.Errorf("%s allocated %.1f objects per call, want exactly %.0f", tc.name, got, tc.want)
+		}
+	}
+}
