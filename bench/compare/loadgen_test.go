@@ -1,6 +1,7 @@
 package compare
 
 import (
+	"bytes"
 	"net"
 	"strings"
 	"sync"
@@ -171,5 +172,37 @@ func TestWaitReadyTimesOut(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Errorf("WaitReady took %v with a 200ms timeout", elapsed)
+	}
+}
+
+func TestSummarizeTakesTheMedianPerFrameworkAndScenario(t *testing.T) {
+	in := strings.Join([]string{
+		"rice static 1 100 10 20",
+		"rice static 2 300 30 60",
+		"rice static 3 200 20 40",
+		"gin static 1 50 5 9",
+	}, "\n") + "\n"
+	var out bytes.Buffer
+	if err := Summarize(strings.NewReader(in), &out); err != nil {
+		t.Fatalf("Summarize: %v", err)
+	}
+	got := out.String()
+	for _, want := range []string{
+		"## static",
+		"| rice | 200 | 100–300 | 20 | 40 |",
+		"| gin | 50 | 50–50 | 5 | 9 |",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "## param") {
+		t.Errorf("output has a table for a scenario with no samples:\n%s", got)
+	}
+}
+
+func TestSummarizeRejectsAMalformedLine(t *testing.T) {
+	if err := Summarize(strings.NewReader("rice static one 100 10 20\n"), &bytes.Buffer{}); err == nil {
+		t.Error("Summarize accepted a round that is not a number")
 	}
 }
