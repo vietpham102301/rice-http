@@ -522,3 +522,35 @@ func TestAllocBudgetCtxSetString(t *testing.T) {
 		t.Errorf("Ctx.Set with a non-constant string allocated %.1f objects per call, want exactly 1 (the caller's boxing)", got)
 	}
 }
+
+func TestAllocBudgetStatus(t *testing.T) {
+	fctx := &fasthttp.RequestCtx{}
+	c := &Ctx{}
+	c.reset(nil, fctx)
+
+	budget(t, "Ctx.Status", 0, func() { _ = c.Status(201) })
+}
+
+func TestAllocBudgetSetHeader(t *testing.T) {
+	fctx := &fasthttp.RequestCtx{}
+	c := &Ctx{}
+	c.reset(nil, fctx)
+
+	budget(t, "Ctx.SetHeader", 0, func() { c.SetHeader("X-Rice", "1") })
+}
+
+func TestAllocBudgetSetContentType(t *testing.T) {
+	fctx := &fasthttp.RequestCtx{}
+	c := &Ctx{}
+	c.reset(nil, fctx)
+
+	budget(t, "Ctx.SetContentType", 0, func() { c.SetContentType("application/json") })
+}
+
+func TestAllocBudgetRequestCtx(t *testing.T) {
+	fctx := &fasthttp.RequestCtx{}
+	c := &Ctx{}
+	c.reset(nil, fctx)
+
+	budget(t, "Ctx.RequestCtx", 0, func() { _ = c.RequestCtx() })
+}
