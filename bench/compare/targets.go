@@ -24,7 +24,7 @@ type Target struct {
 
 // Targets returns every framework, in the order results are reported.
 func Targets() []Target {
-	return []Target{Rice()}
+	return []Target{Rice(), Gin(), Echo(), Fiber()}
 }
 
 // TargetByName returns the framework with the given name.
