@@ -20,14 +20,18 @@ the separate module in `bench/compare/`:
   Fiber over seven scenarios, ten runs each, with each framework's in-process entry point on an
   already-parsed request. Read it with `benchstat bench/results/M8-compare-handler.txt`.
 - `M8-compare-e2e.txt` — the same scenarios end to end: each framework's own server in one
-  process, the load generator in another, half the CPUs each, five rounds with the frameworks
-  interleaved. Median requests per second, p50 and p99 per framework and scenario, with the
-  min–max across rounds, then every raw line.
+  process, the load generator in another, `GOMAXPROCS` set to half the CPUs each, five rounds
+  with the frameworks interleaved. Median requests per second, p50 and p99 per framework and
+  scenario, with the min–max across rounds, then every raw line.
 
 Both headers add the module versions compared and a `# power:` line on macOS; the end-to-end
-header adds the CPU split and load settings. `make compare-record` takes about 40 minutes and
-needs nothing but Go; `make compare` runs the equivalence gate and a short smoke run in a few
-seconds, and is what CI runs. What each file can and cannot compare is in
+header adds the CPU split and load settings. The committed `M8-compare-e2e.txt` was written by an
+earlier `e2e.sh` whose header was taken after the run, so its `# date:` and `# power:` are the
+run's end; the script now takes them at the start and adds a line saying server and load
+generator share memory bandwidth and caches, which the committed file lacks. `make
+compare-record` takes about 40 minutes and needs nothing but Go; `make compare` runs the
+equivalence gate and a short smoke run in a few seconds, and is what CI runs. What each file can
+and cannot compare is in
 [`docs/05-performance-model.md`](../../docs/05-performance-model.md#where-rice-stands) — read
 that before quoting a number from either.
 

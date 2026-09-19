@@ -21,7 +21,7 @@ The claim is narrow on purpose. It does **not** cover:
   example with `encoding/json`.
 - The first requests after start, while the pool warms and the trees are cold in cache.
 - Request bodies large enough that fasthttp allocates rather than reusing its buffer.
-- `ParamString`, `QueryString` and every other method whose name says it copies.
+- `ParamString` and every other method whose name says it copies.
 
 Stating the exclusions is more useful than the claim itself. A framework that says
 "zero allocations" without them is measuring a benchmark, not a system.
@@ -260,7 +260,9 @@ noisier than on mains power. The per-round mean across all 28 end-to-end pairs m
 ### Handler level
 
 `BenchmarkHandler/<scenario>/<framework>`, ten runs each, read with `benchstat`: median time
-with its ± spread, bytes and allocations per request.
+with its ± spread, bytes and allocations per request. Here and in the end-to-end table the
+columns are grouped by transport — the two fasthttp frameworks, rice and Fiber, then the two
+`net/http` ones, Gin and Echo — rather than in the rice, Gin, Echo, Fiber order the design uses.
 
 | Scenario | rice | Fiber | Gin | Echo |
 | --- | --- | --- | --- | --- |
@@ -313,7 +315,7 @@ read, not framework overhead. The end-to-end row is the comparison for `body64k`
 
 **The end-to-end level separates the two transports and nothing finer.** At about 166,000
 requests a second on six server CPUs, each request has up to about 36 µs of server CPU; the
-handler-level differences between frameworks are 0.01 to 0.6 µs. Routing, middleware and JSON
+handler-level differences between frameworks in the light scenarios are 0.01 to 0.6 µs. Routing, middleware and JSON
 costs are invisible at this level by construction: Fiber's `githubapi` is ten times its `static`
 at the handler level (680.6 against 65.20 ns) and serves the same end-to-end rate (165,535
 against 165,912 req/s). Within one transport, rice against Fiber and Gin against Echo, the
@@ -331,7 +333,11 @@ reach about the same top in all six — rice's best round per scenario is betwee
 167,255 req/s, Fiber's between 166,636 and 167,521 — and, in an unrecorded spot check during the
 recording's review, neither process saturated its six CPUs. Server and client share
 the machine's memory bandwidth and caches — splitting the CPUs removes scheduler contention, not
-that — and the loopback path is shared too. Latency, connections and throughput agree with each
+that — and the loopback path is shared too. Two more candidates sit in the setup itself: all 64
+load-generator workers share one `fasthttp.HostClient` and so its connection-pool lock, and
+`GOMAXPROCS=6` for each process is not CPU affinity — macOS does not pin threads, and this
+machine's cores are not all alike, so which process runs on which cores is the scheduler's
+choice. Latency, connections and throughput agree with each
 other (64 connections at about 166,000 req/s is about 385 µs a request, and the p50 is 360–376 µs),
 so the data is self-consistent; it still cannot say whether the server or the client is the
 limit. The req/s figures are therefore not a capacity figure for any framework: one laptop, on
@@ -360,6 +366,12 @@ nothing. p99 is coarse too: two p99 figures one bucket apart differ by a single 
   error; fasthttp's idempotent-request retries are turned off so a dropped connection is counted
   rather than hidden. All 64 of its workers share one `fasthttp.HostClient`, and so its
   connection-pool lock.
+- Response headers differ by framework. rice alone sends `Server: rice`; Gin, Echo and Fiber send no `Server`
+  header. The `Content-Type` charset differs too: text responses are `text/plain;
+  charset=utf-8` from rice, Fiber and Gin and `text/plain; charset=UTF-8` from Echo, Gin's
+  default 404 is `text/plain` with no charset, and `json` answers `application/json` from rice
+  and Echo against `application/json; charset=utf-8` from Fiber and Gin. The equivalence gate
+  compares status and body only.
 - The handler-level runs of one scenario and framework are back to back, not interleaved across
   frameworks; the whole handler recording took 388.7 s and shows no visible trend.
 

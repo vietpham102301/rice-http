@@ -234,7 +234,8 @@ v5.3.1, Fiber v3.5.0, fasthttp v1.73.0. Handler level — each framework's own c
 already parsed, median of ten runs — from
 [`bench/results/M8-compare-handler.txt`](bench/results/M8-compare-handler.txt); end to end — a
 load generator in a separate process, 64 connections, median of five rounds — from
-[`bench/results/M8-compare-e2e.txt`](bench/results/M8-compare-e2e.txt).
+[`bench/results/M8-compare-e2e.txt`](bench/results/M8-compare-e2e.txt). The columns are grouped
+by transport: rice and Fiber on fasthttp, Gin and Echo on `net/http`.
 
 | | rice | Fiber | Gin | Echo |
 |---|---:|---:|---:|---:|

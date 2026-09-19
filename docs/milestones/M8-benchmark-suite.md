@@ -116,10 +116,16 @@ a measured window (10 s). Latencies go into a log-linear histogram of 1024 fixed
 `Record` does not allocate (`TestHistogramRecordDoesNotAllocate`), so the generator adds no
 garbage to the machine it measures; a quantile is its bucket's lower bound, up to 6.25% low
 (`TestHistogramQuantilesAreWithinOneSixteenth`). Every response's status is checked, and one
-mismatch or error fails the run. `e2e.sh` starts each server with half the CPUs and the load
-generator with the other half, five rounds, the four frameworks interleaved within a round and
-rotated between rounds so drift hits them alike, and kills and waits for every server it
-started, on success and on failure.
+mismatch or error fails the run. `e2e.sh` starts each server with `GOMAXPROCS` set to half the
+CPUs and the load generator with the other half, five rounds, the four frameworks interleaved
+within a round and rotated between rounds so drift hits them alike, and kills and waits for
+every server it started, on success, on failure and on interrupt. It also fails if the server it
+started for a measurement is gone when the measurement ends, so a server that could not bind its
+port cannot have another process's numbers recorded under its name. The interrupt handling and
+that check were added by the final review's fixes, after the recording: before them a Ctrl-C
+killed the script but left the running server behind, and a server that failed to start went
+unnoticed. The recorded run's 140 raw lines all passed the load generator's status checks; that
+each came from the server the script had started for it was not checked at the time.
 
 Two rulings shaped it after review. **Retries are off.** fasthttp's `HostClient` retries an
 idempotent request up to five times by default on any read error, so for every scenario but the
@@ -173,7 +179,8 @@ M8's `☐` in `docs/04-roadmap.md` is now `☑`, and so is every milestone's.
 
 The full tables, the caveats and the per-scenario explanations are in
 [05-performance-model.md — Where rice stands](../05-performance-model.md#where-rice-stands).
-The headline rows:
+The headline rows, with the columns grouped by transport (rice and Fiber on fasthttp, Gin and
+Echo on `net/http`) rather than in the design's rice, Gin, Echo, Fiber order:
 
 | Case | rice | Fiber | Gin | Echo |
 | --- | ---: | ---: | ---: | ---: |
@@ -188,7 +195,12 @@ The four new budget tests hold at zero. The root suite was not re-recorded — n
 changed — so `bench/results/M7-lifecycle.txt` remains the reference for rice on its own.
 
 Hardware, Go version, OS: Apple M2 Pro, go1.25.6 darwin/arm64, Darwin 27.0.0 arm64, on battery.
-Handler level recorded 2026-09-19T03:54:28Z, end to end 2026-09-19T04:36:05Z. Gin v1.12.0, Echo
+Handler level recorded starting 2026-09-19T03:54:28Z; the end-to-end file's `# date:`,
+2026-09-19T04:36:05Z, is the **end** of its roughly 35-minute run, and its `# power:` line the
+battery state at the end — the committed `e2e.sh` wrote its header after the run, unlike
+`handler.sh` and `scripts/bench.sh`, which stamp at the start. `e2e.sh` now takes its header
+before the run and adds the line that server and load generator share memory bandwidth and
+caches; the committed file predates that fix and lacks the line, and it was not re-recorded. Gin v1.12.0, Echo
 v5.3.1, Fiber v3.5.0, fasthttp v1.73.0; rice at `b131556`.
 Raw output: [`bench/results/M8-compare-handler.txt`](../../bench/results/M8-compare-handler.txt),
 [`bench/results/M8-compare-e2e.txt`](../../bench/results/M8-compare-e2e.txt).
@@ -206,7 +218,7 @@ finding about the prediction, and dropping it would be tuning the suite after th
 **The design's "where is two numbers per scenario".** The design expected each scenario to be
 placed twice. End to end places it only by transport: at about 166,000 requests a second on six
 server CPUs each request has up to about 36 µs of server CPU, and the frameworks' handler-level
-differences are 0.01 to 0.6 µs. Fiber's `githubapi`, ten times its `static` at the handler level,
+differences in the light scenarios are 0.01 to 0.6 µs. Fiber's `githubapi`, ten times its `static` at the handler level,
 serves the same end-to-end rate. The second number per scenario is really one number per
 transport.
 
@@ -361,6 +373,32 @@ Every guard below was broken on purpose, the listed test run, and the code resto
     ```
     Repeated after the fix round that added a `wait` to the failure path: the same two lines,
     exit 1, and `pgrep` found no server left running.
+20. **Final-review fixes — `Summarize`'s framework and scenario checks disabled** (`false &&`
+    added to both conditions):
+    ```
+    loadgen_test.go:217: Summarize("rice static 1 100 10 20\nchi static 1 100 10 20\n") = <nil>, want line 2: unknown framework "chi"
+    loadgen_test.go:217: Summarize("rice statik 1 100 10 20\n") = <nil>, want line 1: unknown scenario "statik"
+    ```
+21. **Final-review fixes — `BenchmarkHandler` timing the GitHub app** (`tg.Build(GitHub)` in place
+    of `tg.Build(s.App)`), now that the gate runs on the timed instance. Before the fix the gate
+    built its own app and this injection would have passed. For every framework:
+    ```
+    handler_bench_test.go:33: equivalence gate: rice param: body "ok", want "42"
+    ```
+    A first attempt, `tg.Build(Scenarios()[0].App)`, injected nothing: `static` and `param` are
+    served by the same app, and the benchmark rightly passed.
+22. **Final-review fixes — `e2e.sh`'s server bound out of its port:** a leftover rice `static`
+    server started by hand on 127.0.0.1:18001, the port of round 1's first measurement, then a
+    one-round run with 1 s windows. The script's own server failed to bind, the load generator
+    measured the leftover and passed its status checks, and the new check caught it. Exit 1, no
+    results file written:
+    ```
+    server: listen tcp 127.0.0.1:18001: bind: address already in use
+    e2e: rice static round 1: the server started on 127.0.0.1:18001 exited before the measurement ended; the numbers are not its own
+    ```
+    The interrupt path was demonstrated rather than injected: SIGINT and SIGTERM sent to a running
+    `e2e.sh` mid-measurement ended it at once (exit 130 and 143), and `pgrep` found no server or
+    load generator left.
 
 The line numbers are those at the time of each run.
 
