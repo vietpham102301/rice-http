@@ -15,10 +15,11 @@
 // HTTPError.Err for the log rather than written to the response: its text is
 // shaped by the caller's input.
 //
-// A value whose Validate method returns an error is answered 422, and that
+// A value whose Validate method returns an error is answered 422 and that
 // error's message IS written to the response, because the author of the handler
-// wrote it. This package cannot tell an author's message from a wrapped
-// internal error: a Validate that returns fmt.Errorf("checking the database:
-// %w", err) sends that text to the client. Keep Validate's messages about the
-// request.
+// wrote it; if Validate returns an *rice.HTTPError, it is passed through with
+// its own status instead. This package cannot tell an author's message from a
+// wrapped internal error: a Validate that returns fmt.Errorf("checking the
+// database: %w", err) sends that text to the client. Keep Validate's messages
+// about the request.
 package binding

@@ -66,5 +66,27 @@ func JSON[T any](c *rice.Ctx) (T, error) {
 		}
 	}
 
+	// The assertion goes through &out, not out. A Validate declared on the
+	// value receiver is in the method set of both T and *T; one declared on the
+	// pointer receiver is in the method set of *T only. Asserting on the value
+	// would silently skip the pointer-receiver case.
+	if v, ok := any(&out).(interface{ Validate() error }); ok {
+		if err := v.Validate(); err != nil {
+			// An author who returns an *rice.HTTPError has chosen a status.
+			// Honour it rather than burying it in a 422.
+			var he *rice.HTTPError
+			if errors.As(err, &he) {
+				return zero, err
+			}
+			// The message is written to the response. It is safe because the
+			// author wrote it, not because this package checked it.
+			return zero, &rice.HTTPError{
+				Code:    fasthttp.StatusUnprocessableEntity,
+				Message: err.Error(),
+				Err:     err,
+			}
+		}
+	}
+
 	return out, nil
 }

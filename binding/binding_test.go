@@ -163,3 +163,137 @@ func TestJSONReturnsTheZeroValueOnError(t *testing.T) {
 		t.Errorf("returned %+v on error, want the zero value", got)
 	}
 }
+
+// valueValidator declares Validate on the value receiver; pointerValidator
+// declares it on the pointer receiver. Both must run. These are two tests
+// because a type assertion on the value would pass the first and silently skip
+// the second, and "I wrote Validate and it never ran" is the failure this pair
+// exists to make impossible.
+type valueValidator struct {
+	Email string `json:"email"`
+}
+
+func (v valueValidator) Validate() error {
+	if v.Email == "" {
+		return errors.New("email is required")
+	}
+	return nil
+}
+
+type pointerValidator struct {
+	Email string `json:"email"`
+}
+
+func (v *pointerValidator) Validate() error {
+	if v.Email == "" {
+		return errors.New("email is required")
+	}
+	return nil
+}
+
+// statusValidator returns an *rice.HTTPError of its own, which must survive
+// untouched rather than being wrapped in a 422.
+type statusValidator struct {
+	Email string `json:"email"`
+}
+
+func (v statusValidator) Validate() error {
+	return &rice.HTTPError{Code: 409, Message: "email already taken"}
+}
+
+func TestValidateRunsOnAValueReceiver(t *testing.T) {
+	app := rice.New()
+	app.POST("/users", func(c *rice.Ctx) error {
+		_, err := binding.JSON[valueValidator](c)
+		if err != nil {
+			return err
+		}
+		return c.String(201, "created")
+	})
+
+	fctx := dispatch(t, app, `{"email":""}`)
+
+	if code := fctx.Response.StatusCode(); code != 422 {
+		t.Errorf("status = %d, want 422", code)
+	}
+	if b := string(fctx.Response.Body()); b != "email is required" {
+		t.Errorf("response = %q, want %q", b, "email is required")
+	}
+}
+
+func TestValidateRunsOnAPointerReceiver(t *testing.T) {
+	app := rice.New()
+	app.POST("/users", func(c *rice.Ctx) error {
+		_, err := binding.JSON[pointerValidator](c)
+		if err != nil {
+			return err
+		}
+		return c.String(201, "created")
+	})
+
+	fctx := dispatch(t, app, `{"email":""}`)
+
+	if code := fctx.Response.StatusCode(); code != 422 {
+		t.Errorf("status = %d, want 422: a pointer-receiver Validate was skipped", code)
+	}
+	if b := string(fctx.Response.Body()); b != "email is required" {
+		t.Errorf("response = %q, want %q", b, "email is required")
+	}
+}
+
+func TestValidatePassingLetsTheHandlerProceed(t *testing.T) {
+	app := rice.New()
+	app.POST("/users", func(c *rice.Ctx) error {
+		in, err := binding.JSON[valueValidator](c)
+		if err != nil {
+			return err
+		}
+		return c.String(201, in.Email)
+	})
+
+	fctx := dispatch(t, app, `{"email":"a@b.c"}`)
+
+	if code := fctx.Response.StatusCode(); code != 201 {
+		t.Errorf("status = %d, want 201", code)
+	}
+	if b := string(fctx.Response.Body()); b != "a@b.c" {
+		t.Errorf("response = %q, want %q", b, "a@b.c")
+	}
+}
+
+// TestATypeWithoutValidateIsAccepted pins that validation is optional: no
+// registration, no panic, no warning.
+func TestATypeWithoutValidateIsAccepted(t *testing.T) {
+	var got createUser
+	var bindErr error
+	fctx := dispatch(t, bindApp(&got, &bindErr), `{"email":"a@b.c","age":30}`)
+
+	if bindErr != nil {
+		t.Fatalf("JSON returned %v, want nil", bindErr)
+	}
+	if code := fctx.Response.StatusCode(); code != 201 {
+		t.Errorf("status = %d, want 201", code)
+	}
+}
+
+// TestValidateMayChooseItsOwnStatus is what makes 422 a default rather than a
+// rule, without adding an option to the package.
+func TestValidateMayChooseItsOwnStatus(t *testing.T) {
+	app := rice.New()
+	app.POST("/users", func(c *rice.Ctx) error {
+		_, err := binding.JSON[statusValidator](c)
+		if err != nil {
+			return err
+		}
+		return c.String(201, "created")
+	})
+
+	fctx := dispatch(t, app, `{"email":"a@b.c"}`)
+
+	if code := fctx.Response.StatusCode(); code != 409 {
+		t.Errorf("status = %d, want 409: Validate's own HTTPError was overwritten", code)
+	}
+	if b := string(fctx.Response.Body()); b != "email already taken" {
+		t.Errorf("response = %q, want %q", b, "email already taken")
+	}
+}
