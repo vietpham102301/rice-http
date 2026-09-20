@@ -173,3 +173,8 @@ Outside any milestone, because the API was already written down in
   list too. Each is held at zero allocations by a budget test.
 - `c.JSON`, the JSON response helper, as ADR-0006's one `encoding/json` exception. Its
   allocations are pinned in [05-performance-model.md](05-performance-model.md).
+- `WithMaxBodySize`, and the transport error handler behind it — the one item here that the
+  design docs had not already written down. The option sets fasthttp's `MaxRequestBodySize`; rice
+  installs its own `fasthttp.Server.ErrorHandler` so a body over the limit is answered **413**
+  where fasthttp's default answers 400, which the 4 MiB default limit needed too. Described in
+  [03-core-concepts.md](03-core-concepts.md#4-app).
