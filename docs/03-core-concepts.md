@@ -124,9 +124,12 @@ themselves and calls `Bytes`.
 `NoContent` takes a code so 204, 205 and 304 all work and so it matches the shape of `String`
 and `Bytes`. It discards anything already written to the body — a 204 with a body is malformed,
 and a handler that wrote before calling it would produce one — and it leaves no
-`Content-Type` on the response: a status that carries no body must not describe one. fasthttp
-adds a default content type, so that absence is asserted against the bytes on the wire rather
-than against a getter.
+`Content-Type` on the response: a status that carries no body must not describe one. The
+getter `ContentType()` cannot show this: fasthttp substitutes a default
+(`text/plain; charset=utf-8`) whenever the field is unset, masking a missing clear whether or
+not one happened. The test instead asserts against the bytes on the wire, and only after the
+handler has written a body first — fasthttp omits the header on the wire for any zero-length
+response regardless of the field, so without a prior write the absence would prove nothing.
 
 ### Per-request store
 

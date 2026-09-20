@@ -1,6 +1,7 @@
 package rice_test
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"testing"
@@ -9,32 +10,51 @@ import (
 )
 
 // TestNoContentSendsNoContentTypeOnTheWire reads the response a real client
-// gets. fasthttp fills in a default Content-Type, so asserting on the response
-// object would not show whether one is sent; RFC 9110 has no body to describe
-// for a 204, and a proxy that sees a Content-Type on one may expect a body.
+// gets. The getter ContentType() would not show whether NoContent's clear did
+// anything, because fasthttp's getter substitutes a default
+// (text/plain; charset=utf-8) whenever the field is unset — that default
+// would mask a missing clear whether or not one happened. The assertion is
+// only meaningful because each handler writes a body (and therefore a
+// Content-Type) with JSON before calling NoContent: on the wire, fasthttp
+// omits the Content-Type header for a zero-length body regardless of the
+// field, so without a prior write this test could not fail even if the
+// clear in NoContent were deleted. RFC 9110 has no body to describe for
+// these statuses, and a proxy that sees a Content-Type on one may expect a
+// body.
 func TestNoContentSendsNoContentTypeOnTheWire(t *testing.T) {
-	app := rice.New()
-	app.DELETE("/items/:id", func(c *rice.Ctx) error { return c.NoContent(204) })
-	addr, _ := serve(t, app)
+	for _, code := range []int{204, 205, 304} {
+		t.Run(fmt.Sprintf("%d", code), func(t *testing.T) {
+			app := rice.New()
+			app.DELETE("/items/:id", func(c *rice.Ctx) error {
+				_ = c.JSON(200, map[string]string{"ok": "true"})
+				return c.NoContent(code)
+			})
+			addr, _ := serve(t, app)
 
-	req, err := http.NewRequest(http.MethodDelete, "http://"+addr+"/items/42", nil)
-	if err != nil {
-		t.Fatalf("new request: %v", err)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("do: %v", err)
-	}
-	defer resp.Body.Close()
+			req, err := http.NewRequest(http.MethodDelete, "http://"+addr+"/items/42", nil)
+			if err != nil {
+				t.Fatalf("new request: %v", err)
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("do: %v", err)
+			}
+			defer resp.Body.Close()
 
-	if resp.StatusCode != 204 {
-		t.Errorf("status = %d, want 204", resp.StatusCode)
-	}
-	if ct := resp.Header.Get("Content-Type"); ct != "" {
-		t.Errorf("Content-Type = %q, want none on a 204", ct)
-	}
-	if resp.ContentLength > 0 {
-		t.Errorf("Content-Length = %d, want 0 or absent", resp.ContentLength)
+			if resp.StatusCode != code {
+				t.Errorf("status = %d, want %d", resp.StatusCode, code)
+			}
+			if ct := resp.Header.Get("Content-Type"); ct != "" {
+				t.Errorf("Content-Type = %q, want none on a %d", ct, code)
+			}
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			if len(body) != 0 {
+				t.Errorf("body = %q, want empty on a %d", body, code)
+			}
+		})
 	}
 }
 
