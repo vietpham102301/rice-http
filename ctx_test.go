@@ -1,6 +1,7 @@
 package rice
 
 import (
+	"net"
 	"testing"
 
 	"github.com/valyala/fasthttp"
@@ -102,5 +103,37 @@ func TestCtxBodyIsEmptyWithoutABody(t *testing.T) {
 
 	if got := c.Body(); len(got) != 0 {
 		t.Errorf("Body() = %q, want empty", got)
+	}
+}
+
+// TestClientIPIgnoresXForwardedFor is a security claim, not an implementation
+// detail: a ClientIP that trusted this header by default would let any client
+// declare its own address, and the access log and every rate limiter built on
+// it would be reporting attacker-supplied data. The trust policy lives in
+// middleware.RealIP, which rewrites the remote address instead.
+func TestClientIPIgnoresXForwardedFor(t *testing.T) {
+	fctx := &fasthttp.RequestCtx{}
+	fctx.Request.Header.Set("X-Forwarded-For", "203.0.113.9")
+	fctx.Request.Header.Set("X-Real-Ip", "203.0.113.9")
+	c := &Ctx{}
+	c.reset(nil, fctx)
+
+	if got := c.ClientIP(); got.String() == "203.0.113.9" {
+		t.Errorf("ClientIP() = %v, want the connection address: headers must not be trusted", got)
+	}
+}
+
+// TestClientIPFollowsSetRemoteAddr pins the mechanism middleware.RealIP will
+// use: it resolves the header against its trusted-hop count and rewrites
+// fasthttp's remote address, and ClientIP reports the result without knowing
+// that happened.
+func TestClientIPFollowsSetRemoteAddr(t *testing.T) {
+	fctx := &fasthttp.RequestCtx{}
+	fctx.SetRemoteAddr(&net.TCPAddr{IP: net.IPv4(203, 0, 113, 9), Port: 1234})
+	c := &Ctx{}
+	c.reset(nil, fctx)
+
+	if got := c.ClientIP(); got.String() != "203.0.113.9" {
+		t.Errorf("ClientIP() = %v, want 203.0.113.9", got)
 	}
 }

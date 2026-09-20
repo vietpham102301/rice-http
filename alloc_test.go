@@ -3,6 +3,7 @@
 package rice
 
 import (
+	"net"
 	"strconv"
 	"testing"
 
@@ -553,6 +554,15 @@ func TestAllocBudgetNoContent(t *testing.T) {
 	c.reset(nil, fctx)
 
 	budget(t, "Ctx.NoContent", 0, func() { _ = c.NoContent(204) })
+}
+
+func TestAllocBudgetClientIP(t *testing.T) {
+	fctx := &fasthttp.RequestCtx{}
+	fctx.SetRemoteAddr(&net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5000})
+	c := &Ctx{}
+	c.reset(nil, fctx)
+
+	budget(t, "Ctx.ClientIP", 0, func() { _ = c.ClientIP() })
 }
 
 func TestAllocBudgetRequestCtx(t *testing.T) {

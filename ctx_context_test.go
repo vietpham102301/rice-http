@@ -1,6 +1,7 @@
 package rice_test
 
 import (
+	"io"
 	"net/http"
 	"testing"
 
@@ -34,5 +35,26 @@ func TestNoContentSendsNoContentTypeOnTheWire(t *testing.T) {
 	}
 	if resp.ContentLength > 0 {
 		t.Errorf("Content-Length = %d, want 0 or absent", resp.ContentLength)
+	}
+}
+
+// TestClientIPOverARealConnection checks the accessor against a real socket,
+// where the address comes from the connection rather than from a test fixture.
+func TestClientIPOverARealConnection(t *testing.T) {
+	app := rice.New()
+	app.GET("/ip", func(c *rice.Ctx) error { return c.String(200, c.ClientIP().String()) })
+	addr, _ := serve(t, app)
+
+	resp, err := http.Get("http://" + addr + "/ip")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if got := string(body); got != "127.0.0.1" {
+		t.Errorf("ClientIP() = %q, want 127.0.0.1", got)
 	}
 }

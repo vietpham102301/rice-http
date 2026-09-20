@@ -1,6 +1,8 @@
 package rice
 
 import (
+	"net"
+
 	"github.com/valyala/fasthttp"
 
 	"github.com/vietpham102301/rice-http/internal/router"
@@ -90,4 +92,18 @@ func (c *Ctx) Header(name string) []byte {
 func (c *Ctx) Body() []byte {
 	c.poison.check()
 	return c.fctx.PostBody()
+}
+
+// ClientIP returns the address the request came from: the connection's peer,
+// never a header.
+//
+// Behind a reverse proxy that is the proxy's address. X-Forwarded-For is not
+// consulted, because any client can set it; a middleware that resolves it
+// against a known number of trusted hops rewrites the connection address with
+// fasthttp's SetRemoteAddr, and this accessor then reports the result.
+//
+// Borrowed: net.IP is a []byte, and it is valid only until the handler returns.
+func (c *Ctx) ClientIP() net.IP {
+	c.poison.check()
+	return c.fctx.RemoteIP()
 }
