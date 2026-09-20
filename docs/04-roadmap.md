@@ -178,3 +178,12 @@ Outside any milestone, because the API was already written down in
   installs its own `fasthttp.Server.ErrorHandler` so a body over the limit is answered **413**
   where fasthttp's default answers 400, which the 4 MiB default limit needed too. Described in
   [03-core-concepts.md](03-core-concepts.md#4-app).
+- `c.Context`, `c.SetContext`, `c.ClientIP` and `c.NoContent`, the four methods a JSON API
+  behind a reverse proxy needs from `Ctx` and core did not have. The context is the `App`'s, not
+  fasthttp's, and is cancelled only when a `Shutdown` force-closes — never when a client
+  disconnects, which fasthttp does not report.
+  [ADR-0010](adr/0010-request-context-cancels-at-force-close.md) records why, and names the
+  passthrough and the two other alternatives that lost. `ClientIP` reads no header;
+  `middleware.RealIP` is what will. Cookies, form/multipart and `Redirect` were on the same
+  list and were cut: nothing in the first service that will use rice needs them, and they stay
+  unpromised until a real use case arrives with its own brainstorm.

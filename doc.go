@@ -9,6 +9,14 @@
 // the memory behind those slices belongs to fasthttp and is reused for the next
 // request on the same connection.
 //
+// Context is the one exception. The context.Context it returns belongs to the
+// App, not to the request, and stays valid after the handler returns. It is
+// cancelled when a Shutdown gives up and force-closes; it is never cancelled by
+// a client disconnecting, which fasthttp does not report. A middleware that
+// installs its own with SetContext derives it from c.Context(), not from
+// context.Background(), which would drop that signal. See
+// docs/adr/0010-request-context-cancels-at-force-close.md.
+//
 // Accessors that return []byte are free and borrowed. Accessors that return
 // string copy, cost one allocation, and are safe to keep. The naming makes the
 // expensive choice the longer one to type:
@@ -42,7 +50,9 @@
 // Nothing is served after Shutdown returns. If in-flight requests have not
 // finished when its context ends, Shutdown closes their connections and returns
 // an error wrapping ErrShutdownTimeout; the handlers run to completion and their
-// responses are lost. See docs/adr/0009-shutdown-force-closes-at-deadline.md.
+// responses are lost. A handler still running then sees its Context cancelled,
+// which is the only signal rice can give it that its response is about to be
+// discarded. See docs/adr/0009-shutdown-force-closes-at-deadline.md.
 // Shutdown may be called more than once and concurrently: the calls take
 // turns, and one whose context ends while it waits force-closes and returns.
 package rice

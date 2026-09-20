@@ -41,9 +41,10 @@ type Ctx struct { /* unexported */ }
 ```
 
 A pooled handle to one in-flight request. It is the only argument a handler gets, and it
-is **borrowed** — see principle 3. It carries four things: the underlying
+is **borrowed** — see principle 3. It carries five things: the underlying
 `*fasthttp.RequestCtx`, the captured route parameters, a small per-request key/value store
-for middleware, and a back-pointer to the `App`.
+for middleware, a back-pointer to the `App`, and the context a middleware has installed, if
+any.
 
 ### Read side
 
@@ -56,10 +57,52 @@ for middleware, and a back-pointer to the `App`.
 | `Query(name string) []byte` | query value | 0 | borrowed |
 | `Header(name string) []byte` | request header | 0 | borrowed |
 | `Body() []byte` | request body | 0 | borrowed, may be empty on streamed bodies |
+| `ClientIP() net.IP` | connection peer address | 0 | borrowed, reads no header |
+| `Context() context.Context` | the context for work this request triggers | 0 | **owned** — safe to keep, see below |
 
 The pattern is consistent and worth stating once: **byte-returning methods are free and
 borrowed; string-returning methods copy and are yours.** Nothing in rice returns a string
-that secretly aliases a buffer.
+that secretly aliases a buffer. `ClientIP` follows the rule — a `net.IP` is a `[]byte`, and it
+is borrowed like every other one. `Context` is the single row that does not, and it has its own
+section below.
+
+`ClientIP` reports the address the connection came from, and reads no header. Behind a reverse
+proxy that is the proxy's address, which is the honest answer: trusting `X-Forwarded-For` by
+default lets any client declare its own address. `middleware.RealIP` is what will resolve that
+header, against a declared number of trusted proxy hops, and it does so by rewriting the
+connection address with fasthttp's `SetRemoteAddr` — `ClientIP` then reports the result without
+knowing it happened. There is no `ClientIPString`; a caller who wants one calls `.String()` and
+pays the allocation where it can be seen.
+
+### The context
+
+```go
+func (c *Ctx) Context() context.Context
+func (c *Ctx) SetContext(ctx context.Context)
+```
+
+`Context` is the context to pass to work the request triggers — a database query, an outbound
+HTTP call. It is **the one exception to the borrow contract**: the context belongs to the
+`App`, not to the request, and stays valid after the handler returns. Everything else reachable
+from a `*Ctx` dies when the handler returns; this does not.
+
+It is cancelled at exactly one moment: when a `Shutdown` gives up waiting and force-closes the
+connections, meaning this response is about to be discarded. It is **not** cancelled when the
+client disconnects, not when `Shutdown` begins, and not when a clean drain finishes. It carries
+no deadline and no values of its own.
+
+The disconnect case is the one to read twice if you are coming from `net/http`, where
+`(*http.Request).Context()` does cancel when the client hangs up. fasthttp does not report a
+disconnect, and detecting one would cost a channel or a goroutine per request, which principle
+1 refuses. A handler that must bound its own work sets a deadline; it will not be told the
+caller went away. See
+[ADR-0010](adr/0010-request-context-cancels-at-force-close.md).
+
+`SetContext` replaces what `Context` returns for the rest of the request: how a middleware
+installs a deadline or a tracing value. **Derive from `c.Context()`, not from
+`context.Background()`** — a context derived from `Background` is not connected to the
+force-close signal, and silently drops it. A nil context panics, as every other configuration
+mistake in rice does.
 
 ### Write side
 
@@ -70,12 +113,20 @@ that secretly aliases a buffer.
 | `String(code int, s string) error` | plaintext body | 0 |
 | `Bytes(code int, b []byte) error` | raw body | 0 |
 | `JSON(code int, v any) error` | JSON body via `encoding/json` | see below |
+| `NoContent(code int) error` | status only: no body, no content type | 0 |
 
 `JSON` is the one place core touches `encoding/json`, and it is not free: encoding an
 arbitrary value costs allocations proportional to the value's shape, and `v any` boxes the
 argument. This is documented rather than hidden, and the number is recorded in the
 benchmark suite. A user who needs zero-allocation JSON writes bytes they encoded
 themselves and calls `Bytes`.
+
+`NoContent` takes a code so 204, 205 and 304 all work and so it matches the shape of `String`
+and `Bytes`. It discards anything already written to the body — a 204 with a body is malformed,
+and a handler that wrote before calling it would produce one — and it leaves no
+`Content-Type` on the response: a status that carries no body must not describe one. fasthttp
+adds a default content type, so that absence is asserted against the bytes on the wire rather
+than against a getter.
 
 ### Per-request store
 
@@ -95,7 +146,8 @@ caller's. Store a pointer to avoid it.
 
 ### Lifetime
 
-`*Ctx` and everything borrowed from it die when the handler returns. To use a value later:
+`*Ctx` and everything borrowed from it die when the handler returns — everything except what
+`Context` returns, which is the `App`'s and outlives the request. To use any other value later:
 
 ```go
 id := c.ParamString("id")          // copied — safe

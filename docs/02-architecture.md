@@ -41,9 +41,9 @@ rice-http/
 ├── app.go              App, New (builds the fasthttp.Server), Option, the timeouts and body limit, the transport error handler, dispatch, the funnel
 ├── handler.go          Handler
 ├── middleware.go       Middleware
-├── ctx.go              Ctx: the per-request handle, reset, Method/Path, Query/Header/Body
+├── ctx.go              Ctx: the per-request handle, reset, Method/Path, Query/Header/Body, Context/ClientIP
 ├── ctx_param.go        Ctx read side: route parameters, borrowed and copied
-├── ctx_response.go     Ctx write side: Status, headers, String/Bytes/JSON
+├── ctx_response.go     Ctx write side: Status, headers, String/Bytes/JSON, NoContent
 ├── ctx_store.go        Ctx per-request store: Set, Get, and its pre-sized slice
 ├── pool.go             sync.Pool wiring: newCtx, acquire, release
 ├── poison_debug.go     ricedebug: mark a released Ctx, panic on any later use
@@ -55,7 +55,7 @@ rice-http/
 ├── errors.go           HTTPError, PanicError, ErrNotFound, ErrorHandler, DefaultErrorHandler
 ├── server.go           Run, Serve, RunContext, Addr, Shutdown, ErrShutdownTimeout
 ├── lifecycle.go        OnStart and OnShutdown: registration, and running them in order
-├── conns.go            connection tracking through ConnState, and the force-close at the deadline
+├── conns.go            connection tracking through ConnState, the force-close at the deadline, and the base-context cancel
 ├── doc.go              package documentation
 ├── internal/
 │   ├── router/         radix tree: insert, lookup, param capture, priority

@@ -16,6 +16,71 @@ Each entry uses this shape:
 
 ---
 
+## 2026-09-20 — post-M8 — A context rice owns, and the free feature that would have undone M7
+
+**Did:** Four methods on `Ctx`. `NoContent(code)` sets a status, discards any body already
+written and sends no `Content-Type`. `ClientIP()` returns the connection's peer address as a
+borrowed `net.IP` and reads no header. `Context()` and `SetContext(ctx)` give a handler a
+`context.Context` to pass to a database or an HTTP client: `App` gained `baseCtx`/`cancelBase`,
+built once in `New` from `context.WithCancel(context.Background())`, and `Ctx` gained one field
+that `reset` clears and `Context` falls back past when it is nil. `closeConns` — the one-way
+latch [ADR-0009](adr/0009-shutdown-force-closes-at-deadline.md) already built for force-close —
+now calls `cancelBase` after releasing `connMu` and before closing the sockets, so that
+cancellation happens at exactly one moment and no third call site can force-close without it.
+[ADR-0010](adr/0010-request-context-cancels-at-force-close.md) records the decision and names
+the three alternatives that lost. Cookies, form/multipart and `Redirect` were on the original
+list and were cut: nothing in the first service that will use rice needs them, and designing a
+multipart API without a use case is how a framework grows a shape nobody wanted.
+
+**Learned:** Three things.
+
+1. *fasthttp's `context.Context` is the server's, not the request's.* `RequestCtx` implements
+   the interface, so `c.RequestCtx()` looked like the whole feature, already shipped and free.
+   It is not: `Deadline()` returns `(zero, false)` always, `Value` aliases `UserValue` rather
+   than rice's store, and `Done()` returns the *server's* channel, closed at `server.go:2072`
+   when `ShutdownWithContext` **begins** — before it polls a single connection. A passthrough
+   would have cancelled every in-flight request at the instant `Shutdown` was called, silently
+   undoing the graceful drain M7 exists to provide, and it would have shown up only during a
+   deploy under load. The cheapest-looking option was a regression against the previous
+   milestone, and the only way to find that out was to read the shutdown path rather than the
+   interface.
+
+2. *`Context()` is the first accessor in rice that returns something the caller may keep.* The
+   borrow contract in `doc.go` was written as an absolute — "Every value reachable from a `*Ctx`
+   is borrowed, not owned" — and that sentence is now false. It got a named exception in the
+   contract itself, not a footnote somewhere downstream: a rule with a hidden exception is worse
+   than a rule with a stated one, and every future accessor that wants to be owned will point at
+   this one.
+
+3. *A test can pin nothing and still pass.* `TestASecondShutdownDoesNotPanicOnTheCancel` was
+   written to show the cancel is idempotent, sent no request, and was caught by review doing
+   nothing at all: with no connection in flight both calls drained cleanly and neither reached
+   `closeConns`. A sequential second call can *never* reach it — fasthttp's
+   `ShutdownWithContext` returns nil at once once the first call has nilled its listener list
+   (`if s.ln == nil { return nil }`, before it polls anything). The rebuilt test is concurrent
+   and leans on rice's own `shutdownSem` plus a handler that never releases, so the second call
+   is guaranteed to find the turn taken and time out on its own ctx: the property is pinned by
+   construction rather than by timing. The plan document carried both defects and has been
+   corrected in place — that vacuous test, and a `-run` regex (`CancelAnInFlightContext`) that
+   failed to match the one test it was supposed to show failing
+   (`TestATimedOutDrainCancelsAnInFlightContext`), which is how a red step can look green.
+
+**Measured:** All four budgets at 0, each broken once on purpose first:
+`Ctx.NoContent allocated 1.0 objects per call, budget is 0`, and the same line for
+`Ctx.ClientIP`, `Ctx.Context` and `Ctx.SetContext`. The injection the plan suggested does not
+work — `_ = make([]byte, 8)` does not escape, so it never breaks a budget; a package-level sink
+assigned from `fmt.Sprint(...)` was used instead, and it is worth knowing that a budget test
+cannot be trusted until its failure has been seen. `Ctx` grew by one interface field, two words;
+`TestNewCtxStaysWithinThreeAllocations` was re-run and did not move, which the design predicted
+and which was measured rather than assumed, because a fourth object in `newCtx` takes the
+parameterised dispatch budget to the boundary. No benchmark was re-recorded: nothing on the
+dispatch path changed. `make cover`: root package 99.3%, 99.2% overall — the same figures as the
+entry below, unmoved.
+
+**Next:** Spec 2 — binding and validation.
+
+---
+
 ## 2026-09-19 — post-M8 — A body over the limit: 413, and the funnel that never sees it
 
 **Did:** `WithMaxBodySize(n)` sets fasthttp's `MaxRequestBodySize`; zero or a negative size panics
