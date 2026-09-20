@@ -64,7 +64,7 @@ Three moments deliberately do *not* cancel:
 | --- | --- | --- |
 | `Shutdown` begins | No | This is fasthttp's mistake. Cancelling here cuts off requests the grace period was about to let finish |
 | A clean drain finishes | No | Every handler has already returned. The signal would reach nobody |
-| An `OnStart` hook fails | No | `Serve`'s start-error path closes the listener and returns (`server.go:77–80`); it never reaches `closeConns`, and a retried `Serve` must still have a live context |
+| An `OnStart` hook fails | No | `Serve`'s start-error path closes the listener and returns (rice's own `server.go:77–80`); it never reaches `closeConns`, and a retried `Serve` must still have a live context |
 
 The base context carries no values and no deadline. `Value` returns nil for every key: rice
 already has a per-request store behind `Set` and `Get`, and a second one with a different
