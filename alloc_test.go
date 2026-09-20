@@ -547,6 +547,14 @@ func TestAllocBudgetSetContentType(t *testing.T) {
 	budget(t, "Ctx.SetContentType", 0, func() { c.SetContentType("application/json") })
 }
 
+func TestAllocBudgetNoContent(t *testing.T) {
+	fctx := &fasthttp.RequestCtx{}
+	c := &Ctx{}
+	c.reset(nil, fctx)
+
+	budget(t, "Ctx.NoContent", 0, func() { _ = c.NoContent(204) })
+}
+
 func TestAllocBudgetRequestCtx(t *testing.T) {
 	fctx := &fasthttp.RequestCtx{}
 	c := &Ctx{}
