@@ -37,7 +37,7 @@ depends on tags, the reader can no longer predict what happens by reading the ca
 ## 3. Explicit lifetimes — the borrow contract
 
 Everything reachable from a `*Ctx` is **borrowed**, not owned, with one named exception:
-`Context()` returns a `context.Context` owned by the `App`, not the request, which stays
+`Context()` returns a `context.Context` owned by the `App`, not the request, and it stays
 valid after the handler returns. See
 [ADR-0010](adr/0010-request-context-cancels-at-force-close.md). Every other value reached
 through a `*Ctx` is valid only until the handler returns. That includes the `*Ctx` itself,
