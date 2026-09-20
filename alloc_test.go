@@ -3,6 +3,7 @@
 package rice
 
 import (
+	"context"
 	"net"
 	"strconv"
 	"testing"
@@ -620,4 +621,19 @@ func TestAllocBudgetJSON(t *testing.T) {
 			t.Errorf("%s allocated %.1f objects per call, want exactly %.0f", tc.name, got, tc.want)
 		}
 	}
+}
+
+// TestAllocBudgetContext uses a real App, unlike the other budgets in this
+// file: Context falls back to the App's base context, so a Ctx reset with a nil
+// App would panic rather than measure anything.
+func TestAllocBudgetContext(t *testing.T) {
+	app := New()
+	fctx := &fasthttp.RequestCtx{}
+	c := &Ctx{}
+	c.reset(app, fctx)
+
+	budget(t, "Ctx.Context", 0, func() { _ = c.Context() })
+
+	ctx := context.Background()
+	budget(t, "Ctx.SetContext", 0, func() { c.SetContext(ctx) })
 }

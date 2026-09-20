@@ -178,6 +178,17 @@ type App struct {
 	// OnShutdown hooks. RunContext uses it to wait for hooks that are running
 	// without waiting on a drain that may never end.
 	hooksStarted chan struct{}
+
+	// baseCtx is what Ctx.Context returns when no middleware has replaced it.
+	// It is cancelled by closeConns, so a handler still running when Shutdown
+	// gives up learns that its response is about to be discarded. It is never
+	// cancelled by a clean shutdown, which has no handler left to tell, nor by a
+	// failed start, which leaves Serve retryable. See ADR-0010.
+	//
+	// It carries no values. rice's per-request store is Set and Get; a second
+	// store with a different lifetime would be one too many.
+	baseCtx    context.Context
+	cancelBase context.CancelFunc
 }
 
 // route is one registration, recorded for Build to compile.
@@ -197,6 +208,7 @@ func New(opts ...Option) *App {
 		shutdownDone: make(chan struct{}),
 		hooksStarted: make(chan struct{}),
 	}
+	a.baseCtx, a.cancelBase = context.WithCancel(context.Background())
 	a.pool.New = func() any { return a.newCtx() }
 	a.srv = &fasthttp.Server{
 		Handler:      a.handle,

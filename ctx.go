@@ -1,6 +1,7 @@
 package rice
 
 import (
+	"context"
 	"net"
 
 	"github.com/valyala/fasthttp"
@@ -20,6 +21,11 @@ type Ctx struct {
 	fctx *fasthttp.RequestCtx
 	app  *App
 
+	// ctx is nil unless a middleware called SetContext. Context falls back to
+	// the App's base context, so binding a request costs no assignment here
+	// beyond the clearing reset already owes.
+	ctx context.Context
+
 	// params is held by value, not by pointer, so that capturing route
 	// parameters needs no allocation of its own. This is what ADR-0005's
 	// Lookup(path, *Params) signature exists to make possible, and it is why the
@@ -38,6 +44,7 @@ type Ctx struct {
 func (c *Ctx) reset(app *App, fctx *fasthttp.RequestCtx) {
 	c.app = app
 	c.fctx = fctx
+	c.ctx = nil
 	c.params.Reset()
 	c.resetStore()
 }
@@ -106,4 +113,40 @@ func (c *Ctx) Body() []byte {
 func (c *Ctx) ClientIP() net.IP {
 	c.poison.check()
 	return c.fctx.RemoteIP()
+}
+
+// Context returns the context to pass to work the request triggers: a database
+// query, an outbound HTTP call.
+//
+// Unlike everything else reachable from a Ctx, the returned context is owned,
+// not borrowed. It belongs to the App and stays valid after the handler
+// returns.
+//
+// It is cancelled when a Shutdown gives up waiting and force-closes, meaning
+// the response is about to be discarded. It is not cancelled when the client
+// disconnects: fasthttp does not report that, and detecting it would cost a
+// channel per request. It carries no deadline and no values of its own.
+//
+// See docs/adr/0010-request-context-cancels-at-force-close.md.
+func (c *Ctx) Context() context.Context {
+	c.poison.check()
+	if c.ctx != nil {
+		return c.ctx
+	}
+	return c.app.baseCtx
+}
+
+// SetContext replaces what Context returns for the rest of this request.
+//
+// It is how a middleware adds a deadline or a value. Derive from c.Context(),
+// not from context.Background(): a context derived from Background silently
+// drops the force-close signal.
+//
+// A nil context panics, as every other configuration mistake in rice does.
+func (c *Ctx) SetContext(ctx context.Context) {
+	c.poison.check()
+	if ctx == nil {
+		panic("rice: SetContext: context is nil")
+	}
+	c.ctx = ctx
 }
