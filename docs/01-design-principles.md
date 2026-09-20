@@ -36,9 +36,13 @@ depends on tags, the reader can no longer predict what happens by reading the ca
 
 ## 3. Explicit lifetimes — the borrow contract
 
-Everything reachable from a `*Ctx` is **borrowed**, not owned. It is valid only until the
-handler returns. That includes the `*Ctx` itself, every `[]byte` obtained from it, every
-route parameter, every header value, and the request body slice.
+Everything reachable from a `*Ctx` is **borrowed**, not owned, with one named exception:
+`Context()` returns a `context.Context` owned by the `App`, not the request, which stays
+valid after the handler returns. See
+[ADR-0010](adr/0010-request-context-cancels-at-force-close.md). Every other value reached
+through a `*Ctx` is valid only until the handler returns. That includes the `*Ctx` itself,
+every `[]byte` obtained from it, every route parameter, every header value, and the request
+body slice.
 
 Code that needs a value to outlive the handler must copy it, and the framework provides an
 obvious way to do so for every borrowed value.

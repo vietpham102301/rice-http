@@ -44,6 +44,9 @@ func (a *App) connState(c net.Conn, s fasthttp.ConnState) {
 // opens or closes meanwhile. Setting forceClosed under the lock first is what
 // keeps that safe: a connection reported after it is closed on arrival, so
 // nothing escapes the copy.
+//
+// It also cancels the App's base context, which is what tells a handler still
+// running that its response is about to be discarded.
 func (a *App) closeConns() {
 	a.connMu.Lock()
 	a.forceClosed = true
@@ -52,6 +55,17 @@ func (a *App) closeConns() {
 		conns = append(conns, c)
 	}
 	a.connMu.Unlock()
+
+	// Cancel before closing, so a handler blocked on a database call learns to
+	// abandon its work from its context rather than from a write to a socket
+	// that is already gone. The order is the intent; no test asserts it,
+	// because a test that raced the socket's death would be flaky.
+	//
+	// It happens here rather than at Shutdown's two call sites because
+	// force-closing and cancelling are one event, and a third call site would
+	// otherwise be able to forget one half of it. cancelBase runs outside
+	// connMu: calling a callback under a lock is how deadlocks are built.
+	a.cancelBase()
 
 	for _, c := range conns {
 		_ = c.Close()

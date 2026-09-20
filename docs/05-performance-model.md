@@ -57,6 +57,10 @@ Every exported method of `Ctx`, one row each.
 | `c.Body` | 0 | MEASURED after M8 | `TestAllocBudgetQueryHeaderBody` |
 | `c.JSON` with a pointer | 1, exactly (the encoded bytes) | MEASURED after M8 | `TestAllocBudgetJSON` |
 | `c.JSON` with a struct value (the caller's boxing) | 2, exactly | MEASURED after M8 | `TestAllocBudgetJSON` |
+| `c.NoContent` | 0 | MEASURED after M8 | `TestAllocBudgetNoContent` |
+| `c.ClientIP` | 0 | MEASURED after M8 | `TestAllocBudgetClientIP` |
+| `c.Context` | 0 | MEASURED after M8 | `TestAllocBudgetContext` |
+| `c.SetContext` | 0 | MEASURED after M8 | `TestAllocBudgetContext` |
 
 The four M8 rows are new tests, not new code: `Status`, `SetHeader` and `SetContentType` write
 into fasthttp's reused response header, and `RequestCtx` returns a field. Each was broken once on
@@ -64,7 +68,7 @@ purpose with an allocating line and failed — for example
 `Ctx.RequestCtx allocated 9.0 objects per call, budget is 0`; the four texts are in the
 [M8 retrospective](milestones/M8-benchmark-suite.md).
 
-The five rows marked after M8 came with the code they measure: `Query`, `Header` and `Body` peek
+The five rows from `Query` to `JSON` came with the code they measure: `Query`, `Header` and `Body` peek
 into fasthttp's parsed request, and `JSON` is `json.Marshal` followed by `SetBody`. The `JSON`
 figures are for the `json` scenario's payload (an int, a string, a two-element slice) and are
 pinned exactly, so an encoder that got cheaper fails too and the row is corrected rather than left
@@ -72,6 +76,27 @@ stale. A larger or deeper value costs whatever `encoding/json` charges for its s
 was broken once on purpose and failed — for example
 `Ctx.Header allocated 1.0 objects per call, budget is 0` and
 `Ctx.JSON with a pointer allocated 2.0 objects per call, want exactly 1`.
+
+The last four rows came with the code too. `NoContent` sets a status and resets fasthttp's
+reused body buffer; `ClientIP` returns the address slice fasthttp already holds; `Context`
+returns a field or the `App`'s base context, and `SetContext` stores one — the context is built
+once in `New`, never per request, which is what makes the budget 0 rather than 1. Each was
+broken once on purpose and failed:
+
+```
+Ctx.NoContent allocated 1.0 objects per call, budget is 0
+Ctx.ClientIP allocated 1.0 objects per call, budget is 0
+Ctx.Context allocated 1.0 objects per call, budget is 0
+Ctx.SetContext allocated 1.0 objects per call, budget is 0
+```
+
+The injection is worth recording, because the obvious one does not work: `_ = make([]byte, 8)`
+inside the measured closure does not escape, so the compiler stack-allocates it and the budget
+stays green. A package-level sink assigned from `fmt.Sprint(...)` was used instead.
+
+`Ctx` grew by one interface field, two words, for the context. `TestNewCtxStaysWithinThreeAllocations`
+and the dispatch budgets were re-run afterwards and did not move — predicted, then measured
+rather than assumed, because the note below explains how narrow the margin on three objects is.
 
 ### Request path — dispatch
 

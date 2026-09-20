@@ -27,8 +27,11 @@ passes on its way to becoming a response.
 **Hot path** — the code executed on every request: pool acquire, route lookup, chain call,
 pool release. Code outside it is cold and may allocate freely.
 
-**Owned** — a value the caller may keep past the end of the handler. Produced only by
-methods that copy, which are named to say so (`ParamString`, not `Param`).
+**Owned** — a value the caller may keep past the end of the handler. Usually produced by
+methods that copy, which are named to say so (`ParamString`, not `Param`). `Context()` is the
+one exception: it copies nothing, but returns a `context.Context` owned by the `App` rather
+than the request, so it outlives the handler regardless of its name. See
+[ADR-0010](adr/0010-request-context-cancels-at-force-close.md).
 
 **Poisoning** — deliberately invalidating a released `Ctx` under the `ricedebug` build tag
 so that use-after-release panics loudly instead of returning plausible garbage.

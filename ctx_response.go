@@ -52,6 +52,19 @@ func (c *Ctx) Bytes(code int, b []byte) error {
 	return nil
 }
 
+// NoContent sends the given status code with no body: 204 after a successful
+// DELETE, 205, 304.
+//
+// It discards anything already written to the body, and sends no Content-Type:
+// a status that carries no body must not describe one.
+func (c *Ctx) NoContent(code int) error {
+	c.poison.check()
+	c.fctx.SetStatusCode(code)
+	c.fctx.Response.ResetBody()
+	c.fctx.Response.Header.SetContentType("")
+	return nil
+}
+
 // JSON encodes v with encoding/json and writes it as the response body, with
 // the given status and the application/json content type.
 //

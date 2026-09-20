@@ -1158,3 +1158,196 @@ func TestRunContextWaitsForRunningHooksWhenStartFails(t *testing.T) {
 		t.Error("RunContext returned before the OnShutdown hook finished")
 	}
 }
+
+// ctxApp returns an App whose /ctx handler publishes the context it was given,
+// then blocks until release is called or that context is done, and answers with
+// why it stopped. release is idempotent and also runs at cleanup.
+func ctxApp(t *testing.T) (app *rice.App, got <-chan context.Context, stopped <-chan string, release func()) {
+	t.Helper()
+	ctxCh := make(chan context.Context, 1)
+	stoppedCh := make(chan string, 1)
+	gate := make(chan struct{})
+
+	app = rice.New()
+	app.GET("/ctx", func(c *rice.Ctx) error {
+		reqCtx := c.Context()
+		ctxCh <- reqCtx
+		select {
+		case <-gate:
+			stoppedCh <- "released"
+		case <-reqCtx.Done():
+			stoppedCh <- "cancelled"
+		}
+		return c.String(200, "done")
+	})
+	release = sync.OnceFunc(func() { close(gate) })
+	t.Cleanup(release)
+	return app, ctxCh, stoppedCh, release
+}
+
+// sendCtx opens a connection to addr and sends GET /ctx on it.
+func sendCtx(t *testing.T, addr string) net.Conn {
+	t.Helper()
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	fmt.Fprint(conn, "GET /ctx HTTP/1.1\r\nHost: rice\r\n\r\n")
+	return conn
+}
+
+// TestACleanShutdownDoesNotCancelAnInFlightContext pins the decision not to
+// cancel when Shutdown begins. fasthttp closes its own server-wide channel
+// there, which is why rice does not hand that channel to handlers: cutting off
+// a request that the grace period was about to let finish is precisely what
+// M7's drain exists to prevent.
+func TestACleanShutdownDoesNotCancelAnInFlightContext(t *testing.T) {
+	app, got, stopped, release := ctxApp(t)
+	addr, _ := serve(t, app)
+	sendCtx(t, addr)
+
+	reqCtx := within(t, 2*time.Second, "the handler starting", got)
+
+	done := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		done <- app.Shutdown(ctx)
+	}()
+
+	// The drain is under way and the handler is still blocked: its context must
+	// still be live.
+	time.Sleep(100 * time.Millisecond)
+	if err := reqCtx.Err(); err != nil {
+		t.Errorf("Err() = %v during a clean drain, want nil", err)
+	}
+
+	release()
+	if why := within(t, 2*time.Second, "the handler finishing", stopped); why != "released" {
+		t.Errorf("the handler stopped because %q, want %q", why, "released")
+	}
+	if err := within(t, 3*time.Second, "Shutdown returning", done); err != nil {
+		t.Errorf("Shutdown() = %v, want nil", err)
+	}
+}
+
+// TestATimedOutDrainCancelsAnInFlightContext is the signal this feature exists
+// for. OnShutdown's documentation already says a handler cut off by a timed-out
+// drain may still be running; until now it had no way to find out.
+func TestATimedOutDrainCancelsAnInFlightContext(t *testing.T) {
+	app, got, stopped, _ := ctxApp(t)
+	addr, _ := serve(t, app)
+	sendCtx(t, addr)
+
+	reqCtx := within(t, 2*time.Second, "the handler starting", got)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if err := app.Shutdown(ctx); !errors.Is(err, rice.ErrShutdownTimeout) {
+		t.Fatalf("Shutdown() = %v, want an error wrapping ErrShutdownTimeout", err)
+	}
+
+	if why := within(t, 2*time.Second, "the handler noticing", stopped); why != "cancelled" {
+		t.Errorf("the handler stopped because %q, want %q", why, "cancelled")
+	}
+	if err := reqCtx.Err(); !errors.Is(err, context.Canceled) {
+		t.Errorf("Err() = %v, want context.Canceled", err)
+	}
+}
+
+// TestASecondShutdownDoesNotPanicOnTheCancel pins that cancelling twice is
+// safe: context.CancelFunc is idempotent, and Shutdown may be called more
+// than once, including concurrently.
+//
+// It uses slowApp rather than ctxApp: ctxApp's handler watches its own
+// context and returns as soon as the first force-close cancels it, so a
+// second call would find nothing left in flight and drain cleanly, never
+// reaching closeConns a second time. slowApp's handler only watches a gate
+// and never returns on its own, so the connection stays busy across both
+// calls.
+//
+// The two calls are concurrent, not sequential, because a sequential second
+// call cannot exercise this at all: fasthttp's own ShutdownWithContext
+// returns nil at once once its listener list is nil (server.go, checked
+// before it ever polls open connections), and the first call already made it
+// nil. A sequential second call was tried while writing this test and
+// confirmed to return nil immediately — it is exactly the "a later call
+// finds nothing left to drain, returns nil, and runs no hooks" case Shutdown's
+// own doc comment describes, and it never reaches closeConns. Concurrently,
+// the second call instead loses the race for Shutdown's turn and force-closes
+// on its own ctx while the first is still draining on its own — so each
+// independently reaches closeConns, and therefore cancelBase, without either
+// waiting on the other.
+//
+// The second call's grace is far shorter than the first's, so which call
+// takes the turn is not left to scheduling luck: waitUntilRefused confirms
+// the first call has already started draining — closing the listener is the
+// first thing its own Shutdown call does — before the second call is even
+// made, so the second is guaranteed to find the turn taken and fall back to
+// timing out on its own ctx well before the first's ctx ends.
+func TestASecondShutdownDoesNotPanicOnTheCancel(t *testing.T) {
+	app, inFlight, _ := slowApp(t)
+	addr, _ := serve(t, app)
+	sendSlow(t, addr)
+	within(t, 2*time.Second, "the handler receiving the request", inFlight)
+
+	firstCh := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		defer cancel()
+		firstCh <- app.Shutdown(ctx)
+	}()
+	waitUntilRefused(t, addr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := app.Shutdown(ctx); !errors.Is(err, rice.ErrShutdownTimeout) {
+		t.Errorf("second Shutdown() = %v, want an error wrapping ErrShutdownTimeout", err)
+	}
+
+	if err := within(t, 2*time.Second, "the first Shutdown returning", firstCh); !errors.Is(err, rice.ErrShutdownTimeout) {
+		t.Errorf("first Shutdown() = %v, want an error wrapping ErrShutdownTimeout", err)
+	}
+}
+
+// TestAServeRetriedAfterAFailedStartKeepsALiveContext pins that the OnStart
+// error path never force-closes, so the base context outlives a failed start
+// and the App can still be served.
+func TestAServeRetriedAfterAFailedStartKeepsALiveContext(t *testing.T) {
+	var fail atomic.Bool
+	fail.Store(true)
+
+	app := rice.New()
+	app.OnStart(func() error {
+		if fail.Load() {
+			return errors.New("not today")
+		}
+		return nil
+	})
+	live := make(chan error, 1)
+	app.GET("/ctx", func(c *rice.Ctx) error {
+		live <- c.Context().Err()
+		return c.String(200, "ok")
+	})
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	if err := app.Serve(ln); err == nil {
+		t.Fatal("Serve() = nil after a failing OnStart hook, want the hook's error")
+	}
+
+	fail.Store(false)
+	addr, _ := serve(t, app)
+	resp, err := http.Get("http://" + addr + "/ctx")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if err := within(t, 2*time.Second, "the handler running", live); err != nil {
+		t.Errorf("Context().Err() = %v on a retried Serve, want nil", err)
+	}
+}

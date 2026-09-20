@@ -109,6 +109,37 @@ func TestJSONWritesStatusBodyAndContentType(t *testing.T) {
 	}
 }
 
+func TestNoContentSetsTheStatusAndNoBody(t *testing.T) {
+	c, fctx := newTestCtx("DELETE", "/items/42")
+
+	if err := c.NoContent(204); err != nil {
+		t.Fatalf("NoContent(204) = %v, want nil", err)
+	}
+	if got := fctx.Response.StatusCode(); got != 204 {
+		t.Errorf("status = %d, want 204", got)
+	}
+	if got := fctx.Response.Body(); len(got) != 0 {
+		t.Errorf("body = %q, want empty", got)
+	}
+}
+
+// TestNoContentDiscardsABodyAlreadyWritten is why NoContent calls ResetBody
+// rather than only setting the status: a 204 carrying a body is malformed, and
+// a handler that wrote before changing its mind would produce one.
+func TestNoContentDiscardsABodyAlreadyWritten(t *testing.T) {
+	c, fctx := newTestCtx("DELETE", "/items/42")
+
+	if err := c.String(200, "half an answer"); err != nil {
+		t.Fatalf("String: %v", err)
+	}
+	if err := c.NoContent(204); err != nil {
+		t.Fatalf("NoContent(204) = %v, want nil", err)
+	}
+	if got := fctx.Response.Body(); len(got) != 0 {
+		t.Errorf("body = %q, want empty: NoContent must discard what was written", got)
+	}
+}
+
 func TestJSONLeavesTheResponseAloneWhenEncodingFails(t *testing.T) {
 	c, fctx := newTestCtx("GET", "/json")
 	_ = c.String(202, "before")

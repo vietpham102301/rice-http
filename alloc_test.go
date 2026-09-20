@@ -3,6 +3,8 @@
 package rice
 
 import (
+	"context"
+	"net"
 	"strconv"
 	"testing"
 
@@ -547,6 +549,23 @@ func TestAllocBudgetSetContentType(t *testing.T) {
 	budget(t, "Ctx.SetContentType", 0, func() { c.SetContentType("application/json") })
 }
 
+func TestAllocBudgetNoContent(t *testing.T) {
+	fctx := &fasthttp.RequestCtx{}
+	c := &Ctx{}
+	c.reset(nil, fctx)
+
+	budget(t, "Ctx.NoContent", 0, func() { _ = c.NoContent(204) })
+}
+
+func TestAllocBudgetClientIP(t *testing.T) {
+	fctx := &fasthttp.RequestCtx{}
+	fctx.SetRemoteAddr(&net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5000})
+	c := &Ctx{}
+	c.reset(nil, fctx)
+
+	budget(t, "Ctx.ClientIP", 0, func() { _ = c.ClientIP() })
+}
+
 func TestAllocBudgetRequestCtx(t *testing.T) {
 	fctx := &fasthttp.RequestCtx{}
 	c := &Ctx{}
@@ -602,4 +621,19 @@ func TestAllocBudgetJSON(t *testing.T) {
 			t.Errorf("%s allocated %.1f objects per call, want exactly %.0f", tc.name, got, tc.want)
 		}
 	}
+}
+
+// TestAllocBudgetContext uses a real App, unlike the other budgets in this
+// file: Context falls back to the App's base context, so a Ctx reset with a nil
+// App would panic rather than measure anything.
+func TestAllocBudgetContext(t *testing.T) {
+	app := New()
+	fctx := &fasthttp.RequestCtx{}
+	c := &Ctx{}
+	c.reset(app, fctx)
+
+	budget(t, "Ctx.Context", 0, func() { _ = c.Context() })
+
+	ctx := context.Background()
+	budget(t, "Ctx.SetContext", 0, func() { c.SetContext(ctx) })
 }
