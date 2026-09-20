@@ -16,6 +16,78 @@ Each entry uses this shape:
 
 ---
 
+## 2026-09-20 — post-M8 — Binding, where the convenience stops, and a plan that could not compile
+
+**Did:** A new package, `binding/`, beside `middleware/` and importing rice one way. One exported
+function, `binding.JSON[T any](c *rice.Ctx) (T, error)`. The decode is strict in two ways, not
+one: `DisallowUnknownFields` so `{"emial":...}` is a 400 rather than a silently zero-valued field,
+and a `dec.More()` check after a successful decode, because `Decode` reads one value and stops and
+without it `{"a":1}{"b":2}` would pass. If `T` or `*T` has a `Validate() error` method it runs
+after decoding — optional, no registration, no panic for a type that has none. Three error
+branches: an empty or whitespace-only body is 400 `empty request body`, anything unparseable is
+400 `invalid JSON body` with the decoder's own text kept in `HTTPError.Err` for the log only, and
+a failed `Validate` is 422 carrying the author's own message. An `*rice.HTTPError` returned from
+`Validate` passes through with its own status, so 409 needs no option.
+[ADR-0011](adr/0011-binding-is-generic-and-validation-is-a-method.md) records the shape and names
+the two alternatives that lost — struct tags plus a third-party validator, which is what every
+other Go framework does, and a reflection-free decoder written per type — and states that
+ADR-0006's boundary has not moved: package `rice` still imports neither `reflect` nor
+`encoding/json` outside `c.JSON`, and `binding`'s import shows up in the import list of whoever
+chooses it. Deliberately left out: no `Content-Type` check, no body-size limit of its own
+(`WithMaxBodySize` already sets one at the transport), and no `binding.Query` or `binding.Header`.
+
+**Learned:** Three things.
+
+1. *The error branches rest on three behaviours of `encoding/json` that were measured before the
+   design was written, not assumed.* A whitespace-only body reports `io.EOF` exactly as an empty
+   one does, so the empty-body branch catches `"\n"` with no separate trim. A truncated body —
+   `{"email":` — reports `io.ErrUnexpectedEOF`, which does **not** match
+   `errors.Is(err, io.EOF)`; that is the load-bearing one, because if it did match, the empty-body
+   branch would swallow a half-sent body and answer `empty request body` to a client that sent
+   one, sending everybody hunting the wrong bug. And a trailing newline does not trip
+   `dec.More()`, which every real client sends, so the trailing-data check produces no false
+   rejections. Three small probe runs decided three branches; guessing any of them would have
+   shipped a wrong answer that looks right in the happy path.
+
+2. *The one mistake here that fails silently is the receiver.* The `Validate` assertion goes
+   through `any(&out)`, not `any(out)`. A `Validate` on a value receiver is in the method set of
+   both `T` and `*T`, but one on a pointer receiver is in the method set of `*T` only — so
+   asserting on the value compiles, passes every test written with a value receiver, and silently
+   never runs a pointer-receiver `Validate`. A validation that never runs is indistinguishable
+   from one that passed: the request succeeds either way. Two tests exist for no other reason than
+   to make that failure loud, one per receiver shape, and they are separate tests on purpose
+   because one assertion style passes the first and skips the second.
+
+3. *A plan can specify a number's provenance correctly and still get the mechanics of obtaining it
+   wrong.* The budget test was planned with an untyped `const want = 0`, deliberately wrong so the
+   first run would fail and print the real figure — the right instinct, and it never ran. An
+   untyped constant handed to a `%.0f` verb fails `go vet`'s printf check, `go test` runs vet
+   before any test, so the file did not build and produced no measurement at all. Typing the
+   constant `float64` fixed it and the figure came from the run after that. The failure mode is
+   worth naming: a red step that never reaches the test is not a red step, and it looks like one
+   in a plan document.
+
+**Measured:** `binding.JSON` with the `createUser` fixture — two fields, a `string` and an `int` —
+allocates **exactly 9 objects per call**, pinned in both directions by
+`TestAllocBudgetJSONBinding`: `want = 8` fails and `want = 10` fails, because a budget that only
+catches a rise leaves the documented figure stale when an allocation quietly goes away. The figure
+was reproduced independently afterwards, by a second party in a separate module, which is the only
+reason it is trusted rather than merely recorded. **What is not known is how the 9 divide** between
+the `json.Decoder`, the `bytes.Reader`, the generic zero value, the decoded struct and the
+interface boxing for the `Validate` assertion. No profile was taken and no arithmetic here reaches
+9 without guessing, so it goes on
+[07-retrospective.md](07-retrospective.md#what-is-still-not-understood)'s list of numbers with no
+mechanism behind them rather than being explained plausibly. Why it allocates at all is known:
+`DisallowUnknownFields` exists only on `json.Decoder`, not on `json.Unmarshal`, and `json.Decoder`
+has no `Reset`, so it cannot be pooled — strictness is what costs the allocations, and the escape
+hatch is `c.Body()` with a hand-written decode. Nothing on the request path changed, so no
+benchmark was re-recorded and no `Ctx` budget moved. `make cover`: root package 99.3%, `binding`
+100.0%, 99.2% overall — the same two figures as the two entries below, unmoved.
+
+**Next:** the group-B middleware set — Logger, RequestID, Timeout, CORS.
+
+---
+
 ## 2026-09-20 — post-M8 — A context rice owns, and the free feature that would have undone M7
 
 **Did:** Four methods on `Ctx`. `NoContent(code)` sets a status, discards any body already

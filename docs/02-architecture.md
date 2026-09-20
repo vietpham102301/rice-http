@@ -61,6 +61,7 @@ rice-http/
 │   ├── router/         radix tree: insert, lookup, param capture, priority
 │   └── chain/          middleware chain compilation
 ├── middleware/         optional, opt-in: recover
+├── binding/            optional, opt-in: binding.JSON[T], strict decode plus Validate; imports rice, and nothing imports it
 ├── docs/               these documents, the ADRs, milestone retrospectives, the journal
 ├── bench/              benchmark suite and recorded results, one file per milestone
 ├── scripts/            bench.sh, the recording harness
@@ -77,8 +78,12 @@ because they exist:
 └── internal/bytesconv/ the only place unsafe string/[]byte views are allowed (unbuilt)
 ```
 
-`middleware/` is a separate package on purpose. Importing rice must not drag in anything
-a user did not ask for, and the import graph is the honest signal of what costs what.
+`middleware/` and `binding/` are separate packages on purpose. Importing rice must not drag in
+anything a user did not ask for, and the import graph is the honest signal of what costs what.
+`binding/` is the clearest case: it is the only package in the repository outside `c.JSON` that
+imports `encoding/json`, and it depends on rice one way — rice does not know it exists. See
+[ADR-0006](adr/0006-no-reflection-in-core.md) and
+[ADR-0011](adr/0011-binding-is-generic-and-validation-is-a-method.md).
 
 ## The two phases
 

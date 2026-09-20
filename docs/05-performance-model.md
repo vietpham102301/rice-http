@@ -166,6 +166,52 @@ dispatch budget failed on two runs out of three and the static one on none.
 Raising a budget is a design change. It requires a note in the pull request explaining what
 was bought with the allocation, and if the reasoning is interesting, an ADR.
 
+### Opt-in packages
+
+Nothing here is on the request path unless a handler calls it. The rows are kept out of the `Ctx`
+tables above for that reason: a row among those would imply every user pays this cost, and a user
+who never imports the package pays none of it.
+
+| Operation | Budget | Status | Enforced by |
+| --- | --- | --- | --- |
+| `binding.JSON` with the `createUser` fixture | 9, exactly | MEASURED after M8 | `TestAllocBudgetJSONBinding` |
+
+**Why it allocates at all.** `DisallowUnknownFields` exists only on `json.Decoder`, not on
+`json.Unmarshal`, so a strict decode needs a `Decoder` and a `bytes.Reader` for it to read from,
+both built per call. `json.Decoder` has no `Reset`, so neither can be pooled the way the `Ctx` is.
+Strictness is what costs the allocations: the loose version of this function would be
+`json.Unmarshal(c.Body(), &out)` and would cost less. That trade is
+[ADR-0011](adr/0011-binding-is-generic-and-validation-is-a-method.md)'s, and this row is its
+price.
+
+**The figure is for a named fixture.** `createUser` is the test suite's type — two fields, a
+`string` and an `int`. A larger or deeper type costs whatever `encoding/json` charges for its
+shape, and the figure here does not predict it. Any documentation of this number that omits the
+fixture is wrong.
+
+**Pinned in both directions, not bounded.** `TestAllocBudgetJSONBinding` asserts equality: `want =
+8` fails and so does `want = 10`. A budget that only catches a rise is half a pin, because an
+allocation that quietly goes away leaves the documented figure stale and nothing notices. If a
+future Go makes this cheaper, the test goes red and this row is corrected.
+
+**How the number was obtained.** The plan for this work specified an untyped `const want = 0`,
+placed so the first run would fail and print the real figure. That snippet does not compile: an
+untyped constant passed to a `%.0f` verb fails `go vet`'s printf check, which `go test` runs
+before any test does, so it never produced a measurement. The constant was typed `float64` and the
+figure measured after that. It has since been reproduced independently, by a second party in a
+separate module, which is why it is trusted rather than merely recorded.
+
+**What those 9 objects are has not been determined.** The candidates are the `json.Decoder`, the
+`bytes.Reader`, the generic zero value, the decoded struct and the interface boxing for the
+`Validate` assertion, but nobody has taken a profile and attributed them, and no arithmetic here
+adds up to 9 without guessing. It joins the list in
+[07-retrospective.md](07-retrospective.md#what-is-still-not-understood): bounded, reproducible,
+and without a mechanism behind it.
+
+**The escape hatch.** A handler that must not pay this decodes `c.Body()` itself — the same three
+lines [ADR-0006](adr/0006-no-reflection-in-core.md) said users would write, with the borrow
+contract applying to the body as it always has. `binding.JSON`'s doc comment names it.
+
 ## The techniques, and what each one costs
 
 Each of these buys allocations back. None is free, and the cost is the interesting half.
