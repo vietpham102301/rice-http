@@ -1257,17 +1257,58 @@ func TestATimedOutDrainCancelsAnInFlightContext(t *testing.T) {
 }
 
 // TestASecondShutdownDoesNotPanicOnTheCancel pins that cancelling twice is
-// safe: context.CancelFunc is idempotent, and Shutdown may be called more than
-// once.
+// safe: context.CancelFunc is idempotent, and Shutdown may be called more
+// than once, including concurrently.
+//
+// It uses slowApp rather than ctxApp: ctxApp's handler watches its own
+// context and returns as soon as the first force-close cancels it, so a
+// second call would find nothing left in flight and drain cleanly, never
+// reaching closeConns a second time. slowApp's handler only watches a gate
+// and never returns on its own, so the connection stays busy across both
+// calls.
+//
+// The two calls are concurrent, not sequential, because a sequential second
+// call cannot exercise this at all: fasthttp's own ShutdownWithContext
+// returns nil at once once its listener list is nil (server.go, checked
+// before it ever polls open connections), and the first call already made it
+// nil. A sequential second call was tried while writing this test and
+// confirmed to return nil immediately — it is exactly the "a later call
+// finds nothing left to drain, returns nil, and runs no hooks" case Shutdown's
+// own doc comment describes, and it never reaches closeConns. Concurrently,
+// the second call instead loses the race for Shutdown's turn and force-closes
+// on its own ctx while the first is still draining on its own — so each
+// independently reaches closeConns, and therefore cancelBase, without either
+// waiting on the other.
+//
+// The second call's grace is far shorter than the first's, so which call
+// takes the turn is not left to scheduling luck: waitUntilRefused confirms
+// the first call has already started draining — closing the listener is the
+// first thing its own Shutdown call does — before the second call is even
+// made, so the second is guaranteed to find the turn taken and fall back to
+// timing out on its own ctx well before the first's ctx ends.
 func TestASecondShutdownDoesNotPanicOnTheCancel(t *testing.T) {
-	app, _, _, _ := ctxApp(t)
+	app, inFlight, _ := slowApp(t)
 	addr, _ := serve(t, app)
-	_ = addr
+	sendSlow(t, addr)
+	within(t, 2*time.Second, "the handler receiving the request", inFlight)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	firstCh := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		defer cancel()
+		firstCh <- app.Shutdown(ctx)
+	}()
+	waitUntilRefused(t, addr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	_ = app.Shutdown(ctx)
-	_ = app.Shutdown(ctx)
+	if err := app.Shutdown(ctx); !errors.Is(err, rice.ErrShutdownTimeout) {
+		t.Errorf("second Shutdown() = %v, want an error wrapping ErrShutdownTimeout", err)
+	}
+
+	if err := within(t, 2*time.Second, "the first Shutdown returning", firstCh); !errors.Is(err, rice.ErrShutdownTimeout) {
+		t.Errorf("first Shutdown() = %v, want an error wrapping ErrShutdownTimeout", err)
+	}
 }
 
 // TestAServeRetriedAfterAFailedStartKeepsALiveContext pins that the OnStart
