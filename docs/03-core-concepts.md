@@ -168,6 +168,7 @@ func WithErrorHandler(h ErrorHandler) Option
 func WithReadTimeout(d time.Duration) Option
 func WithWriteTimeout(d time.Duration) Option
 func WithIdleTimeout(d time.Duration) Option
+func WithMaxBodySize(n int) Option
 
 func (a *App) Use(mw ...Middleware)
 func (a *App) GET(path string, h Handler, mw ...Middleware)
@@ -272,6 +273,15 @@ The three timeout options set the matching `fasthttp.Server` fields. Zero, the d
 unlimited, and a zero idle timeout falls back to the read timeout, as in fasthttp. A negative
 duration panics. Set all three in production: without a read timeout, a client that sends
 half a request holds its connection open for as long as it likes.
+
+`WithMaxBodySize` sets fasthttp's `MaxRequestBodySize`. Without it the limit is fasthttp's
+default, 4 MiB; zero or a negative size panics rather than meaning "default". A body over the
+limit is answered **413 Request Entity Too Large** by the transport, before routing: no handler,
+middleware or `ErrorHandler` runs, because no route or `Ctx` exists yet. rice installs its own
+fasthttp error handler for this. fasthttp's default answers an oversized body with 400 "Error
+when parsing request", telling the client its request was malformed; rice's keeps fasthttp's
+other answers — 431 for an oversized header, 408 for a read timeout, 400 for anything else —
+and adds the 413.
 
 ---
 

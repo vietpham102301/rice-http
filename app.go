@@ -2,6 +2,7 @@ package rice
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net"
 	"runtime/debug"
@@ -58,6 +59,17 @@ func WithIdleTimeout(d time.Duration) Option {
 		panic("rice: WithIdleTimeout: duration is negative")
 	}
 	return func(a *App) { a.srv.IdleTimeout = d }
+}
+
+// WithMaxBodySize limits the request body to n bytes. A request whose body is
+// larger is answered 413 Request Entity Too Large by the transport, before
+// routing, so no handler, middleware or ErrorHandler sees it. Without this
+// option the limit is fasthttp's default, 4 MiB. n must be positive.
+func WithMaxBodySize(n int) Option {
+	if n <= 0 {
+		panic("rice: WithMaxBodySize: size must be positive")
+	}
+	return func(a *App) { a.srv.MaxRequestBodySize = n }
 }
 
 // App is the root of a rice application. It owns the routes, the fasthttp
@@ -187,14 +199,35 @@ func New(opts ...Option) *App {
 	}
 	a.pool.New = func() any { return a.newCtx() }
 	a.srv = &fasthttp.Server{
-		Handler:   a.handle,
-		Name:      "rice",
-		ConnState: a.connState,
+		Handler:      a.handle,
+		Name:         "rice",
+		ConnState:    a.connState,
+		ErrorHandler: transportError,
 	}
 	for _, opt := range opts {
 		opt(a)
 	}
 	return a
+}
+
+// transportError answers a request fasthttp could not read, before any route or
+// Ctx exists, so rice's ErrorHandler never sees it. It is fasthttp's default
+// error handler with one branch added: a body over the size limit is 413, where
+// fasthttp answers every error it does not recognise with 400 "Error when
+// parsing request" and tells the client its request was malformed.
+func transportError(ctx *fasthttp.RequestCtx, err error) {
+	var small *fasthttp.ErrSmallBuffer
+	var netErr *net.OpError
+	switch {
+	case errors.Is(err, fasthttp.ErrBodyTooLarge):
+		ctx.Error("Request Entity Too Large", fasthttp.StatusRequestEntityTooLarge)
+	case errors.As(err, &small):
+		ctx.Error("Too big request header", fasthttp.StatusRequestHeaderFieldsTooLarge)
+	case errors.As(err, &netErr) && netErr.Timeout():
+		ctx.Error("Request timeout", fasthttp.StatusRequestTimeout)
+	default:
+		ctx.Error("Error when parsing request", fasthttp.StatusBadRequest)
+	}
 }
 
 // FasthttpHandler returns the request handler this App installs on its server.

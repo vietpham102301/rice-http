@@ -16,6 +16,71 @@ Each entry uses this shape:
 
 ---
 
+## 2026-09-19 — post-M8 — A body over the limit: 413, and the funnel that never sees it
+
+**Did:** `WithMaxBodySize(n)` sets fasthttp's `MaxRequestBodySize`; zero or a negative size panics
+rather than meaning "the default". Behind it, rice now installs its own
+`fasthttp.Server.ErrorHandler`, `transportError`: fasthttp's own branches kept — 431 for an
+oversized header, 408 for a read timeout, 400 for anything else — plus a 413 branch for
+`ErrBodyTooLarge`. That 413 applies to the 4 MiB default too, not only to a limit the option set.
+Seven tests: five end to end in `transport_error_test.go` (a body exactly at the limit, one byte
+over, the default limit, the other statuses unchanged, a stalled request still 408) and two
+internal (the option reaches the server, and panics on 0 and -1). Documented in the README,
+[03-core-concepts.md](03-core-concepts.md#4-app) and [02-architecture.md](02-architecture.md)'s
+layout, which also lost its deferred `ctx_request.go` line — the accessors in the entry below
+landed in `ctx.go`.
+
+**Learned:** The status a client sees for an oversized body was never rice's to choose. fasthttp
+rejects the request while reading it, before a route or a `Ctx` exists, so the funnel M5 built —
+`HTTPError`, `ErrorHandler`, all of it — is not on this path at all, and fasthttp's default
+handler folds every read error it does not recognise into 400 "Error when parsing request",
+telling the client its request was malformed when the request was fine and merely too big. The
+only way to correct one status was to replace the whole handler and re-implement the branches
+worth keeping. And the wrong answer was there before the option was: every rice app ever built
+answered a body over 4 MiB with 400. `WithMaxBodySize` did not introduce that, it made it visible.
+
+**Measured:** Nothing on the per-request path changed — `ErrorHandler` runs only when fasthttp
+fails to read a request — so no benchmark was re-recorded and no budget row moved. `make cover`:
+root package 99.3%, 99.2% overall.
+
+**Next:** Merge into `main`. Nothing else scheduled; the roadmap stays complete.
+
+*Written 2026-09-20, together with the entry below: the journal stopped at M8 and neither piece of
+work after it had been recorded here.*
+
+---
+
+## 2026-09-19 — post-M8 — The accessors the docs had already promised: Query, Header, Body and JSON
+
+**Did:** Built the four `Ctx` methods [03-core-concepts.md](03-core-concepts.md) had committed to
+and no milestone owned. `Query`, `Header` and `Body` peek into fasthttp's parsed request and
+return borrowed slices, valid until the handler returns. `JSON` marshals first and only then
+writes status, content type and body — [ADR-0006](adr/0006-no-reflection-in-core.md)'s one
+`encoding/json` exception in core, with `MIMEApplicationJSON` carrying no charset because JSON is
+UTF-8 by definition. Budget tests `TestAllocBudgetQueryHeaderBody` and `TestAllocBudgetJSON` came
+with the code. The roadmap's Explicitly deferred list lost its `Query`/`Header` and `JSON` items
+to a new [Done after M8](04-roadmap.md#done-after-m8) section, and the performance model's `Ctx`
+table lost its two "not implemented" rows and gained five.
+
+**Learned:** Two things. Marshalling before touching the response is what makes a failed encode
+harmless: an unencodable value leaves status, headers and body exactly as they were, the error is
+returned, and the funnel writes the only response there is. Setting the status first would have
+made a 200 header over an error body possible — the ordering *is* the guarantee, not a check
+around it. And `Body` had sat in the `03-core-concepts.md` table since M3 and on no deferred list:
+the list tracked what someone remembered to defer, while the table recorded what the docs
+promised. The gap closed because the table was read, not the list.
+
+**Measured:** 0 allocations for `Query`, `Header` and `Body`. `c.JSON` pinned exactly — 1 with a
+pointer (the encoded bytes), 2 with a struct value (the caller's boxing as well) — for the `json`
+scenario's payload, pinned rather than bounded so an encoder that got cheaper fails too and the
+row is corrected instead of going stale. Each budget was broken once on purpose and failed. M8's
+`json` comparison row was not re-recorded: its handler still calls `json.Marshal` and `c.Bytes`,
+kept that way so the committed number stays reproducible.
+
+**Next:** Nothing scheduled at the time. What came next was `WithMaxBodySize`, the entry above.
+
+---
+
 ## 2026-09-19 — M8 — Benchmark suite: rice against Gin, Echo and Fiber, and the transport is what a client sees
 
 **Did:** Built `bench/compare/`, a separate Go module so rice's own `go.mod` still lists fasthttp
