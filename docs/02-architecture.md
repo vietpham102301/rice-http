@@ -80,8 +80,11 @@ because they exist:
 
 `middleware/` and `binding/` are separate packages on purpose. Importing rice must not drag in
 anything a user did not ask for, and the import graph is the honest signal of what costs what.
-`binding/` is the clearest case: it is the only package in the repository outside `c.JSON` that
-imports `encoding/json`, and it depends on rice one way — rice does not know it exists. See
+`binding/` is the weaker case of that rule rather than the clearest: `encoding/json` is already
+in rice's graph through `c.JSON`, so what the import list reveals here is the 9 allocations per
+call and the API surface, not a new dependency. Inside the rice module it is the only package
+outside `c.JSON` that imports `encoding/json` — `bench/compare/` does too, in a separate module
+— and it depends on rice one way: rice does not know it exists. See
 [ADR-0006](adr/0006-no-reflection-in-core.md) and
 [ADR-0011](adr/0011-binding-is-generic-and-validation-is-a-method.md).
 

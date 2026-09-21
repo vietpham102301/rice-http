@@ -24,7 +24,11 @@ func TestAllocBudgetJSONBinding(t *testing.T) {
 	var got float64
 	app := rice.New()
 	app.POST("/users", func(c *rice.Ctx) error {
-		_, _ = binding.JSON[createUser](c) // warm
+		// One call first, so encoding/json's per-type cache for createUser is
+		// built before the measurement: the cache is filled once per type per
+		// process, and counting that here would report a first call rather
+		// than the steady state the figure pins.
+		_, _ = binding.JSON[createUser](c)
 		got = testing.AllocsPerRun(1000, func() {
 			_, _ = binding.JSON[createUser](c)
 		})

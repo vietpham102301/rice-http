@@ -49,11 +49,15 @@ warning, no registration step.
 
 **Three error branches, and only one of them shows the cause.**
 
-| Case | Status | Body the client sees | `HTTPError.Err`, for the log |
+| Case | Status | Body the client sees | `HTTPError.Err`, available to a logger |
 | --- | --- | --- | --- |
 | Empty or whitespace-only body | 400 | `empty request body` | `io.EOF` |
 | Malformed JSON, unknown field, trailing data | 400 | `invalid JSON body` | the `encoding/json` error, or `errTrailingData` |
 | `Validate` returned an error | 422 | that error's own message | the same error |
+
+The cause in that last column is available, not written: `DefaultErrorHandler` logs unhandled
+errors and panics, and never an `*HTTPError`. A custom `ErrorHandler` or a logging middleware
+reads it; nothing does by default.
 
 The first two use a fixed message because `encoding/json`'s text is shaped by the caller's input —
 `invalid character 'x' looking for beginning of value` leaks parser detail, and M5 already holds a
@@ -64,9 +68,13 @@ request that carried no body sends people looking in the wrong place.
 
 422 rather than 400 for a failed `Validate`, because 400 means "I could not parse this" and 422
 means "I parsed it and it breaks a rule", and a client can tell those apart without reading the
-body. The override needs no option: if `Validate` returns an `*rice.HTTPError`, that error is
-passed through unchanged, so an author who wants 409 for a particular rule returns one and gets
-it.
+body. The override needs no option: if `Validate` returns, or wraps, an `*rice.HTTPError`, that
+error is passed through unchanged, so an author who wants 409 for a particular rule returns one
+and gets it. The match is `errors.As`, so an `*rice.HTTPError` anywhere in the chain is found —
+including one a collaborator wrapped, whose status the client then sees. What is passed through
+is the error as `Validate` wrote it, wrapper and all, so the author's outer message stays in the
+chain: every error this package returns *carries* an `*rice.HTTPError` reachable with
+`errors.As`, rather than being one.
 
 ## Alternatives
 
@@ -134,7 +142,8 @@ Its `encoding/json` import appears in the import list of any user who chooses it
 else's, which is precisely the condition ADR-0006 attached to this package existing. `encoding/json`
 uses reflection internally — that is the standard library's business inside a call this package
 makes, and it is not reflection in rice's own code. This paragraph exists because a reader who
-greps this repository for `encoding/json` will find it in two places and could reasonably conclude
+greps the rice module for `encoding/json` will find it in two places — a third, `bench/compare/`,
+is a benchmark harness in a separate module — and could reasonably conclude
 the rule was quietly relaxed. It was not.
 
 **Forecloses little.** `binding.Query` and `binding.Header` are deliberately absent — `c.Query`

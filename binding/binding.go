@@ -18,17 +18,35 @@ var errTrailingData = errors.New("binding: trailing data after the JSON value")
 
 // JSON decodes the request body into T and returns it.
 //
+// T is expected to be a struct type. Instantiated with a pointer — JSON[*T] —
+// the Validate lookup runs against **T and finds nothing, so validation is
+// silently skipped with no error and no warning; write JSON[T] and take the
+// address afterwards if you need one.
+//
 // Decoding is strict: a field the struct does not declare is an error, and so
 // is anything left in the body after the first value. A misspelled field name
-// is a 400 rather than a silently zero-valued struct field.
+// is a 400 rather than a silently zero-valued struct field. One hole: a body of
+// null decodes into the zero T and is accepted, which is what encoding/json
+// does; a type that will not tolerate its own zero value rejects it in Validate.
 //
 // If T, or *T, has a Validate() error method, it runs after decoding. An error
 // from it is answered 422 and its message is written to the response; if it
-// returns an *rice.HTTPError, that error is passed through untouched, so a
-// handler that wants 409 for a particular rule returns one.
+// returns, or wraps, an *rice.HTTPError, that error is passed through untouched,
+// so a handler that wants 409 for a particular rule returns one. The match is
+// errors.As, so an *rice.HTTPError anywhere in the chain wins — a Validate that
+// wraps an error from a collaborator hands the client whatever status that
+// collaborator chose.
 //
-// Every error returned is an *rice.HTTPError: return it and rice's funnel
-// writes the response. On any error the returned T is its zero value.
+// Every error returned carries an *rice.HTTPError reachable with errors.As:
+// return it and rice's funnel writes the response. The error itself is not
+// always one — an error from Validate is returned with its author's wrapper
+// intact, so err.(*rice.HTTPError) may fail where errors.As succeeds. On any
+// error the returned T is its zero value.
+//
+// The returned value is owned, not borrowed: it is safe to keep after the
+// handler returns, including its []byte and json.RawMessage fields, because
+// encoding/json copies into its target. Only c.Body(), which it decodes from,
+// is borrowed.
 //
 // It allocates. See docs/05-performance-model.md; a handler that must not
 // allocate decodes c.Body() itself.
