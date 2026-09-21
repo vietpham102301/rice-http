@@ -154,7 +154,6 @@ design decisions recorded in the ADRs?
 
 Not scheduled, not promised. Each would need its own brainstorm.
 
-- Request binding and validation, as an opt-in side package
 - Route-level and global timeout middleware
 - Static file serving
 - Content negotiation
@@ -187,3 +186,19 @@ Outside any milestone, because the API was already written down in
   `middleware.RealIP` is what will. Cookies, form/multipart and `Redirect` were on the same
   list and were cut: nothing in the first service that will use rice needs them, and they stay
   unpromised until a real use case arrives with its own brainstorm.
+- The `binding/` package, which came off the deferred list above with a design of its own. One
+  exported function, `binding.JSON[T any](c *rice.Ctx) (T, error)`: a strict decode —
+  `DisallowUnknownFields` plus a trailing-data check — and, if `T` or `*T` has one, a
+  `Validate() error` method that runs after it. A decode failure is 400 with a fixed message, a
+  failed `Validate` is 422 carrying the author's own message, and an `*rice.HTTPError` returned
+  from `Validate` passes through with its own status.
+  [ADR-0011](adr/0011-binding-is-generic-and-validation-is-a-method.md) records the shape and
+  names the two alternatives that lost — struct tags with a third-party validator, and a
+  reflection-free decoder written per type. It is the one place in rice that buys ergonomics with
+  allocations, and it is pinned at an exact measured figure in
+  [05-performance-model.md](05-performance-model.md) rather than bounded.
+  Deliberately left out: no `Content-Type` check, because real clients omit the header and a 415
+  nobody predicts is worse than a body that parses; no body-size limit of its own, because
+  `WithMaxBodySize` already sets one at the transport and a second would be two sources of truth;
+  and no `binding.Query` or `binding.Header`, because `c.Query` and `c.Header` exist and binding
+  them without struct tags would be contrived.

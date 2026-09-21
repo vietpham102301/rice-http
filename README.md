@@ -97,8 +97,38 @@ app.POST("/users", func(c *rice.Ctx) error {
 `Query`, `Header` and `Body` return borrowed bytes: free, and valid only until the handler
 returns. Copy what you keep — `string(b)` does — and do not hand them to a goroutine that
 outlives the handler. `json.Unmarshal` copies into its target, so the decoded value is yours.
-`JSON` is the one allocating helper in core, and there is no binding: decoding is a line you
-write ([ADR-0006](docs/adr/0006-no-reflection-in-core.md)).
+`JSON` is the one allocating helper in core, and there is no binding in core: decoding is a
+line you write ([ADR-0006](docs/adr/0006-no-reflection-in-core.md)).
+
+The opt-in `binding/` package writes that line for you. `binding.JSON[T](c)` decodes strictly
+— an unknown field is an error, and so is anything after the first value — runs `T`'s
+`Validate() error` if it has one, and returns an error a handler returns into the funnel:
+400 for a body it could not parse, 422 for a rule it broke. It costs **9 allocations per
+call** for the test suite's fixture, pinned by a budget test rather than bounded. Every
+request-path row in the table below is a zero; this package is the one that buys ergonomics
+with allocations, and the figure is the price it charges
+([ADR-0011](docs/adr/0011-binding-is-generic-and-validation-is-a-method.md)).
+
+```go
+type CreateUser struct {
+	Name string `json:"name"`
+}
+
+func (u CreateUser) Validate() error {
+	if u.Name == "" {
+		return errors.New("name is required")
+	}
+	return nil
+}
+
+app.POST("/users", func(c *rice.Ctx) error {
+	in, err := binding.JSON[CreateUser](c)
+	if err != nil {
+		return err
+	}
+	return c.JSON(201, &User{Name: in.Name})
+})
+```
 
 ## Error handling
 
@@ -287,7 +317,7 @@ and cannot compare, and the reason for each result are in the performance model'
 | [05 — Performance model](docs/05-performance-model.md) | the allocation budget, per method |
 | [06 — Glossary](docs/06-glossary.md) | terms used precisely in these docs |
 | [07 — Retrospective](docs/07-retrospective.md) | what the project learned, and what surprised it |
-| [ADRs](docs/adr/) | nine decisions, with the alternatives that lost |
+| [ADRs](docs/adr/) | eleven decisions, with the alternatives that lost |
 | [Milestones](docs/milestones/) | retrospectives: what was measured, what surprised |
 | [Journal](docs/progress.md) | the running record, including the wrong turns |
 

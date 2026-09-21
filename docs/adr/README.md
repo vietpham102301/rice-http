@@ -41,3 +41,4 @@ Date: YYYY-MM-DD
 | [0008](0008-rice-recovers-panics-in-core.md) | rice recovers panics in core | Accepted |
 | [0009](0009-shutdown-force-closes-at-deadline.md) | Shutdown force-closes connections at the deadline | Accepted |
 | [0010](0010-request-context-cancels-at-force-close.md) | The request context cancels at force-close, not at disconnect | Accepted |
+| [0011](0011-binding-is-generic-and-validation-is-a-method.md) | Binding is generic and validation is a method | Accepted |
