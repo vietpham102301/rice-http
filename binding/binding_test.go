@@ -2,6 +2,7 @@ package binding_test
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -201,6 +202,18 @@ func (v statusValidator) Validate() error {
 	return &rice.HTTPError{Code: 409, Message: "email already taken"}
 }
 
+// wrappingValidator returns an *rice.HTTPError wrapped in a message of its
+// own, which is the shape fmt.Errorf("...: %w", err) produces and the reason
+// the passthrough uses errors.As rather than a type assertion.
+type wrappingValidator struct {
+	Email string `json:"email"`
+}
+
+func (v wrappingValidator) Validate() error {
+	return fmt.Errorf("checking the email against the directory: %w",
+		&rice.HTTPError{Code: 409, Message: "email already taken"})
+}
+
 func TestValidateRunsOnAValueReceiver(t *testing.T) {
 	app := rice.New()
 	app.POST("/users", func(c *rice.Ctx) error {
@@ -295,5 +308,49 @@ func TestValidateMayChooseItsOwnStatus(t *testing.T) {
 	}
 	if b := string(fctx.Response.Body()); b != "email already taken" {
 		t.Errorf("response = %q, want %q", b, "email already taken")
+	}
+}
+
+// TestValidateMayWrapItsOwnStatus is the reason the passthrough is errors.As
+// and not a type assertion: an author who adds context with fmt.Errorf still
+// gets the status they chose. The error binding returns is the wrapper, so its
+// dynamic type is *fmt.wrapError rather than *rice.HTTPError — what the
+// package promises is that an *rice.HTTPError is reachable with errors.As, and
+// rice's funnel finds it the same way.
+func TestValidateMayWrapItsOwnStatus(t *testing.T) {
+	var bindErr error
+	app := rice.New()
+	app.POST("/users", func(c *rice.Ctx) error {
+		_, err := binding.JSON[wrappingValidator](c)
+		bindErr = err
+		if err != nil {
+			return err
+		}
+		return c.String(201, "created")
+	})
+
+	fctx := dispatch(t, app, `{"email":"a@b.c"}`)
+
+	if code := fctx.Response.StatusCode(); code != 409 {
+		t.Errorf("status = %d, want 409: a wrapped *rice.HTTPError lost its status", code)
+	}
+	if b := string(fctx.Response.Body()); b != "email already taken" {
+		t.Errorf("response = %q, want %q", b, "email already taken")
+	}
+
+	// The author's outer message survives in the chain, which is why the
+	// wrapper is returned rather than the *rice.HTTPError it carries.
+	if bindErr == nil {
+		t.Fatal("JSON returned nil, want the wrapped error")
+	}
+	if !strings.Contains(bindErr.Error(), "checking the email against the directory") {
+		t.Errorf("returned error = %v, want the author's outer message kept", bindErr)
+	}
+	var he *rice.HTTPError
+	if !errors.As(bindErr, &he) {
+		t.Fatalf("errors.As found no *rice.HTTPError in %T", bindErr)
+	}
+	if he.Code != 409 {
+		t.Errorf("reachable HTTPError.Code = %d, want 409", he.Code)
 	}
 }
