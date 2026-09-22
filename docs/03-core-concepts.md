@@ -111,6 +111,11 @@ installs a deadline or a tracing value. **Derive from `c.Context()`, not from
 force-close signal, and silently drops it. A nil context panics, as every other configuration
 mistake in rice does.
 
+That deadline is already written: `middleware.Timeout(d)` derives one from `c.Context()`,
+installs it, cancels it and restores the previous context when the chain returns, and turns the
+error a timed-out chain returns into a 503. Reach for it before writing the same three lines by
+hand. It is cooperative — see [ADR-0014](adr/0014-timeout-is-cooperative.md).
+
 ### Write side
 
 | Method | Effect | Allocations |
@@ -249,9 +254,10 @@ empty on a miss, because nothing was captured. This is what lets a logger record
 [ADR-0012](adr/0012-application-middleware-runs-on-route-misses.md).
 
 **What rice ships.** `middleware.Recover`, `middleware.RealIP`, `middleware.RequestID`,
-`middleware.Logger` and `middleware.Timeout`, in the opt-in `middleware` package. Their recommended order, and the one trap
-in it — a panicking request is not logged unless `Recover` sits inside `Logger` — are in that
-package's documentation and in the [README](../README.md#the-middleware-rice-ships).
+`middleware.Logger` and `middleware.Timeout`, in the opt-in `middleware` package. Their
+recommended order, and the one trap in it — a panicking request is not logged unless `Recover`
+sits inside `Logger` — are in that package's documentation and in the
+[README](../README.md#the-middleware-rice-ships).
 
 ---
 

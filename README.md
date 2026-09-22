@@ -128,8 +128,10 @@ app.Use(
   deadline comes first, so the route above still expires at five seconds under the `app.Use`
   above. **`Timeout` is cooperative: a handler that ignores its context is not stopped, and its
   answer, however late, is what the client receives.** Cutting the client off regardless is a job
-  for the transport — `fasthttp.TimeoutHandler` around `app.FasthttpHandler()` — with the costs
-  [ADR-0014](docs/adr/0014-timeout-is-cooperative.md) names.
+  for the transport — `fasthttp.TimeoutWithCodeHandler` around `app.FasthttpHandler()`, since
+  plain `fasthttp.TimeoutHandler` answers 408 rather than 503 — and it means running a
+  `fasthttp.Server` of your own in place of `Run`, `RunContext` and `Shutdown`, on top of the
+  other costs [ADR-0014](docs/adr/0014-timeout-is-cooperative.md) names.
 
 Unlike core, these allocate: 3 objects per request for `RealIP`, 2 for `RequestID` alone, 6 for
 `Logger` and `RequestID` together with slog's JSON handler, and 4 for `Timeout` — each pinned by a

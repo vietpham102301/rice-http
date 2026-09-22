@@ -39,10 +39,13 @@ changed the list and left that copy stale — and links to it instead.
    the timer wins, marks the `RequestCtx` timed out; the server then abandons that context rather
    than reuse it (`server.go:2624-2628`), and `releaseCtx` panics on a timed-out one
    (`server.go:3068`). So `fasthttp.TimeoutHandler(app.FasthttpHandler(), …)` is safe: rice's
-   whole `Ctx` lifecycle happens inside the goroutine fasthttp abandons. A middleware cannot do
-   the same, and the probe showed it: a pre-emptive middleware inside a Logger-like one, under
-   `-race`, sent the client a 503 and drew `WARNING: DATA RACE`, because every middleware in the
-   chain shares one `*Ctx`; and `handle` released that `Ctx` to the pool while the abandoned
+   whole `Ctx` lifecycle happens inside the goroutine fasthttp abandons. It answers 408 —
+   `TimeoutHandler` passes `StatusRequestTimeout` to `TimeoutWithCodeHandler`, which takes the
+   code, so 503 means calling that one — and, since nothing wraps `a.srv.Handler`, it means a
+   `fasthttp.Server` of your own in place of `Run`, `RunContext` and `Shutdown`. A middleware
+   cannot do the same, and the probe showed it: a pre-emptive middleware inside a Logger-like one,
+   under `-race`, sent the client a 503 and drew `WARNING: DATA RACE`, because every middleware in
+   the chain shares one `*Ctx`; and `handle` released that `Ctx` to the pool while the abandoned
    goroutine still held it.
 
 2. *This corrects the entry below titled "An access log that tells the truth", and the roadmap

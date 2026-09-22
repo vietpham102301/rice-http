@@ -318,6 +318,14 @@ buffer, no buffer the race build moves to the heap — so the race slack is 0 an
 in both directions and failed both ways: `Timeout allocated 4.0 objects per call, want exactly 3`
 and `want exactly 5`.
 
+**The cost allocations do not show.** `Timeout` is the first thing rice ships that derives a
+context per request from the App's base context — one `context.WithCancel(context.Background())`
+shared by every request (`app.go:223`). Deriving from it registers a child in that one context's
+map under its mutex, and `cancel` removes it again under the same mutex, so an outermost `Timeout`
+puts two acquisitions of a single app-global lock on every request, on a path that previously took
+none. Whether that contends under concurrency is unmeasured: **no benchmark was recorded for
+`Timeout`**, only the allocation budget above.
+
 ## The techniques, and what each one costs
 
 Each of these buys allocations back. None is free, and the cost is the interesting half.

@@ -47,12 +47,13 @@ then cancels it and restores the previous context. It never runs the chain on an
   clients, which already honour a deadline. Deriving from `c.Context()` rather than
   `context.Background()` keeps [ADR-0010](0010-request-context-cancels-at-force-close.md)'s
   force-close signal. `d <= 0` panics at construction with a `rice: ` prefix.
-- **The error becomes 503 when three things all hold:** the chain returned an error; this
-  middleware's own deadline has passed — `ctx.Err() == context.DeadlineExceeded`, asked of the
-  context it created; and the error is not already an `*rice.HTTPError`. It asks the context
-  rather than the error because many database drivers wrap a timeout in their own error type
-  without unwrapping to `context.DeadlineExceeded`, so `errors.Is` on the returned error would miss
-  exactly the case a timeout exists for. An author who chose a status keeps it, the rule `binding`
+- **The error becomes 503 when three things all hold:** the chain returned an error; the deadline
+  on the context this middleware created has passed — `ctx.Err() == context.DeadlineExceeded`,
+  asked of that context, so under an outer `Timeout` it may be that outer, shorter deadline rather
+  than `d`; and the error is not already an `*rice.HTTPError`. It asks the context rather than the
+  error because many database drivers wrap a timeout in their own error type without unwrapping to
+  `context.DeadlineExceeded`, so `errors.Is` on the returned error would miss exactly the case a
+  timeout exists for. An author who chose a status keeps it, the rule `binding`
   set for `Validate`. The 503 is `&rice.HTTPError{Code: 503, Err: err}` with no message: the client
   receives "Service Unavailable", and the cause stays in `Err` for a custom `ErrorHandler`.
 - **Two outcomes are not rewritten.** A chain that succeeds after the deadline is returned as it
@@ -72,7 +73,7 @@ then cancels it and restores the previous context. It never runs the chain on an
 
 `Timeout` costs 4 allocations per request around a handler that returns at once —
 `context.WithTimeout` allocates. `TestAllocBudgetTimeout` pins it exactly, measured at 4 on darwin
-and in a Linux container, with and without `-race`.
+(go1.25.6, arm64) and in a Linux container (golang:1.25.14, amd64), with and without `-race`.
 
 ## Alternatives
 
@@ -110,6 +111,16 @@ call made with `context.Background()`, runs to completion, and its answer — ho
 the client receives. Nothing in a Go process can stop a goroutine from outside; the only thing that
 can stop waiting for one is whatever stands outside it. The documentation says this where
 `Timeout` is described, in `Timeout`'s doc comment, `middleware/doc.go` and the README.
+
+**Makes hard: a failure after the deadline stops being logged.** `DefaultErrorHandler`
+(`errors.go:107`) logs only an error it cannot match as an `*HTTPError`; `middleware.Logger`
+records the method, path, status, latency, address and request id, and never the error. So
+wrapping a plain error in a 503 `*HTTPError` turns a failure that was logged into one that is
+not — the client is told, and the operator is not. And because the condition is the context
+rather than the error, every error returned after the deadline is answered 503, a genuine bug in a
+handler that ignored its context included, so the bug is hidden behind a status that reads like
+load. The cause is not lost — it stays in `Err` — but reading it takes an `ErrorHandler` that logs
+`he.Err`, which the default does not. A service that installs `Timeout` should install one.
 
 **The escape hatch is the transport.** A service that must cut the client off regardless mounts
 the App's handler on a `fasthttp.Server` of its own, wrapped in

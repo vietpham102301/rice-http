@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -79,16 +80,60 @@ func TestTimeoutAsksItsContextNotTheError(t *testing.T) {
 	}
 }
 
-// TestTimeoutKeepsAnHTTPErrorTheHandlerChose follows the rule binding set for
-// Validate: an author who chose a status keeps it.
-func TestTimeoutKeepsAnHTTPErrorTheHandlerChose(t *testing.T) {
-	app := timedApp(10*time.Millisecond, func(c *rice.Ctx) error {
+// TestTimeoutKeepsTheCauseInHTTPErrorErr pins the other half of the 503: the
+// client receives the status text alone, so a custom ErrorHandler is the only
+// place the driver's error can still be read. Dropping it — Err: nil in
+// place of Err: err — leaves every other test in this file green.
+func TestTimeoutKeepsTheCauseInHTTPErrorErr(t *testing.T) {
+	var funnelled error
+	app := rice.New(rice.WithErrorHandler(func(c *rice.Ctx, err error) {
+		funnelled = err
+		rice.DefaultErrorHandler(c, err)
+	}))
+	app.Use(middleware.Timeout(10 * time.Millisecond))
+	app.GET("/t", func(c *rice.Ctx) error {
 		_ = waitDone(c)
-		return rice.NewHTTPError(400, "bad input")
+		return driverError{}
 	})
 
-	if status, _ := send(app); status != 400 {
-		t.Errorf("status = %d, want the handler's own 400", status)
+	send(app)
+
+	var he *rice.HTTPError
+	if !errors.As(funnelled, &he) {
+		t.Fatalf("the funnel received %v, want an *rice.HTTPError", funnelled)
+	}
+	if he.Code != 503 {
+		t.Errorf("Code = %d, want 503", he.Code)
+	}
+	var de driverError
+	if !errors.As(he.Err, &de) {
+		t.Errorf("HTTPError.Err = %v, want the driver's error still reachable with errors.As", he.Err)
+	}
+}
+
+// TestTimeoutKeepsAnHTTPErrorTheHandlerChose follows the rule binding set for
+// Validate: an author who chose a status keeps it. The wrapped case pins that
+// the check is errors.As and not a type assertion, which a wrapped *HTTPError
+// would slip past into a 503.
+func TestTimeoutKeepsAnHTTPErrorTheHandlerChose(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{"returned as it is", rice.NewHTTPError(400, "bad input")},
+		{"wrapped", fmt.Errorf("query: %w", rice.NewHTTPError(400, "bad input"))},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			app := timedApp(10*time.Millisecond, func(c *rice.Ctx) error {
+				_ = waitDone(c)
+				return tc.err
+			})
+
+			if status, _ := send(app); status != 400 {
+				t.Errorf("status = %d, want the handler's own 400", status)
+			}
+		})
 	}
 }
 
@@ -101,6 +146,12 @@ func TestTimeoutKeepsAnHTTPErrorTheHandlerChose(t *testing.T) {
 func TestTimeoutDoesNotStopAHandlerThatIgnoresTheContext(t *testing.T) {
 	app := timedApp(10*time.Millisecond, func(c *rice.Ctx) error {
 		time.Sleep(60 * time.Millisecond) // ignores the deadline entirely
+		// Asked, not waited on: waiting would make this handler cooperative
+		// and it would stop pinning D6. Without the check a 200 here proves
+		// nothing, since the deadline might simply not have passed.
+		if c.Context().Err() == nil {
+			t.Error("the deadline had not passed by the time the handler returned")
+		}
 		return c.String(200, "late but done")
 	})
 

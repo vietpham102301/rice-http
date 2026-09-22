@@ -23,13 +23,25 @@ import (
 // middleware, and for the transport-level alternative.
 //
 // The chain's error becomes 503 Service Unavailable when all three hold: the
-// chain returned an error; this middleware's own deadline has passed; and the
-// error is not already an *rice.HTTPError, since an author who chose a status
-// keeps it. It asks its own context rather than the error because many
-// database drivers report a timeout in their own error type without unwrapping
-// to context.DeadlineExceeded. The cause stays in HTTPError.Err; the client
-// receives only the status text. A context cancelled rather than timed out is
-// left alone.
+// chain returned an error; the deadline on the context this middleware created
+// has passed — which under an outer Timeout may be that outer, shorter
+// deadline rather than d; and the error is not already an *rice.HTTPError,
+// since an author who chose a status keeps it. It asks that context rather
+// than the error because many database drivers report a timeout in their own
+// error type without unwrapping to context.DeadlineExceeded. The cause stays
+// in HTTPError.Err; the client receives only the status text. A context
+// cancelled rather than timed out is left alone.
+//
+// The context is cancelled the moment the chain returns, not when the deadline
+// passes, so a goroutine that outlives the request must not use it.
+//
+// Installing it costs observability. DefaultErrorHandler logs only an error it
+// cannot match as an *rice.HTTPError, and Logger records the status and the
+// latency, never the error — so wrapping a plain error in a 503 turns a
+// failure that was logged into one that is not. And because the condition is
+// the context rather than the error, every error returned after the deadline
+// is answered 503, including a genuine bug in a handler that ignored its
+// context. An ErrorHandler that logs HTTPError.Err gets both back.
 //
 // Install it inside Logger, so the 503 is what Logger records. A route's own
 // Timeout inside an application-wide one can only shorten the deadline, never
