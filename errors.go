@@ -34,6 +34,10 @@ var ErrNotFound = &HTTPError{Code: fasthttp.StatusNotFound, Message: "Not Found"
 // There is exactly one per App, set with WithErrorHandler. Replacing it is the
 // supported way to change how a service reports failure — to emit RFC 7807
 // problem documents, for example.
+//
+// It may run mid-chain: a middleware that calls c.HandleError invokes it
+// there, before that middleware and every one outside it have returned. Do not
+// write one that assumes the chain has already unwound.
 type ErrorHandler func(c *Ctx, err error)
 
 // DefaultErrorHandler is the ErrorHandler an App uses unless WithErrorHandler

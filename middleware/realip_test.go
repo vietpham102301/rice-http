@@ -68,10 +68,20 @@ func TestRealIPFallsBackWhenThereAreTooFewEntries(t *testing.T) {
 	}
 }
 
+// TestRealIPFallsBackOnAnEntryThatIsNotAnIP includes the two shapes some load
+// balancers write, an address with a port and a bracketed IPv6 address. Neither
+// parses today, so both fall back to the connection's address; parsing them is
+// on the roadmap as deferred work.
 func TestRealIPFallsBackOnAnEntryThatIsNotAnIP(t *testing.T) {
-	got := dispatchFrom(t, ipApp(1), "10.0.0.2", "not-an-ip")
-	if got != "10.0.0.2" {
-		t.Errorf("address = %s, want the connection's 10.0.0.2", got)
+	for _, entry := range []string{
+		"not-an-ip",
+		"203.0.113.9:4711",
+		"[2001:db8::1]",
+	} {
+		got := dispatchFrom(t, ipApp(1), "10.0.0.2", entry)
+		if got != "10.0.0.2" {
+			t.Errorf("%q: address = %s, want the connection's 10.0.0.2", entry, got)
+		}
 	}
 }
 

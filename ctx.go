@@ -35,8 +35,10 @@ type Ctx struct {
 	// store backs Set and Get. newCtx pre-sizes it to storeCapacity.
 	store []entry
 
-	// handled is set by HandleError. handle reads it so that an error a
-	// middleware has already settled is not answered a second time.
+	// handled is set by HandleError, and by handle before it calls the
+	// funnel itself. handle reads it so that an error a middleware has already
+	// settled is not answered a second time, and HandleError reads it so that
+	// an ErrorHandler calling HandleError does not run itself again.
 	handled bool
 }
 

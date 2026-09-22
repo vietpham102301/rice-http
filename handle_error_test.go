@@ -173,3 +173,60 @@ func TestResetClearsHandled(t *testing.T) {
 		t.Error("handled survived reset; the next request's error would never be answered")
 	}
 }
+
+// reentrantApp returns an App whose ErrorHandler counts its calls and then
+// calls HandleError itself, as a handler delegating back to the funnel might.
+// ADR-0013 promises a request is settled once whatever the entry point, so
+// that inner call must be a no-op and the count must end at exactly one.
+func reentrantApp(calls *int) *App {
+	return New(WithErrorHandler(func(c *Ctx, err error) {
+		*calls++
+		c.HandleError(err)
+		DefaultErrorHandler(c, err)
+	}))
+}
+
+func TestAReentrantErrorHandlerRunsOnceForAReturnedError(t *testing.T) {
+	var calls int
+	app := reentrantApp(&calls)
+	app.GET("/teapot", func(c *Ctx) error { return NewHTTPError(418, "teapot") })
+
+	fctx := dispatchCtx(app, "GET", "/teapot")
+
+	if calls != 1 {
+		t.Errorf("ErrorHandler ran %d times, want 1", calls)
+	}
+	if code := fctx.Response.StatusCode(); code != 418 {
+		t.Errorf("status = %d, want 418", code)
+	}
+}
+
+func TestAReentrantErrorHandlerRunsOnceForAMiss(t *testing.T) {
+	var calls int
+	app := reentrantApp(&calls)
+	app.GET("/ok", func(c *Ctx) error { return nil })
+
+	fctx := dispatchCtx(app, "GET", "/nope")
+
+	if calls != 1 {
+		t.Errorf("ErrorHandler ran %d times, want 1", calls)
+	}
+	if code := fctx.Response.StatusCode(); code != 404 {
+		t.Errorf("status = %d, want 404", code)
+	}
+}
+
+func TestAReentrantErrorHandlerRunsOnceForAPanic(t *testing.T) {
+	var calls int
+	app := reentrantApp(&calls)
+	app.GET("/boom", func(c *Ctx) error { panic("handler exploded") })
+
+	fctx := dispatchCtx(app, "GET", "/boom")
+
+	if calls != 1 {
+		t.Errorf("ErrorHandler ran %d times, want 1", calls)
+	}
+	if code := fctx.Response.StatusCode(); code != 500 {
+		t.Errorf("status = %d, want 500", code)
+	}
+}

@@ -166,8 +166,9 @@ func TestLoggerRecordsAPanicAs500WithRecoverInside(t *testing.T) {
 
 // TestLoggerDoesNotLogAPanicWithoutRecoverInside pins a documented limitation
 // rather than a bug. Without Recover beneath it, a panic unwinds through
-// Logger's frame before it records anything. If this ever starts passing for a
-// different reason, the documentation in middleware/doc.go must change with it.
+// Logger's frame before it records anything. If this ever fails because Logger
+// starts logging panics, the documentation in middleware/doc.go must change
+// with it.
 func TestLoggerDoesNotLogAPanicWithoutRecoverInside(t *testing.T) {
 	var buf bytes.Buffer
 	app := rice.New()
@@ -178,6 +179,36 @@ func TestLoggerDoesNotLogAPanicWithoutRecoverInside(t *testing.T) {
 
 	if len(lines) != 0 {
 		t.Errorf("got %d log lines, want 0 — the documented limitation no longer holds: %v", len(lines), lines)
+	}
+}
+
+// TestADisabledLoggerStillSettlesTheRequest pins that Logger calls HandleError
+// before it asks whether its level is enabled. Logger returns nil, so if it
+// skipped HandleError whenever it had nothing to log, the error would be
+// swallowed and the client would receive 200 instead of the error's status.
+func TestADisabledLoggerStillSettlesTheRequest(t *testing.T) {
+	var buf bytes.Buffer
+	var calls int
+	app := rice.New(rice.WithErrorHandler(func(c *rice.Ctx, err error) {
+		calls++
+		rice.DefaultErrorHandler(c, err)
+	}))
+	app.Use(middleware.Logger(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError}))))
+	app.GET("/teapot", func(c *rice.Ctx) error { return rice.NewHTTPError(418, "teapot") })
+
+	fctx := &fasthttp.RequestCtx{}
+	fctx.Request.Header.SetMethod("GET")
+	fctx.Request.SetRequestURI("/teapot")
+	app.FasthttpHandler()(fctx)
+
+	if code := fctx.Response.StatusCode(); code != 418 {
+		t.Errorf("client received %d, want 418: a disabled Logger must still settle the request", code)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("logged %q, want nothing: a 418 logs at INFO, which is disabled", buf.String())
+	}
+	if calls != 1 {
+		t.Errorf("ErrorHandler ran %d times, want 1", calls)
 	}
 }
 

@@ -18,5 +18,6 @@ package rice
 //
 // Middleware runs in a fixed order: application middleware first, then each
 // group from outermost to innermost, then the route's own, then the handler. The
-// unwind runs in reverse.
+// unwind runs in reverse. On a request that matches no route, only application
+// middleware runs.
 type Middleware func(next Handler) Handler

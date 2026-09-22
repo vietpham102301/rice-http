@@ -43,6 +43,9 @@ func RealIP(trustedHops int) rice.Middleware {
 // resolve returns the entry trustedHops from the right across every header
 // line, or nil when there is none that parses as an IP address.
 //
+// An empty entry — from a trailing comma, say — counts as a position and, not
+// being an IP address, forces the fallback rather than being skipped.
+//
 // A nil return is an untyped nil net.Addr, which SetRemoteAddr documents as
 // restoring the connection's address. Returning a typed nil *net.TCPAddr
 // instead would make a non-nil interface and break that.
