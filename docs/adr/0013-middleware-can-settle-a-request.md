@@ -50,6 +50,7 @@ pooled `Ctx` does not carry it into the next request. `handle` becomes:
 
 ```go
 if err := h(c); err != nil && !c.handled {
+    c.handled = true
     a.callErrorHandler(c, err)
 }
 ```
@@ -59,7 +60,9 @@ then still returns `err`.
 
 - **A nil error is a no-op.**
 - **A second call is a no-op.** The first settles the request; `handled` is set before the
-  `ErrorHandler` runs, so an `ErrorHandler` that itself calls `HandleError` does not recurse.
+  `ErrorHandler` runs — by `HandleError`, and by `handle` before each of its own calls into the
+  funnel, on a returned error and on a panic — so an `ErrorHandler` that itself calls
+  `HandleError` does not recurse, whichever path reached it.
 - **The panic path deliberately ignores `handled`.** A panic after `HandleError` still becomes a
   500. M5 established that a recovered panic anywhere in the chain is always a 500, and the
   response has not been sent yet — fasthttp writes it after `handle` returns — so overwriting it is

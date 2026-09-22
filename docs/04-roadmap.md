@@ -161,6 +161,10 @@ Not scheduled, not promised. Each would need its own brainstorm.
 - Typed per-request store keys (`rice.Key[T]` with a `Get` returning `T`), safer than
   `Set(string, any)` and immune to key collisions between middleware. Rejected for M6 because
   the documented API was already `string`/`any`.
+- `middleware.RealIP` parsing an `X-Forwarded-For` entry that carries a port
+  (`203.0.113.9:4711`) or is a bracketed IPv6 address (`[2001:db8::1]`). Some load balancers
+  append `ip:port`, and behind them `RealIP` currently falls back to the connection's address and
+  reports the proxy.
 
 ## Done after M8
 

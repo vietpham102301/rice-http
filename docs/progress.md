@@ -41,7 +41,8 @@ request for a use most handlers never have.
 Two limitations are documented rather than fixed. `RealIP` parses bare IP addresses only: an entry
 with a port (`203.0.113.9:4711`) or a bracketed IPv6 entry falls back to the connection's address.
 That is safe — no input attributes a request to an address the client chose — but behind a proxy
-that always appends a port, `RealIP` always reports the proxy, and no test pins that fallback yet.
+that always appends a port, `RealIP` always reports the proxy. `TestRealIPFallsBackOnAnEntryThatIsNotAnIP`
+now pins that fallback for both shapes.
 And a request that panics is not logged unless `Recover` sits inside `Logger`;
 `TestLoggerDoesNotLogAPanicWithoutRecoverInside` pins it, so a change in behaviour forces a change
 in `middleware/doc.go`.
