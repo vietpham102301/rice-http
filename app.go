@@ -113,6 +113,13 @@ type App struct {
 	// a serving App can be reconfigured.
 	errorHandler ErrorHandler
 
+	// miss answers every request the lookup did not match. New sets it to
+	// notFound so that an unbuilt App, which the package's tests dispatch to
+	// throughout, still has one; Build replaces it with notFound wrapped in the
+	// application's middleware. Group and route middleware never wrap it: no
+	// group matched, so none has a claim on the request. See ADR-0012.
+	miss Handler
+
 	// pool holds idle contexts. It is created in New, not Build, because the
 	// dispatch path is reachable before Build: package tests call handle on unbuilt
 	// Apps throughout. See the M6 design doc, D1.
@@ -204,6 +211,7 @@ type route struct {
 func New(opts ...Option) *App {
 	a := &App{
 		errorHandler: DefaultErrorHandler,
+		miss:         notFound,
 		shutdownSem:  make(chan struct{}, 1),
 		shutdownDone: make(chan struct{}),
 		hooksStarted: make(chan struct{}),
@@ -241,6 +249,11 @@ func transportError(ctx *fasthttp.RequestCtx, err error) {
 		ctx.Error("Error when parsing request", fasthttp.StatusBadRequest)
 	}
 }
+
+// notFound is the handler a route miss runs. Returning the package-level
+// ErrNotFound rather than constructing an error keeps the miss path at zero
+// allocations.
+func notFound(*Ctx) error { return ErrNotFound }
 
 // FasthttpHandler returns the request handler this App installs on its server.
 //
@@ -286,8 +299,10 @@ func (a *App) handle(fctx *fasthttp.RequestCtx) {
 
 	h, ok := a.lookup(fctx.Method(), fctx.Path(), &c.params)
 	if !ok {
-		a.callErrorHandler(c, ErrNotFound)
-		return
+		// A miss runs the application's middleware like any route, so a
+		// logger sees 404s and a CORS middleware can answer a preflight for a
+		// path that has no OPTIONS route. See ADR-0012.
+		h = a.miss
 	}
 
 	if err := h(c); err != nil {

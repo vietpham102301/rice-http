@@ -468,6 +468,25 @@ func TestAllocBudget404(t *testing.T) {
 	})
 }
 
+// TestAllocBudget404WithAppMiddleware pins that the miss chain costs nothing:
+// it is compiled once at Build, and ErrNotFound is a package variable.
+func TestAllocBudget404WithAppMiddleware(t *testing.T) {
+	app := New()
+	app.Use(func(next Handler) Handler {
+		return func(c *Ctx) error { return next(c) }
+	})
+	app.GET("/ok", func(c *Ctx) error { return nil })
+	app.Build()
+
+	fctx := &fasthttp.RequestCtx{}
+	fctx.Request.Header.SetMethod("GET")
+	fctx.Request.SetRequestURI("/missing")
+
+	budget(t, "404 through a miss chain with application middleware", 0, func() {
+		app.handle(fctx)
+	})
+}
+
 // TestAllocBudgetHTTPErrorReturn records the cost of a handler constructing an
 // error: the HTTPError, and nothing else now that the Ctx is pooled. It is 1 and
 // it is meant to be 1 — a budget that documents a cost rather than forbidding one.
