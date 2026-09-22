@@ -157,11 +157,10 @@ reproducible, and none has a mechanism behind it.
 ## What comes after the roadmap
 
 Nothing is scheduled. The roadmap's [Explicitly deferred](04-roadmap.md#explicitly-deferred)
-list — timeouts, static files, content negotiation, streaming, typed store keys, and `RealIP`
-parsing an `X-Forwarded-For` entry with a port or in brackets — remains: not promised,
-each needing its own design. `c.Query`, `c.Header` and `c.JSON` have since
-left that list, built after the roadmap closed along with `c.Body` and `WithMaxBodySize`;
-binding left it too, with the separate design and the ADR its entry there always said it would
-need; see [Done after M8](04-roadmap.md#done-after-m8). If work resumes, the cheapest useful step is
-the one M2 and M3 asked for and nobody built, a lookup benchmark inside `internal/router`,
-followed by the first profile any milestone records.
+list names what is not promised; each item on it would need its own design. `c.Query`, `c.Header`
+and `c.JSON` have since left that list, built after the roadmap closed along with `c.Body` and
+`WithMaxBodySize`; binding left it too, with the separate design and the ADR its entry there
+always said it would need; timeouts left it as the cooperative `middleware.Timeout`, with a design
+and an ADR of their own; see [Done after M8](04-roadmap.md#done-after-m8). If work resumes, the
+cheapest useful step is the one M2 and M3 asked for and nobody built, a lookup benchmark inside
+`internal/router`, followed by the first profile any milestone records.

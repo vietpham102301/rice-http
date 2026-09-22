@@ -248,8 +248,8 @@ route's chain. Group and route middleware do not run there: no group matched. `c
 empty on a miss, because nothing was captured. This is what lets a logger record 404s. See
 [ADR-0012](adr/0012-application-middleware-runs-on-route-misses.md).
 
-**What rice ships.** `middleware.Recover`, `middleware.RealIP`, `middleware.RequestID` and
-`middleware.Logger`, in the opt-in `middleware` package. Their recommended order, and the one trap
+**What rice ships.** `middleware.Recover`, `middleware.RealIP`, `middleware.RequestID`,
+`middleware.Logger` and `middleware.Timeout`, in the opt-in `middleware` package. Their recommended order, and the one trap
 in it — a panicking request is not logged unless `Recover` sits inside `Logger` — are in that
 package's documentation and in the [README](../README.md#the-middleware-rice-ships).
 

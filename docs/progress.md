@@ -16,6 +16,60 @@ Each entry uses this shape:
 
 ---
 
+## 2026-09-23 — post-M8 — Timeout, a deadline the work is asked to honour
+
+**Did:** `middleware.Timeout(d time.Duration)`. For each request it derives
+`context.WithTimeout(c.Context(), d)`, installs it with `c.SetContext`, runs the rest of the chain,
+then cancels it and restores the previous context, so a middleware outside it — `Logger` — never
+receives one that has expired. The chain's error becomes a 503 `*rice.HTTPError`, carrying the
+cause in `Err` and no message, when all three hold: the chain returned an error, this middleware's
+own deadline has passed, and the error is not already an `*rice.HTTPError`. A late success is
+returned as it is, and a context cancelled rather than timed out is left alone. `d <= 0` panics.
+Ten behaviour tests and `TestAllocBudgetTimeout`.
+[ADR-0014](adr/0014-timeout-is-cooperative.md) records why it is cooperative. The roadmap moves
+Timeout from *Explicitly deferred* to *Done after M8*; the README, `middleware/doc.go`,
+`02-architecture.md`, `03-core-concepts.md` and `05-performance-model.md` gain it.
+`07-retrospective.md` no longer copies the *Explicitly deferred* list — three consecutive branches
+changed the list and left that copy stale — and links to it instead.
+
+**Learned:** Three things.
+
+1. *A pre-emptive timeout is possible at the transport and impossible as a middleware.* fasthttp's
+   `TimeoutWithCodeHandler` (`server.go:485` in v1.73.0) runs the handler on a goroutine and, when
+   the timer wins, marks the `RequestCtx` timed out; the server then abandons that context rather
+   than reuse it (`server.go:2624-2628`), and `releaseCtx` panics on a timed-out one
+   (`server.go:3068`). So `fasthttp.TimeoutHandler(app.FasthttpHandler(), …)` is safe: rice's
+   whole `Ctx` lifecycle happens inside the goroutine fasthttp abandons. A middleware cannot do
+   the same, and the probe showed it: a pre-emptive middleware inside a Logger-like one, under
+   `-race`, sent the client a 503 and drew `WARNING: DATA RACE`, because every middleware in the
+   chain shares one `*Ctx`; and `handle` released that `Ctx` to the pool while the abandoned
+   goroutine still held it.
+
+2. *This corrects the entry below titled "An access log that tells the truth", and the roadmap
+   sentence written with it.* That entry's **Next** says a pre-emptive timeout "would release the
+   `Ctx` while the handler's goroutine still holds it", and `04-roadmap.md` said the same, both
+   presenting a pre-emptive timeout as impossible outright. It is impossible as a middleware and
+   safe at the transport. The roadmap sentence is corrected in place; that entry stays as it was.
+
+3. *`Timeout` asks its own context, not the error.* Many database drivers report a timeout in their
+   own error type without unwrapping to `context.DeadlineExceeded`, so `errors.Is(err,
+   context.DeadlineExceeded)` would miss exactly the case a timeout exists for.
+   `TestTimeoutAsksItsContextNotTheError` returns such an error after the deadline and requires
+   503.
+
+**Measured:** `TestAllocBudgetTimeout`, `Timeout(time.Second)` around a handler that returns at
+once: **4.0** on darwin (go1.25.6, arm64) without `-race` and with it, and **4.0** in a Linux
+container (golang:1.25.14, amd64) without `-race` and with it. The four agree, so the budget is 4
+exactly with a race slack of 0, and the rule the entry of 2026-09-22 learned — measure on both
+platforms before writing a `-race` claim — was followed before the claim was written. Off-race,
+`want exactly 3` and `want exactly 5` both failed. `make cover`: root package 99.3%, `binding`
+100.0%, `middleware` 100.0% with `Timeout` fully covered, 99.3% overall. No benchmark was
+re-recorded: nothing on the dispatch path changed.
+
+**Next:** CORS.
+
+---
+
 ## 2026-09-23 — post-M8 — The two port-1 tests no longer depend on the machine running them
 
 **Did:** `TestRunReturnsAnErrorOnAnUnbindableAddress` and `TestRunContextReturnsABindErrorAtOnce`

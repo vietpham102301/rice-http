@@ -44,3 +44,4 @@ Date: YYYY-MM-DD
 | [0011](0011-binding-is-generic-and-validation-is-a-method.md) | Binding is generic and validation is a method | Accepted |
 | [0012](0012-application-middleware-runs-on-route-misses.md) | Application middleware runs on route misses | Accepted |
 | [0013](0013-middleware-can-settle-a-request.md) | Middleware can settle a request with `c.HandleError` | Accepted |
+| [0014](0014-timeout-is-cooperative.md) | Timeout is cooperative | Accepted |

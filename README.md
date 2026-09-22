@@ -85,8 +85,8 @@ is empty there ([ADR-0012](docs/adr/0012-application-middleware-runs-on-route-mi
 
 ### The middleware rice ships
 
-`logging` above shows the shape. For an access log, use the opt-in `middleware` package, in this
-order:
+`logging` above shows the shape. For an access log and a request deadline, use the opt-in
+`middleware` package, in this order:
 
 ```go
 app.Use(
@@ -94,6 +94,7 @@ app.Use(
 	middleware.Recover(),              // inside Logger: a panic becomes an error Logger can see
 	middleware.RealIP(1),              // only behind proxies you run; 1 is how many
 	middleware.RequestID(),
+	middleware.Timeout(5*time.Second), // inside Logger, so Logger records its 503
 )
 ```
 
@@ -114,10 +115,26 @@ app.Use(
 - **`RequestID()`** keeps an incoming `X-Request-Id` only if it is 1–64 characters of
   `[A-Za-z0-9_-]`, so a client cannot inject a line into the log; otherwise it generates one. It
   echoes the id on the response. Read it with `middleware.RequestIDFrom(c)`.
+- **`Timeout(d time.Duration)`** puts a deadline of `d` on `c.Context()`, the context a handler
+  passes to its database and HTTP clients, and answers **503** when the chain returns an error
+  after that deadline has passed — unless the error is already an `*rice.HTTPError`, whose status
+  is kept. It goes inside `Logger`, so the 503 is what `Logger` records. A route can set its own:
 
-Unlike core, these allocate: 3 objects per request for `RealIP`, 2 for `RequestID` alone, and 6
-for `Logger` and `RequestID` together with slog's JSON handler — each pinned by a budget test,
-with its fixture named in the [performance model](docs/05-performance-model.md#opt-in-packages).
+  ```go
+  app.GET("/report", report, middleware.Timeout(30*time.Second))
+  ```
+
+  Nesting only shortens: a route's `Timeout` inside an application-wide one expires at whichever
+  deadline comes first, so the route above still expires at five seconds under the `app.Use`
+  above. **`Timeout` is cooperative: a handler that ignores its context is not stopped, and its
+  answer, however late, is what the client receives.** Cutting the client off regardless is a job
+  for the transport — `fasthttp.TimeoutHandler` around `app.FasthttpHandler()` — with the costs
+  [ADR-0014](docs/adr/0014-timeout-is-cooperative.md) names.
+
+Unlike core, these allocate: 3 objects per request for `RealIP`, 2 for `RequestID` alone, 6 for
+`Logger` and `RequestID` together with slog's JSON handler, and 4 for `Timeout` — each pinned by a
+budget test, with its fixture named in the
+[performance model](docs/05-performance-model.md#opt-in-packages).
 
 ## Reading requests, writing JSON
 
@@ -357,7 +374,7 @@ and cannot compare, and the reason for each result are in the performance model'
 | [05 — Performance model](docs/05-performance-model.md) | the allocation budget, per method |
 | [06 — Glossary](docs/06-glossary.md) | terms used precisely in these docs |
 | [07 — Retrospective](docs/07-retrospective.md) | what the project learned, and what surprised it |
-| [ADRs](docs/adr/) | thirteen decisions, with the alternatives that lost |
+| [ADRs](docs/adr/) | fourteen decisions, with the alternatives that lost |
 | [Milestones](docs/milestones/) | retrospectives: what was measured, what surprised |
 | [Journal](docs/progress.md) | the running record, including the wrong turns |
 
