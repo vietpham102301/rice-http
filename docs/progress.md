@@ -16,6 +16,34 @@ Each entry uses this shape:
 
 ---
 
+## 2026-09-23 — post-M8 — The two port-1 tests no longer depend on the machine running them
+
+**Did:** `TestRunReturnsAnErrorOnAnUnbindableAddress` and `TestRunContextReturnsABindErrorAtOnce`
+no longer use port 1. A new helper, `occupiedAddr`, binds an ephemeral port and holds it for the
+rest of the test, and each test hands that held address to `Run` or `RunContext`. Both now assert
+the error wraps `syscall.EADDRINUSE` rather than accepting any error, and both run the call on a
+goroutine and wait through `within`, so a bind that ever succeeds fails the test in two seconds
+instead of hanging it. This is the Next of the entry below.
+
+**Learned:** The old tests had the right intent and the wrong mechanism. "Port 1 needs
+privileges" is a property of the host, and the host was never under the tests' control: Docker sets
+`net.ipv4.ip_unprivileged_port_start` to 0, so the claim was false in every container. Holding a
+port makes the failure the tests want a property of the test itself. It rests on one fact worth
+recording — `Run` and `RunContext` bind with `net.Listen`, which sets `SO_REUSEADDR` but not
+`SO_REUSEPORT`, so a second bind to a held address cannot succeed. The second test's accidental
+pass also shows why each test should own the state it depends on: it was green only because the
+test before it had already taken the port.
+
+**Measured:** Both tests pass three times under `-race` on darwin arm64. Forcing the bind to
+succeed — releasing the held port before returning it — fails both, each within two seconds,
+instead of hanging. In a Linux container, where `ip_unprivileged_port_start` is 0, the full CI
+commands — `-race`, and `-race -tags ricedebug` — pass with nothing skipped, as root and as an
+unprivileged user.
+
+**Next:** Timeout, then CORS.
+
+---
+
 ## 2026-09-22 — post-M8 — Correction: RequestID's budget is not exact under `-race` on Linux
 
 **Did:** CI went red on the merge of the entry below. `TestAllocBudgetRequestIDGenerated`

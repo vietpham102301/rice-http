@@ -3,10 +3,12 @@ package rice_test
 import (
 	"bufio"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -93,12 +95,45 @@ func TestRunBindsTheGivenAddress(t *testing.T) {
 	}
 }
 
+// occupiedAddr returns the address of a listener the test holds open until it
+// ends, so any further bind to that address fails with "address already in
+// use" on every host.
+//
+// It replaces port 1, which these tests used to assume only a privileged
+// process could bind. That is false inside a Docker container, which sets
+// net.ipv4.ip_unprivileged_port_start to 0: there Run bound port 1, served,
+// and never returned. Holding a port makes the failure the tests want a
+// property of the test rather than of the machine running it. Run and
+// RunContext bind with net.Listen, which sets SO_REUSEADDR but not
+// SO_REUSEPORT, so a second bind to a held address cannot succeed.
+func occupiedAddr(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	return ln.Addr().String()
+}
+
 func TestRunReturnsAnErrorOnAnUnbindableAddress(t *testing.T) {
 	app := rice.New()
+	addr := occupiedAddr(t)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = app.Shutdown(ctx)
+	})
 
-	// Port 1 requires privileges this test does not have.
-	if err := app.Run("127.0.0.1:1"); err == nil {
-		t.Error("Run returned nil for an unbindable address, want an error")
+	// Run blocks while it serves, so it runs on a goroutine and the test waits
+	// through within: if the bind ever succeeds, the test fails instead of
+	// hanging until go test's own timeout.
+	errCh := make(chan error, 1)
+	go func() { errCh <- app.Run(addr) }()
+
+	err := within(t, 2*time.Second, "Run returning", errCh)
+	if !errors.Is(err, syscall.EADDRINUSE) {
+		t.Errorf("Run returned %v for an address already in use, want an error wrapping EADDRINUSE", err)
 	}
 }
 
