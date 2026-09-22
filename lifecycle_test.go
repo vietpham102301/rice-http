@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -211,12 +212,16 @@ func TestRunContextWithZeroGraceForceClosesAtOnce(t *testing.T) {
 
 func TestRunContextReturnsABindErrorAtOnce(t *testing.T) {
 	app := rice.New()
-	errCh := make(chan error, 1)
-	// Port 1 requires privileges this test does not have.
-	go func() { errCh <- app.RunContext(context.Background(), "127.0.0.1:1", time.Second) }()
+	addr := occupiedAddr(t) // held for the whole test; see occupiedAddr
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 
-	if err := within(t, 2*time.Second, "RunContext returning", errCh); err == nil {
-		t.Error("RunContext returned nil for an unbindable address, want an error")
+	errCh := make(chan error, 1)
+	go func() { errCh <- app.RunContext(ctx, addr, time.Second) }()
+
+	err := within(t, 2*time.Second, "RunContext returning", errCh)
+	if !errors.Is(err, syscall.EADDRINUSE) {
+		t.Errorf("RunContext returned %v for an address already in use, want an error wrapping EADDRINUSE", err)
 	}
 }
 
