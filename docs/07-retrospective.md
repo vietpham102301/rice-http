@@ -158,7 +158,7 @@ reproducible, and none has a mechanism behind it.
 
 Nothing is scheduled. The roadmap's [Explicitly deferred](04-roadmap.md#explicitly-deferred)
 list — timeouts, static files, content negotiation, streaming, typed store keys, and `RealIP`
-parsing an `X-Forwarded-For` entry with a port or in brackets — stays as it was: not promised,
+parsing an `X-Forwarded-For` entry with a port or in brackets — remains: not promised,
 each needing its own design. `c.Query`, `c.Header` and `c.JSON` have since
 left that list, built after the roadmap closed along with `c.Body` and `WithMaxBodySize`;
 binding left it too, with the separate design and the ADR its entry there always said it would
