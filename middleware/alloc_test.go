@@ -55,32 +55,46 @@ func TestAllocBudgetRealIP(t *testing.T) {
 
 // TestAllocBudgetRequestIDGenerated pins RequestID's cost when it generates an
 // id, the common case. Encoding the id and storing it both allocate.
+//
+// Under -race the ceiling is one higher, and only because of Linux. Built
+// with the race detector for Linux, the compiler moves newRequestID's 16-byte
+// buffer to the heap — `go build -race -gcflags=-m` reports "moved to heap:
+// b" there and nothing on darwin — because crypto/rand's Linux source ends in
+// a syscall.Syscall that the race build makes its buffer argument escape
+// through. A memory profile under linux/-race shows exactly one extra
+// allocation per call, in newRequestID itself. Without -race the buffer stays
+// on the stack on every platform, so production pays 2.
 func TestAllocBudgetRequestIDGenerated(t *testing.T) {
 	const want float64 = 2
 
 	got := measure(t, middleware.RequestID(), nil)
-	if got != want {
-		t.Errorf("RequestID (generating) allocated %.1f objects per call, want exactly %.0f", got, want)
-	}
+	assertAllocBudget(t, "RequestID (generating)", got, want, 1)
 }
 
 // assertAllocBudget fails when got misses the budget for name: an exact match
-// to want off-race, or a ceiling of want+2 under -race.
+// to want off-race, or a ceiling of want+raceSlack under -race.
 //
-// The +2 is not a guess: go1.25.6's log/slog/handler.go takes two buffers from
-// one sync.Pool per record — commonHandler.handle at line 271
-// (h.newHandleState(buffer.New(), true, "")) and newHandleState itself at line
-// 402 (prefix: buffer.New()) — and frees both back to that pool in
-// handleState.free, at lines 413 and 419. Under -race the pool drops some Puts
-// and gets cleared by GC (see budget's doc comment in budget_test.go, package
-// rice, for that general sync.Pool behaviour), so a cleared pool can cost at
-// most two extra allocations per call, not one. Check these line numbers
-// against your own Go version if this ever needs re-deriving.
-func assertAllocBudget(t *testing.T, name string, got, want float64) {
+// raceSlack is not a tolerance to be tuned until a test goes green. Each
+// budget that passes one derives it, in its own doc comment, from a specific
+// allocation the race build can add, and a budget with no such mechanism
+// passes 0 and stays exact under -race too. Two mechanisms exist today:
+//
+//   - log/slog's handler takes two buffers from one sync.Pool per record.
+//     go1.25.6's log/slog/handler.go: commonHandler.handle at line 271
+//     (h.newHandleState(buffer.New(), true, "")) and newHandleState itself at
+//     line 402 (prefix: buffer.New()), both freed at lines 413 and 419. Under
+//     -race the pool drops some Puts and GC clears it (see budget's doc comment
+//     in budget_test.go, package rice), costing at most two extra per call.
+//   - RequestID's random buffer escapes under -race on Linux only; see
+//     TestAllocBudgetRequestIDGenerated.
+//
+// Check these line numbers against your own Go version if this ever needs
+// re-deriving.
+func assertAllocBudget(t *testing.T, name string, got, want, raceSlack float64) {
 	t.Helper()
 	if raceDetector {
-		if got > want+2 {
-			t.Errorf("%s allocated %.1f objects per call, want at most %.0f under -race", name, got, want+2)
+		if got > want+raceSlack {
+			t.Errorf("%s allocated %.1f objects per call, want at most %.0f under -race", name, got, want+raceSlack)
 		}
 		return
 	}
@@ -105,7 +119,7 @@ func TestAllocBudgetLogger(t *testing.T) {
 
 	l := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	got := measure(t, middleware.Logger(l), nil)
-	assertAllocBudget(t, "Logger", got, want)
+	assertAllocBudget(t, "Logger", got, want, 2)
 }
 
 // TestAllocBudgetLoggerWithRequestID pins the cost of Logger and RequestID
@@ -121,11 +135,15 @@ func TestAllocBudgetLogger(t *testing.T) {
 // for Logger to read without running RequestID itself. This combined figure
 // is also the one a user actually pays, since the two are meant to be
 // installed together.
+//
+// Its race slack is the two mechanisms in assertAllocBudget's doc comment
+// added together: two from slog's pooled buffers, and one from RequestID's
+// buffer escaping on Linux.
 func TestAllocBudgetLoggerWithRequestID(t *testing.T) {
 	const want float64 = 6
 
 	l := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	mw := func(next rice.Handler) rice.Handler { return middleware.Logger(l)(middleware.RequestID()(next)) }
 	got := measure(t, mw, nil)
-	assertAllocBudget(t, "Logger+RequestID", got, want)
+	assertAllocBudget(t, "Logger+RequestID", got, want, 3)
 }
