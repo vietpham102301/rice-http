@@ -642,6 +642,23 @@ func TestAllocBudgetJSON(t *testing.T) {
 	}
 }
 
+// TestAllocBudgetHandleError pins HandleError at zero allocations of its own,
+// measured with ErrNotFound through the default funnel, which is itself free.
+// The flag is cleared inside the measured closure: HandleError is a no-op once
+// a request is settled, so without clearing it every iteration after the
+// first would measure the no-op instead of the work.
+func TestAllocBudgetHandleError(t *testing.T) {
+	app := New()
+	fctx := &fasthttp.RequestCtx{}
+	c := &Ctx{}
+	c.reset(app, fctx)
+
+	budget(t, "Ctx.HandleError", 0, func() {
+		c.handled = false
+		c.HandleError(ErrNotFound)
+	})
+}
+
 // TestAllocBudgetContext uses a real App, unlike the other budgets in this
 // file: Context falls back to the App's base context, so a Ctx reset with a nil
 // App would panic rather than measure anything.

@@ -305,7 +305,7 @@ func (a *App) handle(fctx *fasthttp.RequestCtx) {
 		h = a.miss
 	}
 
-	if err := h(c); err != nil {
+	if err := h(c); err != nil && !c.handled {
 		a.callErrorHandler(c, err)
 	}
 }

@@ -34,6 +34,10 @@ type Ctx struct {
 
 	// store backs Set and Get. newCtx pre-sizes it to storeCapacity.
 	store []entry
+
+	// handled is set by HandleError. handle reads it so that an error a
+	// middleware has already settled is not answered a second time.
+	handled bool
 }
 
 // reset binds the context to a request, or unbinds it when app and fctx are nil.
@@ -45,6 +49,7 @@ func (c *Ctx) reset(app *App, fctx *fasthttp.RequestCtx) {
 	c.app = app
 	c.fctx = fctx
 	c.ctx = nil
+	c.handled = false
 	c.params.Reset()
 	c.resetStore()
 }
@@ -149,4 +154,26 @@ func (c *Ctx) SetContext(ctx context.Context) {
 		panic("rice: SetContext: context is nil")
 	}
 	c.ctx = ctx
+}
+
+// HandleError answers err through the App's ErrorHandler now, instead of after
+// the chain has returned.
+//
+// The funnel normally runs only once every middleware has returned, so a
+// middleware that reads the response status after next(c) reads it too early:
+// a request that ends in a 500 still shows 200 there. A request logger calls
+// HandleError first and then reads the status the client will receive. See
+// docs/adr/0013-middleware-can-settle-a-request.md.
+//
+// A request is settled once. A nil error does nothing, and a second call does
+// nothing: the first settles the request. An error returned after it has been
+// handled is not answered again. A panic is still a 500 even after a request
+// was settled.
+func (c *Ctx) HandleError(err error) {
+	c.poison.check()
+	if err == nil || c.handled {
+		return
+	}
+	c.handled = true
+	c.app.callErrorHandler(c, err)
 }
