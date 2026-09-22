@@ -50,3 +50,14 @@ func TestAllocBudgetRealIP(t *testing.T) {
 		t.Errorf("RealIP allocated %.1f objects per call, want exactly %.0f", got, want)
 	}
 }
+
+// TestAllocBudgetRequestIDGenerated pins RequestID's cost when it generates an
+// id, the common case. Encoding the id and storing it both allocate.
+func TestAllocBudgetRequestIDGenerated(t *testing.T) {
+	const want float64 = 2
+
+	got := measure(t, middleware.RequestID(), nil)
+	if got != want {
+		t.Errorf("RequestID (generating) allocated %.1f objects per call, want exactly %.0f", got, want)
+	}
+}
