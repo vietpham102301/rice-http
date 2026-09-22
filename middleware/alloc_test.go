@@ -1,6 +1,8 @@
 package middleware_test
 
 import (
+	"io"
+	"log/slog"
 	"testing"
 
 	"github.com/valyala/fasthttp"
@@ -59,5 +61,17 @@ func TestAllocBudgetRequestIDGenerated(t *testing.T) {
 	got := measure(t, middleware.RequestID(), nil)
 	if got != want {
 		t.Errorf("RequestID (generating) allocated %.1f objects per call, want exactly %.0f", got, want)
+	}
+}
+
+// TestAllocBudgetLogger pins Logger's cost with slog's JSON handler writing to
+// io.Discard. A different handler costs differently; the figure is for this one.
+func TestAllocBudgetLogger(t *testing.T) {
+	const want float64 = 3
+
+	l := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	got := measure(t, middleware.Logger(l), nil)
+	if got != want {
+		t.Errorf("Logger allocated %.1f objects per call, want exactly %.0f", got, want)
 	}
 }
