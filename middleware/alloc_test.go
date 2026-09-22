@@ -4,6 +4,7 @@ import (
 	"io"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/valyala/fasthttp"
 
@@ -146,4 +147,17 @@ func TestAllocBudgetLoggerWithRequestID(t *testing.T) {
 	mw := func(next rice.Handler) rice.Handler { return middleware.Logger(l)(middleware.RequestID()(next)) }
 	got := measure(t, mw, nil)
 	assertAllocBudget(t, "Logger+RequestID", got, want, 3)
+}
+
+// TestAllocBudgetTimeout pins Timeout's cost around a handler that returns at
+// once. context.WithTimeout allocates.
+//
+// Measured at 4 on darwin and in a Linux container, with and without -race,
+// so the race slack is 0: no mechanism in assertAllocBudget's doc comment
+// applies here, and none was found to add an allocation on either platform.
+func TestAllocBudgetTimeout(t *testing.T) {
+	const want float64 = 4
+
+	got := measure(t, middleware.Timeout(time.Second), nil)
+	assertAllocBudget(t, "Timeout", got, want, 0)
 }
