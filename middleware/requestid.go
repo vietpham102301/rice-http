@@ -23,13 +23,15 @@ const (
 // for cross-service tracing. Anything else is discarded and a new id is
 // generated: 16 random bytes, hex-encoded. The character set is the security
 // control — an id goes into every log line for its request, so one containing
-// a newline would let a client forge log entries.
+// a newline would let a client forge log entries. fasthttp already neutralises
+// a raw newline in a header value, so this check does not rely on that.
 //
 // The id is not put into c.Context: that costs an allocation on every request
 // for a use most handlers never have. To propagate it to an outbound call,
 // write
 //
-//	c.SetContext(context.WithValue(c.Context(), requestIDKey{}, middleware.RequestIDFrom(c)))
+//	type requestIDCtxKey struct{}
+//	c.SetContext(context.WithValue(c.Context(), requestIDCtxKey{}, middleware.RequestIDFrom(c)))
 //
 // with a key type of your own.
 func RequestID() rice.Middleware {

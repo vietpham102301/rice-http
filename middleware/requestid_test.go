@@ -54,14 +54,15 @@ func TestRequestIDKeepsAValidIncomingID(t *testing.T) {
 	}
 }
 
-// TestRequestIDReplacesAnUnsafeIncomingID covers the security control. A
-// client-supplied id goes into every log line for its request, so one carrying
-// a newline would let a client forge log entries.
+// TestRequestIDReplacesAnUnsafeIncomingID pins that unsafe incoming ids are
+// replaced, independent of how fasthttp processes the header value. fasthttp
+// already neutralises control bytes in header values (e.g., rewrites \n to a
+// space), but this test confirms that anything non-conforming is rejected.
 func TestRequestIDReplacesAnUnsafeIncomingID(t *testing.T) {
 	for _, tc := range []struct {
 		name, incoming string
 	}{
-		{"newline", "abc\nFORGED log line"},
+		{"newline, which fasthttp rewrites to a space", "abc\nFORGED log line"},
 		{"too long", strings.Repeat("a", 65)},
 		{"space", "has space"},
 		{"punctuation", "id;drop"},
