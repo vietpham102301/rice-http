@@ -468,6 +468,25 @@ func TestAllocBudget404(t *testing.T) {
 	})
 }
 
+// TestAllocBudget404WithAppMiddleware pins that the miss chain costs nothing:
+// it is compiled once at Build, and ErrNotFound is a package variable.
+func TestAllocBudget404WithAppMiddleware(t *testing.T) {
+	app := New()
+	app.Use(func(next Handler) Handler {
+		return func(c *Ctx) error { return next(c) }
+	})
+	app.GET("/ok", func(c *Ctx) error { return nil })
+	app.Build()
+
+	fctx := &fasthttp.RequestCtx{}
+	fctx.Request.Header.SetMethod("GET")
+	fctx.Request.SetRequestURI("/missing")
+
+	budget(t, "404 through a miss chain with application middleware", 0, func() {
+		app.handle(fctx)
+	})
+}
+
 // TestAllocBudgetHTTPErrorReturn records the cost of a handler constructing an
 // error: the HTTPError, and nothing else now that the Ctx is pooled. It is 1 and
 // it is meant to be 1 — a budget that documents a cost rather than forbidding one.
@@ -621,6 +640,23 @@ func TestAllocBudgetJSON(t *testing.T) {
 			t.Errorf("%s allocated %.1f objects per call, want exactly %.0f", tc.name, got, tc.want)
 		}
 	}
+}
+
+// TestAllocBudgetHandleError pins HandleError at zero allocations of its own,
+// measured with ErrNotFound through the default funnel, which is itself free.
+// The flag is cleared inside the measured closure: HandleError is a no-op once
+// a request is settled, so without clearing it every iteration after the
+// first would measure the no-op instead of the work.
+func TestAllocBudgetHandleError(t *testing.T) {
+	app := New()
+	fctx := &fasthttp.RequestCtx{}
+	c := &Ctx{}
+	c.reset(app, fctx)
+
+	budget(t, "Ctx.HandleError", 0, func() {
+		c.handled = false
+		c.HandleError(ErrNotFound)
+	})
 }
 
 // TestAllocBudgetContext uses a real App, unlike the other budgets in this

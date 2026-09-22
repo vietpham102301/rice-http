@@ -63,6 +63,9 @@ func (a *App) OPTIONS(path string, h Handler, mw ...Middleware) {
 
 // Use adds application-level middleware, which wraps every route.
 //
+// Application middleware registered with Use also runs on a request that
+// matches no route, where group and route middleware do not; see ADR-0012.
+//
 // Order of calls does not matter relative to route registration: chains are
 // compiled in Build, so Use written after a route still applies to it. That is
 // ADR-0003's central reason for having a build phase at all — the alternative

@@ -41,10 +41,10 @@ type Ctx struct { /* unexported */ }
 ```
 
 A pooled handle to one in-flight request. It is the only argument a handler gets, and it
-is **borrowed** — see principle 3. It carries five things: the underlying
+is **borrowed** — see principle 3. It carries six things: the underlying
 `*fasthttp.RequestCtx`, the captured route parameters, a small per-request key/value store
-for middleware, a back-pointer to the `App`, and the context a middleware has installed, if
-any.
+for middleware, a back-pointer to the `App`, the context a middleware has installed, if
+any, and whether a middleware has already settled the request's error with `HandleError`.
 
 ### Read side
 
@@ -68,11 +68,18 @@ section below.
 
 `ClientIP` reports the address the connection came from, and reads no header. Behind a reverse
 proxy that is the proxy's address, which is the honest answer: trusting `X-Forwarded-For` by
-default lets any client declare its own address. `middleware.RealIP` is what will resolve that
+default lets any client declare its own address. `middleware.RealIP(trustedHops)` resolves that
 header, against a declared number of trusted proxy hops, and it does so by rewriting the
 connection address with fasthttp's `SetRemoteAddr` — `ClientIP` then reports the result without
-knowing it happened. There is no `ClientIPString`; a caller who wants one calls `.String()` and
-pays the allocation where it can be seen.
+knowing it happened. It counts from the right, because only the entries the trusted proxies
+appended cannot be forged, and it sets the address on every request, resolved or not: fasthttp
+serves every request on a keep-alive connection from one context and clears a rewritten address
+only when the connection closes, so a middleware that sometimes skipped the rewrite would report
+the previous request's client. It parses bare IP addresses only. An entry with a port
+(`203.0.113.9:4711`) or a bracketed IPv6 entry (`[2001:db8::1]`) falls back to the connection's
+address — safe, since it never reports an address the client chose, but behind a proxy that
+always appends a port, `RealIP` always reports the proxy. There is no `ClientIPString`; a caller
+who wants one calls `.String()` and pays the allocation where it can be seen.
 
 ### The context
 
@@ -130,6 +137,27 @@ getter `ContentType()` cannot show this: fasthttp substitutes a default
 not one happened. The test instead asserts against the bytes on the wire, and only after the
 handler has written a body first — fasthttp omits the header on the wire for any zero-length
 response regardless of the field, so without a prior write the absence would prove nothing.
+
+### Settling an error early
+
+```go
+func (c *Ctx) HandleError(err error)
+```
+
+| Method | Effect | Allocations |
+| --- | --- | --- |
+| `HandleError(err error)` | runs the App's `ErrorHandler` on `err` now | 0, plus whatever the `ErrorHandler` costs |
+
+The funnel normally runs after the whole chain has returned, so a middleware that reads the
+response status after `next(c)` reads it too early: a request that ends in a 500 still shows 200
+there. `HandleError` runs the `ErrorHandler` at the moment of the call and marks the request
+settled; when the chain returns, the funnel does not answer it again, even if the same error is
+returned. A nil error does nothing, and a second call does nothing — the first settles the request.
+A panic after it is still a 500.
+
+It is for middleware that must know the status a request ends with — `middleware.Logger` calls it
+on whatever `next` returned, then reads the status. Such a middleware consumes the error, so it
+belongs outermost. See [ADR-0013](adr/0013-middleware-can-settle-a-request.md).
 
 ### Per-request store
 
@@ -191,6 +219,10 @@ func RequestID() rice.Middleware {
 }
 ```
 
+This one is an illustration of the shape. rice ships a real one, `middleware.RequestID`, which
+stores the id under its own unexported key: read it with `middleware.RequestIDFrom(c)`, not
+`c.Get("request_id")`, which returns nothing.
+
 Three properties follow from this shape, and they are why it was chosen:
 
 1. **The chain is compiled once.** At build time, `mw1(mw2(mw3(handler)))` collapses into a
@@ -208,6 +240,18 @@ See [ADR-0003](adr/0003-middleware-as-prebuilt-closure-chain.md).
 
 **Ordering.** Middleware runs outermost-first on the way in, innermost-first on the way
 out. `app.Use(A, B)` on a route with handler H executes A → B → H → B → A.
+
+**Application middleware also runs on a route miss.** A request that matches no route — including
+an existing path requested with a method it was not registered for — runs the middleware added
+with `app.Use` around a handler that returns `ErrNotFound`, compiled once at build time like any
+route's chain. Group and route middleware do not run there: no group matched. `c.Param` returns
+empty on a miss, because nothing was captured. This is what lets a logger record 404s. See
+[ADR-0012](adr/0012-application-middleware-runs-on-route-misses.md).
+
+**What rice ships.** `middleware.Recover`, `middleware.RealIP`, `middleware.RequestID` and
+`middleware.Logger`, in the opt-in `middleware` package. Their recommended order, and the one trap
+in it — a panicking request is not logged unless `Recover` sits inside `Logger` — are in that
+package's documentation and in the [README](../README.md#the-middleware-rice-ships).
 
 ---
 
@@ -353,7 +397,8 @@ func (g *Group) Group(prefix string, mw ...Middleware) *Group
 A prefix plus a middleware list. It is purely a registration-time convenience: groups do
 not exist at request time, because by then every route holds one flat compiled chain. A
 nested group concatenates prefixes and appends middleware, so ordering is
-`app middleware → outer group → inner group → route middleware → handler`.
+`app middleware → outer group → inner group → route middleware → handler`. On a route miss only
+the app middleware runs, even when the path begins with a group's prefix, because no group matched.
 
 **Prefix and path rules.** A prefix must be empty, or begin with `/` and not end with `/`.
 A route path registered on a group must begin with `/`, or be empty — an empty path
@@ -415,8 +460,8 @@ func DefaultErrorHandler(c *Ctx, err error)
 ```
 
 One error type and one funnel. Every error returned by any handler or middleware, every
-route miss, and every recovered panic reaches `app.ErrorHandler`, whose default behaviour
-is:
+route miss, and every recovered panic reaches `app.ErrorHandler` — at the end of the chain, or
+earlier when a middleware settles it with `c.HandleError` — whose default behaviour is:
 
 1. The concrete error is `*PanicError` → respond 500 (a panic is always 500), or a concrete
    `*HTTPError` with no wrapped cause → respond with its own code. Both are checked with a

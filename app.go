@@ -113,6 +113,17 @@ type App struct {
 	// a serving App can be reconfigured.
 	errorHandler ErrorHandler
 
+	// miss answers every request the lookup did not match. New sets it to
+	// notFound so that an unbuilt App, which the package's tests dispatch to
+	// throughout, still has one; Build replaces it with notFound wrapped in the
+	// application's middleware. Group and route middleware never wrap it: no
+	// group matched, so none has a claim on the request. See ADR-0012.
+	//
+	// It is written in New and again in build, both before the App can serve,
+	// and read on every missed request with no lock. That is safe on the same
+	// argument as errorHandler above: nothing writes it once serving begins.
+	miss Handler
+
 	// pool holds idle contexts. It is created in New, not Build, because the
 	// dispatch path is reachable before Build: package tests call handle on unbuilt
 	// Apps throughout. See the M6 design doc, D1.
@@ -204,6 +215,7 @@ type route struct {
 func New(opts ...Option) *App {
 	a := &App{
 		errorHandler: DefaultErrorHandler,
+		miss:         notFound,
 		shutdownSem:  make(chan struct{}, 1),
 		shutdownDone: make(chan struct{}),
 		hooksStarted: make(chan struct{}),
@@ -242,6 +254,11 @@ func transportError(ctx *fasthttp.RequestCtx, err error) {
 	}
 }
 
+// notFound is the handler a route miss runs. Returning the package-level
+// ErrNotFound rather than constructing an error keeps the miss path at zero
+// allocations.
+func notFound(*Ctx) error { return ErrNotFound }
+
 // FasthttpHandler returns the request handler this App installs on its server.
 //
 // It calls Build, because a handler that dispatched uncompiled routes would skip
@@ -277,8 +294,14 @@ func (a *App) handle(fctx *fasthttp.RequestCtx) {
 	// last-resort recover, nothing would catch it and release would not run.
 	// That is unreachable today (see callErrorHandler), and if it became
 	// reachable the cost is one Ctx lost to the pool, not a corrupted one.
+	//
+	// Both calls into the funnel below set handled first, as HandleError does,
+	// so an ErrorHandler that itself calls HandleError finds the request
+	// already settled and does not run twice. The panic path still calls the
+	// funnel whatever the flag says: a panic is always a 500 (ADR-0013).
 	defer func() {
 		if r := recover(); r != nil {
+			c.handled = true
 			a.callErrorHandler(c, &PanicError{Value: r, Stack: debug.Stack()})
 		}
 		a.release(c)
@@ -286,11 +309,14 @@ func (a *App) handle(fctx *fasthttp.RequestCtx) {
 
 	h, ok := a.lookup(fctx.Method(), fctx.Path(), &c.params)
 	if !ok {
-		a.callErrorHandler(c, ErrNotFound)
-		return
+		// A miss runs the application's middleware like any route, so a
+		// logger sees 404s and a CORS middleware can answer a preflight for a
+		// path that has no OPTIONS route. See ADR-0012.
+		h = a.miss
 	}
 
-	if err := h(c); err != nil {
+	if err := h(c); err != nil && !c.handled {
+		c.handled = true
 		a.callErrorHandler(c, err)
 	}
 }

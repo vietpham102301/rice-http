@@ -165,3 +165,24 @@ func TestASuccessfulRequestIsUnaffectedByTheRecovery(t *testing.T) {
 		t.Errorf("body = %q, want %q", got, "fine")
 	}
 }
+
+// TestAPanicInApplicationMiddlewareOnAMissIs500 pins ADR-0012's claim that the
+// miss chain is covered by the same recovery as every route: a panic in
+// application middleware on a request that matched nothing is a 500, not a
+// crash and not a 404.
+func TestAPanicInApplicationMiddlewareOnAMissIs500(t *testing.T) {
+	app := New()
+	app.Use(func(next Handler) Handler {
+		return func(c *Ctx) error { panic("middleware exploded on a miss") }
+	})
+	app.GET("/ok", func(c *Ctx) error { return nil })
+
+	fctx := dispatchCtx(app, "GET", "/nope")
+
+	if got := fctx.Response.StatusCode(); got != 500 {
+		t.Errorf("status = %d, want 500", got)
+	}
+	if got := string(fctx.Response.Body()); got != "Internal Server Error" {
+		t.Errorf("body = %q, want the generic body", got)
+	}
+}

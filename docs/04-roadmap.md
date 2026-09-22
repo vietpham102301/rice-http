@@ -161,6 +161,10 @@ Not scheduled, not promised. Each would need its own brainstorm.
 - Typed per-request store keys (`rice.Key[T]` with a `Get` returning `T`), safer than
   `Set(string, any)` and immune to key collisions between middleware. Rejected for M6 because
   the documented API was already `string`/`any`.
+- `middleware.RealIP` parsing an `X-Forwarded-For` entry that carries a port
+  (`203.0.113.9:4711`) or is a bracketed IPv6 address (`[2001:db8::1]`). Some load balancers
+  append `ip:port`, and behind them `RealIP` currently falls back to the connection's address and
+  reports the proxy.
 
 ## Done after M8
 
@@ -183,7 +187,7 @@ Outside any milestone, because the API was already written down in
   disconnects, which fasthttp does not report.
   [ADR-0010](adr/0010-request-context-cancels-at-force-close.md) records why, and names the
   passthrough and the two other alternatives that lost. `ClientIP` reads no header;
-  `middleware.RealIP` is what will. Cookies, form/multipart and `Redirect` were on the same
+  `middleware.RealIP` resolves `X-Forwarded-For`, below. Cookies, form/multipart and `Redirect` were on the same
   list and were cut: nothing in the first service that will use rice needs them, and they stay
   unpromised until a real use case arrives with its own brainstorm.
 - The `binding/` package, which came off the deferred list above with a design of its own. One
@@ -194,7 +198,7 @@ Outside any milestone, because the API was already written down in
   from `Validate` passes through with its own status.
   [ADR-0011](adr/0011-binding-is-generic-and-validation-is-a-method.md) records the shape and
   names the two alternatives that lost — struct tags with a third-party validator, and a
-  reflection-free decoder written per type. It is the one place in rice that buys ergonomics with
+  reflection-free decoder written per type. It was the first place in rice to buy ergonomics with
   allocations, and it is pinned at an exact measured figure in
   [05-performance-model.md](05-performance-model.md) rather than bounded.
   Deliberately left out: no `Content-Type` check, because real clients omit the header and a 415
@@ -202,3 +206,21 @@ Outside any milestone, because the API was already written down in
   `WithMaxBodySize` already sets one at the transport and a second would be two sources of truth;
   and no `binding.Query` or `binding.Header`, because `c.Query` and `c.Header` exist and binding
   them without struct tags would be contrived.
+- `middleware.RealIP`, `middleware.RequestID` and `middleware.Logger`, the access log, and two
+  changes to core without which the log could not tell the truth. Probing before the design found
+  that application middleware never ran on a route miss, so a logger would never have recorded a
+  404; and that a middleware reading the status after `next` read it before the funnel wrote it,
+  so a logger would have recorded every 500 as a 200. Core now compiles a miss chain from the
+  application's middleware ([ADR-0012](adr/0012-application-middleware-runs-on-route-misses.md))
+  and gains `c.HandleError`, which runs the `ErrorHandler` at once and marks the request settled
+  ([ADR-0013](adr/0013-middleware-can-settle-a-request.md)); both hold their paths at zero
+  allocations. `RealIP(trustedHops)` counts `X-Forwarded-For` from the trusted end and sets the
+  address on every request, because fasthttp keeps a rewritten address for the life of a
+  keep-alive connection; it does not parse an entry with a port or a bracketed IPv6 entry, which
+  falls back to the connection's address. `RequestID` keeps an incoming id only if it is safe to
+  log. `Logger` records the status the client receives and is not told about a panic unless
+  `Recover` sits inside it. The three allocate, and each figure is pinned with its fixture in
+  [05-performance-model.md](05-performance-model.md#opt-in-packages). Timeout stays on the list
+  above: a pre-emptive timeout would release the `Ctx` while the handler's goroutine still holds
+  it, and that needs a design of its own. CORS, which the miss chain makes possible, is the other
+  unbuilt middleware and has no design yet.

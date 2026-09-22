@@ -39,6 +39,11 @@ func (a *App) build() {
 		}
 	}
 
+	// The miss chain gets the application's middleware and nothing else. With
+	// none, chain.Compile returns notFound itself and a miss behaves exactly as
+	// it did before this chain existed.
+	a.miss = chain.Compile(Handler(notFound), a.mws)
+
 	a.built = true
 }
 
