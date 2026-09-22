@@ -66,11 +66,25 @@ func TestAllocBudgetRequestIDGenerated(t *testing.T) {
 
 // TestAllocBudgetLogger pins Logger's cost with slog's JSON handler writing to
 // io.Discard. A different handler costs differently; the figure is for this one.
+//
+// want=3 is the exact figure, measured without -race, and off-race this stays
+// an exact equality in both directions. Under -race it is a ceiling of want+1
+// instead: the race detector drops some sync.Pool Puts and clears pools on GC,
+// and slog's JSON handler takes exactly one pooled buffer per record, so a
+// cleared pool costs at most one extra allocation per call. See budget's
+// doc comment in budget_test.go (package rice) for the same sync.Pool
+// behaviour under -race; this does not restate it.
 func TestAllocBudgetLogger(t *testing.T) {
 	const want float64 = 3
 
 	l := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	got := measure(t, middleware.Logger(l), nil)
+	if raceDetector {
+		if got > want+1 {
+			t.Errorf("Logger allocated %.1f objects per call, want at most %.0f under -race", got, want+1)
+		}
+		return
+	}
 	if got != want {
 		t.Errorf("Logger allocated %.1f objects per call, want exactly %.0f", got, want)
 	}
