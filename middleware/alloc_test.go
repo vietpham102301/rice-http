@@ -64,28 +64,68 @@ func TestAllocBudgetRequestIDGenerated(t *testing.T) {
 	}
 }
 
-// TestAllocBudgetLogger pins Logger's cost with slog's JSON handler writing to
-// io.Discard. A different handler costs differently; the figure is for this one.
+// assertAllocBudget fails when got misses the budget for name: an exact match
+// to want off-race, or a ceiling of want+2 under -race.
 //
-// want=3 is the exact figure, measured without -race, and off-race this stays
-// an exact equality in both directions. Under -race it is a ceiling of want+1
-// instead: the race detector drops some sync.Pool Puts and clears pools on GC,
-// and slog's JSON handler takes exactly one pooled buffer per record, so a
-// cleared pool costs at most one extra allocation per call. See budget's
-// doc comment in budget_test.go (package rice) for the same sync.Pool
-// behaviour under -race; this does not restate it.
+// The +2 is not a guess: go1.25.6's log/slog/handler.go takes two buffers from
+// one sync.Pool per record — commonHandler.handle at line 271
+// (h.newHandleState(buffer.New(), true, "")) and newHandleState itself at line
+// 402 (prefix: buffer.New()) — and frees both back to that pool in
+// handleState.free, at lines 413 and 419. Under -race the pool drops some Puts
+// and gets cleared by GC (see budget's doc comment in budget_test.go, package
+// rice, for that general sync.Pool behaviour), so a cleared pool can cost at
+// most two extra allocations per call, not one. Check these line numbers
+// against your own Go version if this ever needs re-deriving.
+func assertAllocBudget(t *testing.T, name string, got, want float64) {
+	t.Helper()
+	if raceDetector {
+		if got > want+2 {
+			t.Errorf("%s allocated %.1f objects per call, want at most %.0f under -race", name, got, want+2)
+		}
+		return
+	}
+	if got != want {
+		t.Errorf("%s allocated %.1f objects per call, want exactly %.0f", name, got, want)
+	}
+}
+
+// TestAllocBudgetLogger pins Logger's cost with slog's JSON handler writing to
+// io.Discard, installed without RequestID. A different handler costs
+// differently; the figure is for this one.
+//
+// This measures the five-attribute path only: method, path, status, latency
+// and ip. log/slog/record.go's nAttrsInline is 5 — a Record holds that many
+// attributes inline and spills any more into a heap slice — and with no
+// RequestID installed, RequestIDFrom returns "" and Logger builds only five,
+// so this figure is not what Logger costs in the configuration its own doc
+// comment recommends. See TestAllocBudgetLoggerWithRequestID for that: the
+// sixth attribute, request_id, is exactly what spills.
 func TestAllocBudgetLogger(t *testing.T) {
 	const want float64 = 3
 
 	l := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	got := measure(t, middleware.Logger(l), nil)
-	if raceDetector {
-		if got > want+1 {
-			t.Errorf("Logger allocated %.1f objects per call, want at most %.0f under -race", got, want+1)
-		}
-		return
-	}
-	if got != want {
-		t.Errorf("Logger allocated %.1f objects per call, want exactly %.0f", got, want)
-	}
+	assertAllocBudget(t, "Logger", got, want)
+}
+
+// TestAllocBudgetLoggerWithRequestID pins the cost of Logger and RequestID
+// together — the configuration Logger's own doc comment recommends — with
+// slog's JSON handler writing to io.Discard.
+//
+// The sixth attribute, request_id, spills log/slog's five-attribute inline
+// storage (see TestAllocBudgetLogger's doc comment) into a heap slice, so this
+// figure is not TestAllocBudgetLogger's plus a fixed increment for the id;
+// it is measured directly. It is measured combined, rather than isolating
+// Logger's six-attribute cost from RequestID's own cost, because RequestID's
+// store key is unexported: nothing outside middleware can install a fake id
+// for Logger to read without running RequestID itself. This combined figure
+// is also the one a user actually pays, since the two are meant to be
+// installed together.
+func TestAllocBudgetLoggerWithRequestID(t *testing.T) {
+	const want float64 = 6
+
+	l := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	mw := func(next rice.Handler) rice.Handler { return middleware.Logger(l)(middleware.RequestID()(next)) }
+	got := measure(t, mw, nil)
+	assertAllocBudget(t, "Logger+RequestID", got, want)
 }
