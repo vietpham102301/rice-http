@@ -16,6 +16,50 @@ Each entry uses this shape:
 
 ---
 
+## 2026-09-22 — post-M8 — Correction: RequestID's budget is not exact under `-race` on Linux
+
+**Did:** CI went red on the merge of the entry below. `TestAllocBudgetRequestIDGenerated`
+allocated 3 where it pinned exactly 2, and `TestAllocBudgetLoggerWithRequestID` allocated 9 where
+it allowed at most 8. Both passed on the author's machine, repeatedly, under `-race`. The two
+budgets now carry a ceiling under `-race` derived from a specific mechanism — `want+1` for
+`RequestID`, `want+3` for the pair — and stay exact without it. `assertAllocBudget` takes each
+budget's slack as an argument, with the rule that a slack is derived in the budget's doc comment
+and is never a tolerance to tune. `docs/05-performance-model.md` is corrected. No code outside
+`middleware/alloc_test.go` changed.
+
+**Learned:** Two things.
+
+1. *The entry below says "`RealIP` and `RequestID` use no pool and stay exact under `-race`". That
+   is false for `RequestID` on Linux.* The claim rested on measurements from one platform,
+   darwin/arm64, and was written as though it held on all of them. Reproduced in a Linux container
+   and isolated one variable at a time: the Go patch version made no difference (1.25.6 and 1.25.14
+   both gave 3 under `-race`, 2 without); the race detector did, and only on Linux. A memory profile
+   put the extra allocation in `newRequestID` itself, and `go build -race -gcflags=-m` gave the
+   reason: `moved to heap: b` on Linux, nothing on darwin. `crypto/rand`'s Linux source ends in a
+   `syscall.Syscall`, and the race build makes that buffer argument escape. Production is
+   unaffected — without `-race` the buffer stays on the stack on every platform and the documented
+   figure of 2 holds — which is why the test changed and the code did not. The lesson is not about
+   `crypto/rand`: an allocation count is a property of a platform and a build mode, not of a
+   function, and "measured" means "measured here".
+
+2. *Two older tests assume port 1 cannot be bound, and that assumption is false in a container.*
+   Reproducing CI in Docker failed `TestRunContextReturnsABindErrorAtOnce` and hung
+   `TestRunReturnsAnErrorOnAnUnbindableAddress`: Docker sets `net.ipv4.ip_unprivileged_port_start`
+   to 0, so any user can bind port 1 and `Run` serves forever. The second test had also been
+   passing only by accident — the first had already taken port 1, so the second got "address
+   already in use" and saw the error it wanted. GitHub's runners are virtual machines with the
+   default of 1024, so CI is not affected. Neither test is fixed here; both are recorded.
+
+**Measured:** Linux arm64 in Docker, go1.25.14: `RequestID` 2 without `-race`, 3 with it; the same
+under go1.25.6. darwin arm64, go1.25.6: 2 both ways. With the ceilings, the middleware budgets pass
+twenty runs under `-race` and five without on both platforms, and the full CI command passes on
+Linux, `-race` and `-tags ricedebug`, apart from the two port-1 tests, which Docker cannot run.
+
+**Next:** Make the two port-1 tests independent of the host — bind a port, hold it, and hand
+the held address to `Run` — so that they neither hang in a container nor pass by accident.
+
+---
+
 ## 2026-09-22 — post-M8 — An access log that tells the truth, and the two things core hid from middleware
 
 **Did:** Two changes to core and three middleware. Core first, because without it the log could

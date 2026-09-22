@@ -200,9 +200,9 @@ this cost, and a user who never imports the package pays none of it.
 | --- | --- | --- | --- |
 | `binding.JSON` with the `createUser` fixture | 9, exactly | MEASURED after M8 | `TestAllocBudgetJSONBinding` |
 | `middleware.RealIP(1)`, a two-entry `X-Forwarded-For` header | 3, exactly | MEASURED after M8 | `TestAllocBudgetRealIP` |
-| `middleware.RequestID`, generating an id (no incoming header) | 2, exactly | MEASURED after M8 | `TestAllocBudgetRequestIDGenerated` |
+| `middleware.RequestID`, generating an id (no incoming header) | 2, exactly; at most 3 under `-race` | MEASURED after M8 | `TestAllocBudgetRequestIDGenerated` |
 | `middleware.Logger` alone, slog's JSON handler on `io.Discard`, five attributes | 3, exactly; at most 5 under `-race` | MEASURED after M8 | `TestAllocBudgetLogger` |
-| `middleware.Logger` wrapped around `middleware.RequestID`, same handler, six attributes | 6, exactly; at most 8 under `-race` | MEASURED after M8 | `TestAllocBudgetLoggerWithRequestID` |
+| `middleware.Logger` wrapped around `middleware.RequestID`, same handler, six attributes | 6, exactly; at most 9 under `-race` | MEASURED after M8 | `TestAllocBudgetLoggerWithRequestID` |
 
 **Why it allocates at all.** `DisallowUnknownFields` exists only on `json.Decoder`, not on
 `json.Unmarshal`, so a strict decode needs a `Decoder` and a `bytes.Reader` for it to read from,
@@ -287,7 +287,18 @@ under `-race` flipped between 3 and 4 across runs, about three failures in eight
 runs with an exact pin. Package `rice`'s own `budget` helper documents the same pool behaviour.
 `make test` and CI run with `-race`, so the ceiling is what CI enforces: it catches a rise of
 three or more there, and the exact pin, which catches any movement, runs without `-race`.
-`RealIP` and `RequestID` use no pool and stay exact under `-race`.
+`RealIP` has no mechanism of either kind and stays exact under `-race`, on every platform CI or
+the author has run it on.
+
+**Under `-race` `RequestID` is a ceiling of `want+1`, and only because of Linux.** Built with the
+race detector for Linux, the compiler moves the 16-byte buffer `newRequestID` fills from
+`crypto/rand` onto the heap: `go build -race -gcflags=-m` reports `moved to heap: b` there and
+nothing on darwin, because `crypto/rand`'s Linux source ends in a `syscall.Syscall` whose buffer
+argument the race build makes escape. A memory profile under Linux with `-race` shows exactly one
+extra allocation per call, in `newRequestID` itself. Without `-race` the buffer stays on the stack
+on every platform, so production pays 2. The `Logger` and `RequestID` row adds both mechanisms:
+a ceiling of `want+3`. Each budget's slack is derived in its own doc comment and is not a
+tolerance to tune; a budget with no mechanism passes zero and stays exact under `-race`.
 
 ## The techniques, and what each one costs
 
