@@ -15,7 +15,10 @@ middleware chains are compiled and routes are inserted into the trees. Triggered
 or by the test helper, run under `sync.Once`.
 
 **Chain** — the single closure produced by wrapping a handler in its middleware, computed
-during the build phase and stored on the route.
+during the build phase and stored on the route. One chain belongs to no route: the miss chain,
+the application's middleware around a handler that returns `ErrNotFound`, stored on the `App`
+and run for every request no route matches. See
+[ADR-0012](adr/0012-application-middleware-runs-on-route-misses.md).
 
 **Ctx** — rice's pooled per-request handle. Distinct from `context.Context` (Go's
 cancellation type) and from `fasthttp.RequestCtx` (the transport's request object). When

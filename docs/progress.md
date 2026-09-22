@@ -16,6 +16,122 @@ Each entry uses this shape:
 
 ---
 
+## 2026-09-22 — post-M8 — An access log that tells the truth, and the two things core hid from middleware
+
+**Did:** Two changes to core and three middleware. Core first, because without it the log could
+not be right. A route miss now runs the application's middleware: `App` gained a `miss` handler,
+set to `notFound` in `New` and replaced in `build` with `chain.Compile(notFound, a.mws)` — the
+application's middleware only, never a group's or a route's
+([ADR-0012](adr/0012-application-middleware-runs-on-route-misses.md)). And `Ctx` gained
+`HandleError(err)`, which runs the `ErrorHandler` at once and sets a `handled` flag that `reset`
+clears and `handle` reads, so a settled error is not answered twice; the panic path ignores the
+flag on purpose, because a panic is always a 500
+([ADR-0013](adr/0013-middleware-can-settle-a-request.md)). Then, in `middleware/`:
+`RealIP(trustedHops)` counts `X-Forwarded-For` from the trusted end across every header line and
+calls `SetRemoteAddr` on every request, resolved or not; `RequestID()` keeps an incoming
+`X-Request-Id` only if it is 1–64 characters of `[A-Za-z0-9_-]`, generates 32 hex characters
+otherwise, echoes it, and exposes it through `RequestIDFrom(c)`; `Logger(l *slog.Logger)` settles
+the chain's error with `HandleError`, reads the status, and writes one line — method, path, status,
+latency, address, request id — at `ERROR` for 5xx and `INFO` otherwise, never logging the query
+string. The recommended order, `Logger`, `Recover`, `RealIP`, `RequestID`, is in `middleware/doc.go`,
+`Logger`'s doc comment and the README. Deliberately left out: Timeout and CORS, each needing a
+design of its own, and putting the request id in `c.Context`, which would cost an allocation per
+request for a use most handlers never have.
+
+Two limitations are documented rather than fixed. `RealIP` parses bare IP addresses only: an entry
+with a port (`203.0.113.9:4711`) or a bracketed IPv6 entry falls back to the connection's address.
+That is safe — no input attributes a request to an address the client chose — but behind a proxy
+that always appends a port, `RealIP` always reports the proxy, and no test pins that fallback yet.
+And a request that panics is not logged unless `Recover` sits inside `Logger`;
+`TestLoggerDoesNotLogAPanicWithoutRecoverInside` pins it, so a change in behaviour forces a change
+in `middleware/doc.go`.
+
+**Learned:** Five things. The first three were found by probing rice at `33e5d71` before the
+design was written; the last two were found while building it, and both are corrections of the
+reasoning of the person directing the work, which is why they are here.
+
+1. *Application middleware never ran on a route miss.* `handle` called the funnel directly when the
+   lookup failed, and `app.Use` middleware existed only inside matched routes' compiled chains. No
+   document said so; it was an unexamined consequence of M4's compiled-chain design, not a
+   decision. It would have broken three of the five planned middleware before any was written: a
+   Logger that never records a 404, a RequestID that gives a 404 no id, and a CORS middleware that
+   can never answer a preflight `OPTIONS` for a path with no `OPTIONS` route.
+
+2. *A middleware read the status before the funnel wrote it.* The funnel runs after the whole
+   chain returns, so a middleware reading the status after `next(c)` saw 200 for a handler that
+   returned a 418, and 200 for one that returned a plain error the client received as 500. The
+   obvious Logger would have recorded every production 500 as a 200. The fix could not be a
+   function from error to status: the status belongs to the `ErrorHandler`, which an App may
+   replace, so only running it answers the question.
+
+3. *A rewritten remote address outlived its request on a keep-alive connection.* fasthttp serves
+   every request on a connection from one `RequestCtx` and clears an address set with
+   `SetRemoteAddr` only when the connection closes. A probe middleware that rewrote the address
+   only when it could resolve a header reported client A's address for a second, different
+   client's request on the same connection. Behind a reverse proxy, which multiplexes many clients
+   onto a few keep-alive connections, that attributes one client's requests to another. `RealIP`
+   therefore sets the address on every request, and `TestRealIPDoesNotLeakAnAddressAcrossKeepAliveRequests`
+   reproduces the leak on one real TCP connection.
+
+4. *The plan's own log-injection test never delivered a newline.* It sent an `X-Request-Id`
+   containing `\n` and asserted the id was replaced. fasthttp's `Header.Set` rewrites `\n` to a
+   space before storing it, and its HTTP/1.1 parser rejects a raw `\n` on the wire, so the
+   "newline" subtest was byte for byte the "space" subtest. The control was correct; nothing proved
+   it. Review found it. The end-to-end subtest now says what it really shows, and a direct internal
+   test, `TestValidRequestIDRejectsControlBytes`, calls `validRequestID` with raw `\n`, `\r`, tab and
+   NUL — with a mutation proof that it fails if `\n` is allowed. The same review found that the
+   doc comment's example key, `requestIDKey{}`, was not valid Go: `requestIDKey` is a string
+   constant, not a type.
+
+5. *The first ruling on the `Logger` budget stated a false mechanism.* The budget flipped between 3
+   and 4 under `-race`. The ruling said slog takes one pooled buffer per record and set a `-race`
+   ceiling of `want+1`. Reading slog's source showed two, from one `sync.Pool`
+   (`log/slog/handler.go:271` and `:402`, returned at `:413` and `:419`, go1.25.6), so a cleared
+   pool can cost two. The `+1` had held in every run; the reasoning written beside it was wrong. The
+   same ruling measured only the five-attribute path, not the six-attribute one `Logger`'s own
+   documentation recommends. A green test with a false comment was caught by review, not by the
+   test — a test cannot check the sentence above it.
+
+**Measured:** Every figure below was broken on purpose before it was trusted.
+
+- `c.HandleError`, with `ErrNotFound` through the default funnel: **0**
+  (`TestAllocBudgetHandleError`). Broken on purpose:
+  `Ctx.HandleError allocated 3.0 objects per call, budget is 0`.
+- A 404 through a miss chain with one no-op application middleware: **0**
+  (`TestAllocBudget404WithAppMiddleware`). It was not broken during implementation — its first,
+  pre-implementation run passed only because the middleware never ran on a miss — so it was broken
+  for this entry, in a throwaway worktree, with a `fmt.Sprint` into a package-level sink inside the
+  middleware: `404 through a miss chain with application middleware allocated 2.0 objects per
+  call, budget is 0`. `TestAllocBudget404`, no application middleware, is still **0**. `TestNewCtxStaysWithinThreeAllocations` and every other dispatch budget were re-run
+  with the new `handled` field and the miss chain and did not move.
+- `RealIP(1)` with a two-entry `X-Forwarded-For` header: **3** (`TestAllocBudgetRealIP`).
+  `RealIP allocated 3.0 objects per call, want exactly 2` and `… want exactly 4`.
+- `RequestID`, generating an id (no incoming header): **2** (`TestAllocBudgetRequestIDGenerated`).
+  `RequestID (generating) allocated 2.0 objects per call, want exactly 1` and `… want exactly 3`.
+- `Logger` alone, slog's JSON handler on `io.Discard`, five attributes all inline: **3**
+  (`TestAllocBudgetLogger`). `Logger allocated 3.0 objects per call, want exactly 2` and
+  `… want exactly 4`.
+- `Logger` wrapped around `RequestID`, the recommended configuration, same handler: **6**
+  (`TestAllocBudgetLoggerWithRequestID`). `Logger+RequestID allocated 6.0 objects per call, want
+  exactly 5` and `… want exactly 7`. **Explained, not only measured:** 3 + 2 + 1, the extra one
+  being the sixth attribute, `request_id`, spilling `slog.Record`'s five inline slots
+  (`nAttrsInline = 5`, `log/slog/record.go:13`) into a heap slice.
+
+Each middleware figure is pinned exactly in both directions when built without the race detector.
+The two `Logger` budgets assert a ceiling of `want+2` under `-race`, for the two pooled buffers
+above; `RealIP` and `RequestID` use no pool and stay exact under `-race`. How `RealIP`'s 3 and
+`RequestID`'s 2 divide has not been profiled. No benchmark was re-recorded: dispatch for a matched
+route did not change, and a miss with no application middleware runs the same `notFound` it did.
+`make cover`: root package 99.3%, `binding` 100.0%, 99.2% overall — unmoved. `middleware` **dropped
+from 100.0% to 98.6%**: the one uncovered block is `Logger`'s early return when the logger's level
+is disabled, and the comment beside it states a property — a disabled `Logger` still settles the
+request — that no test pins.
+
+**Next:** Timeout, which needs a design of its own: a pre-emptive timeout would release the `Ctx`
+while the handler's goroutine still holds it. Then CORS, which the miss chain has made possible.
+
+---
+
 ## 2026-09-20 — post-M8 — Binding, where the convenience stops, and a plan that could not compile
 
 **Did:** A new package, `binding/`, beside `middleware/` and importing rice one way. One exported

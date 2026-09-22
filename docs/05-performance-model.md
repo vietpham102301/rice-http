@@ -22,6 +22,9 @@ The claim is narrow on purpose. It does **not** cover:
 - The first requests after start, while the pool warms and the trees are cold in cache.
 - Request bodies large enough that fasthttp allocates rather than reusing its buffer.
 - `ParamString` and every other method whose name says it copies.
+- The opt-in packages, `binding/` and the allocating middleware in `middleware/`. They are rice's
+  code, but a user who does not import them pays nothing for them, and each is pinned at its own
+  figure under [Opt-in packages](#opt-in-packages).
 
 Stating the exclusions is more useful than the claim itself. A framework that says
 "zero allocations" without them is measuring a benchmark, not a system.
@@ -61,6 +64,7 @@ Every exported method of `Ctx`, one row each.
 | `c.ClientIP` | 0 | MEASURED after M8 | `TestAllocBudgetClientIP` |
 | `c.Context` | 0 | MEASURED after M8 | `TestAllocBudgetContext` |
 | `c.SetContext` | 0 | MEASURED after M8 | `TestAllocBudgetContext` |
+| `c.HandleError` (`ErrNotFound`, default funnel) | 0 | MEASURED after M8 | `TestAllocBudgetHandleError` |
 
 The four M8 rows are new tests, not new code: `Status`, `SetHeader` and `SetContentType` write
 into fasthttp's reused response header, and `RequestCtx` returns a field. Each was broken once on
@@ -98,6 +102,16 @@ stays green. A package-level sink assigned from `fmt.Sprint(...)` was used inste
 and the dispatch budgets were re-run afterwards and did not move — predicted, then measured
 rather than assumed, because the note below explains how narrow the margin on three objects is.
 
+`HandleError` came with [ADR-0013](adr/0013-middleware-can-settle-a-request.md). It sets a flag
+and calls the funnel, so its row is 0 excluding whatever the `ErrorHandler` costs; the fixture is
+`ErrNotFound` through `DefaultErrorHandler`, which is itself free. The test clears the flag inside
+the measured closure, because `HandleError` is a no-op on a settled request and every iteration
+after the first would otherwise measure the no-op. Broken once on purpose, with an `fmt.Sprint`
+of an `*HTTPError` into a package-level sink, it failed with
+`Ctx.HandleError allocated 3.0 objects per call, budget is 0`. `Ctx` grew by one `bool` for the
+flag, and `TestNewCtxStaysWithinThreeAllocations` and every dispatch budget were re-run and did
+not move.
+
 ### Request path — dispatch
 
 | Operation | Budget | Status | Enforced by |
@@ -111,6 +125,7 @@ rather than assumed, because the note below explains how narrow the margin on th
 | Recovery installed, nothing panics | 0 extra | MEASURED M5 | `TestAllocBudgetDispatchWithRecover` |
 | `ConnState` hook, per request (`StateActive` + `StateIdle`) | 0 | MEASURED M7 | `TestConnStateActiveAndIdleAreFree` |
 | 404 through the funnel | 0 | MEASURED M6 | `TestAllocBudget404` |
+| 404 through a miss chain with one no-op application middleware | 0 | MEASURED after M8 | `TestAllocBudget404WithAppMiddleware` |
 | Handler returns a fresh HTTPError | 1 | MEASURED M6 | `TestAllocBudgetHTTPErrorReturn` |
 | Panic recovered, stack captured | documented, not bounded | MEASURED M5 | `BenchmarkDispatchPanic` (a benchmark, not a budget) |
 | **End to end: single handler, unpooled Ctx (M1 baseline)** | 1 | MEASURED M1 | historical — `bench/results/M1-minimal-server.txt`; the pooled rows below replaced it |
@@ -132,6 +147,15 @@ The two rows that changed value rather than status did so because the `Ctx` stop
 allocation. A 404 was 1 and is 0; a handler returning a fresh `HTTPError` was 2 and is 1, the
 one that remains being the `HTTPError` itself. Neither path was touched in M6 — the allocation
 that left them was the one every dispatch carried.
+
+A miss now runs the application's middleware
+([ADR-0012](adr/0012-application-middleware-runs-on-route-misses.md)), and neither 404 row moved.
+The miss chain is compiled once in `Build` and returns the package-level `ErrNotFound`, so it costs
+what a matched route's chain costs: nothing per request. With no application middleware the chain
+is `notFound` itself, which is the configuration `TestAllocBudget404` measures, still 0. The new
+row was broken once on purpose, with a `fmt.Sprint` into a package-level sink inside the
+middleware, and failed with
+`404 through a miss chain with application middleware allocated 2.0 objects per call, budget is 0`.
 
 `c.Set` is the one row where the number is not rice's. The store never grows within its
 capacity, but converting a non-pointer value to `any` at the *call site* allocates the
@@ -168,13 +192,17 @@ was bought with the allocation, and if the reasoning is interesting, an ADR.
 
 ### Opt-in packages
 
-Nothing here is on the request path unless a handler calls it. The rows are kept out of the `Ctx`
-tables above for that reason: a row among those would imply every user pays this cost, and a user
-who never imports the package pays none of it.
+Nothing here is on the request path unless a handler calls it or the App installs it. The rows are
+kept out of the `Ctx` tables above for that reason: a row among those would imply every user pays
+this cost, and a user who never imports the package pays none of it.
 
 | Operation | Budget | Status | Enforced by |
 | --- | --- | --- | --- |
 | `binding.JSON` with the `createUser` fixture | 9, exactly | MEASURED after M8 | `TestAllocBudgetJSONBinding` |
+| `middleware.RealIP(1)`, a two-entry `X-Forwarded-For` header | 3, exactly | MEASURED after M8 | `TestAllocBudgetRealIP` |
+| `middleware.RequestID`, generating an id (no incoming header) | 2, exactly | MEASURED after M8 | `TestAllocBudgetRequestIDGenerated` |
+| `middleware.Logger` alone, slog's JSON handler on `io.Discard`, five attributes | 3, exactly; at most 5 under `-race` | MEASURED after M8 | `TestAllocBudgetLogger` |
+| `middleware.Logger` wrapped around `middleware.RequestID`, same handler, six attributes | 6, exactly; at most 8 under `-race` | MEASURED after M8 | `TestAllocBudgetLoggerWithRequestID` |
 
 **Why it allocates at all.** `DisallowUnknownFields` exists only on `json.Decoder`, not on
 `json.Unmarshal`, so a strict decode needs a `Decoder` and a `bytes.Reader` for it to read from,
@@ -211,6 +239,55 @@ and without a mechanism behind it.
 **The escape hatch.** A handler that must not pay this decodes `c.Body()` itself — the same three
 lines [ADR-0006](adr/0006-no-reflection-in-core.md) said users would write, with the borrow
 contract applying to the body as it always has. `binding.JSON`'s doc comment names it.
+
+#### The three observability middleware
+
+Each figure is measured by wrapping the middleware around a handler that does nothing, inside a
+real dispatch, warmed once before `AllocsPerRun`. Each is pinned in both directions when built
+without the race detector — `want` one lower fails and `want` one higher fails — for the same
+reason `binding.JSON` is: an allocation that quietly goes away would otherwise leave the figure
+stale. The failures were seen, not assumed: `RealIP allocated 3.0 objects per call, want exactly 2`
+and `want exactly 4`; `RequestID (generating) allocated 2.0 objects per call, want exactly 1` and
+`want exactly 3`; `Logger allocated 3.0 objects per call, want exactly 2` and `want exactly 4`;
+`Logger+RequestID allocated 6.0 objects per call, want exactly 5` and `want exactly 7`.
+
+**`RealIP`, 3.** The fixture is `RealIP(1)` with `X-Forwarded-For: 198.51.100.7, 203.0.113.9`.
+The candidates are the string the chosen entry is converted to for `net.ParseIP`, the `net.IP` it
+returns, and the `*net.TCPAddr` handed to `SetRemoteAddr`. That is an account, not an attribution:
+no profile was taken. A request with no header takes the fallback, `SetRemoteAddr(nil)`, and is not
+what this row measures.
+
+**`RequestID`, 2.** The fixture sends no `X-Request-Id`, so an id is generated: 16 bytes from
+`crypto/rand`, hex-encoded into a new string, then stored with `c.Set`. The likely two are that
+string and the boxing of it into `any` at the `c.Set` call site — the cost the `c.Set` row above
+describes — but, as for `RealIP`, no profile was taken. An incoming id that passes the check is
+copied into a string instead of generated, and is not what this row measures.
+
+**`Logger`, 3 and 6, and the handler is part of the figure.** Both are measured with
+`slog.New(slog.NewJSONHandler(io.Discard, nil))`. A different handler, or a different writer,
+costs differently, and neither figure predicts it. Any documentation of these numbers that omits
+the handler is wrong.
+
+The two rows differ by more than `RequestID`'s own 2, and the difference is explained, not only
+measured. Alone, `Logger` builds five attributes — method, path, status, latency, address. With
+`RequestID` installed it builds a sixth, `request_id`. `slog.Record` holds five attributes inline
+(`nAttrsInline = 5`, `log/slog/record.go:13` in go1.25.6) and spills any more into a heap slice, so
+the sixth attribute costs one allocation of its own: 3 for `Logger` + 2 for `RequestID` + 1 for the
+spill = 6. The six-attribute row is the one to quote, because it is the configuration `Logger`'s
+documentation recommends. `Logger`'s six-attribute cost is not measured in isolation: `RequestID`'s
+store key is unexported, so nothing outside the package can hand `Logger` an id without running
+`RequestID`.
+
+**Under `-race` the two `Logger` rows are a ceiling of `want+2`, not an exact figure.** slog's
+handler takes two buffers per record from one `sync.Pool` — `commonHandler.handle` at
+`log/slog/handler.go:271` and `newHandleState` at `:402`, returned at `:413` and `:419` (go1.25.6).
+The race runtime deliberately drops a share of `sync.Pool` Puts, and a garbage collection clears
+the pool, so a call can find it empty and allocate up to two more buffers. Measured, the figure
+under `-race` flipped between 3 and 4 across runs, about three failures in eight fresh `make test`
+runs with an exact pin. Package `rice`'s own `budget` helper documents the same pool behaviour.
+`make test` and CI run with `-race`, so the ceiling is what CI enforces: it catches a rise of
+three or more there, and the exact pin, which catches any movement, runs without `-race`.
+`RealIP` and `RequestID` use no pool and stay exact under `-race`.
 
 ## The techniques, and what each one costs
 

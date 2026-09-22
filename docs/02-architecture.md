@@ -41,7 +41,7 @@ rice-http/
 ├── app.go              App, New (builds the fasthttp.Server), Option, the timeouts and body limit, the transport error handler, dispatch, the funnel
 ├── handler.go          Handler
 ├── middleware.go       Middleware
-├── ctx.go              Ctx: the per-request handle, reset, Method/Path, Query/Header/Body, Context/ClientIP
+├── ctx.go              Ctx: the per-request handle, reset, Method/Path, Query/Header/Body, Context/ClientIP, HandleError
 ├── ctx_param.go        Ctx read side: route parameters, borrowed and copied
 ├── ctx_response.go     Ctx write side: Status, headers, String/Bytes/JSON, NoContent
 ├── ctx_store.go        Ctx per-request store: Set, Get, and its pre-sized slice
@@ -50,7 +50,7 @@ rice-http/
 ├── poison_release.go   !ricedebug: the same API, empty, compiled away
 ├── route.go            registration for all eight verbs, App.Use, tree selection, lookup
 ├── group.go            Group: prefix and middleware scoping, and the registration guards
-├── build.go            Build: chain compilation and tree rebuild, once
+├── build.go            Build: chain compilation, the miss chain, and tree rebuild, once
 ├── method.go           the method enum and the fixed-array index
 ├── errors.go           HTTPError, PanicError, ErrNotFound, ErrorHandler, DefaultErrorHandler
 ├── server.go           Run, Serve, RunContext, Addr, Shutdown, ErrShutdownTimeout
@@ -60,7 +60,11 @@ rice-http/
 ├── internal/
 │   ├── router/         radix tree: insert, lookup, param capture, priority
 │   └── chain/          middleware chain compilation
-├── middleware/         optional, opt-in: recover
+├── middleware/         optional, opt-in; imports rice, and nothing imports it
+│   ├── recover.go      Recover: a panic becomes an error outer middleware can see
+│   ├── realip.go       RealIP: X-Forwarded-For counted from the trusted end
+│   ├── requestid.go    RequestID, RequestIDFrom: an id per request, an incoming one kept only if safe to log
+│   └── logger.go       Logger: one slog line per request, with the status the client receives
 ├── binding/            optional, opt-in: binding.JSON[T], strict decode plus Validate; imports rice, and nothing imports it
 ├── docs/               these documents, the ADRs, milestone retrospectives, the journal
 ├── bench/              benchmark suite and recorded results, one file per milestone
@@ -68,8 +72,8 @@ rice-http/
 └── .github/workflows/  CI
 ```
 
-logger, requestid and timeout are still unbuilt; `middleware/` currently holds only
-`Recover`.
+Timeout and CORS are still unbuilt, and each needs its own design; `middleware/` holds
+`Recover`, `RealIP`, `RequestID` and `Logger`.
 
 **What later milestones add.** These are named here so the layout is predictable, not
 because they exist:
@@ -97,7 +101,7 @@ step. Almost everything expensive happens in the first phase.
 flowchart TD
     A["rice.New()<br/>(creates the Ctx pool)"] --> B["app.Use(mw...)<br/>app.GET/POST(...)<br/>app.Group(...)<br/>→ tracks the max param count"]
     B --> C["app.build()<br/>(called once by Run or Test)"]
-    C --> C1["compile middleware chains<br/>into one closure per route"]
+    C --> C1["compile middleware chains<br/>into one closure per route,<br/>and the miss chain from app middleware"]
     C --> C2["insert compiled handlers<br/>into per-method radix trees"]
     C1 & C2 --> D["serving phase:<br/>tree lookup + one closure call"]
 ```
@@ -110,9 +114,11 @@ place to reject an invalid configuration before the socket is ever opened. `buil
 under `sync.Once`; registering a route after build panics with a clear message rather than
 racing. See [ADR-0003](adr/0003-middleware-as-prebuilt-closure-chain.md).
 
-Two things deliberately sit outside the build step. The `Ctx` pool is created in `New`, because
+Three things deliberately sit outside the build step. The `Ctx` pool is created in `New`, because
 the dispatch path is reachable before `Build` — the package's own tests call `handle` on unbuilt
-Apps throughout, and a pool created in `build` would be nil there. And the maximum parameter
+Apps throughout, and a pool created in `build` would be nil there. The miss chain starts in `New`
+as the bare `notFound` handler for the same reason, and `build` replaces it with the application's
+middleware wrapped around `notFound`. And the maximum parameter
 count the pool sizes contexts from is tracked at each registration rather than computed at
 build, so a `Ctx` built at any point is sized from everything registered so far; one built
 before a larger route arrives grows once on its first oversized capture and keeps the larger
@@ -138,12 +144,13 @@ sequenceDiagram
     A->>R: Lookup(method, path)
     R-->>A: chain, params (byte views into URI buffer)
     alt no match
-        A->>A: notFound chain
+        A->>H: miss chain(c) — app middleware around notFound
+        H-->>A: error (ErrNotFound) or nil
     else match
         A->>H: chain(c)
         H-->>A: error or nil
     end
-    opt error != nil
+    opt error != nil and not already settled by c.HandleError
         A->>A: app.ErrorHandler(c, err)
     end
     A->>P: release Ctx (reset refs, poison under ricedebug)
@@ -158,7 +165,9 @@ Three things to notice, because they are the whole design:
    closure built long ago. The only allocations are ones the user's handler makes.
 2. **There is exactly one error funnel.** Every failure — routing, middleware, handler —
    converges on `app.ErrorHandler`. That is the one place to change how the service reports
-   problems.
+   problems. It usually runs after the chain returns; a middleware that needs the final status
+   runs it earlier with `c.HandleError`, and the funnel then does not answer the request twice
+   ([ADR-0013](adr/0013-middleware-can-settle-a-request.md)).
 3. **Release is unconditional.** It happens whether the handler returned, errored, or
    panicked, because that is what makes the pool safe.
 

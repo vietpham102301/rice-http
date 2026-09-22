@@ -79,6 +79,46 @@ Order is fixed and does not depend on registration order: **app → outer group 
 a route still applies to it, because chains are compiled once at build time rather than
 walked per request ([ADR-0003](docs/adr/0003-middleware-as-prebuilt-closure-chain.md)).
 
+Middleware added with `app.Use` also runs on a request that matches no route, around a handler
+that returns the 404; group and route middleware do not, since no group matched, and `c.Param`
+is empty there ([ADR-0012](docs/adr/0012-application-middleware-runs-on-route-misses.md)).
+
+### The middleware rice ships
+
+`logging` above shows the shape. For an access log, use the opt-in `middleware` package, in this
+order:
+
+```go
+app.Use(
+	middleware.Logger(slog.Default()), // outermost: times everything, settles errors, logs last
+	middleware.Recover(),              // inside Logger: a panic becomes an error Logger can see
+	middleware.RealIP(1),              // only behind proxies you run; 1 is how many
+	middleware.RequestID(),
+)
+```
+
+- **`Logger(l *slog.Logger)`** writes one line per request — method, path, status, latency,
+  address and request id — with the status the client actually receives. It settles the error
+  with `c.HandleError` before reading the status, so a request that ends in a 500 is logged as
+  500, from a custom `ErrorHandler` too
+  ([ADR-0013](docs/adr/0013-middleware-can-settle-a-request.md)). It consumes the error, which is
+  why it goes outermost. It logs the path, never the query string, and 5xx at `ERROR`.
+- **`Recover()`** must sit inside `Logger`. **A request that panics is not logged unless it
+  does:** the panic unwinds through `Logger` before it can write anything.
+- **`RealIP(trustedHops int)`** makes `c.ClientIP` report the client behind that many trusted
+  proxies, counting `X-Forwarded-For` from the right, where the entries cannot be forged. Without
+  a proxy, do not install it: the rightmost entry is then whatever the client sent. It parses
+  bare IP addresses only — an entry with a port (`203.0.113.9:4711`) or a bracketed IPv6 entry
+  falls back to the connection's address, so behind a proxy that always appends a port it always
+  reports the proxy.
+- **`RequestID()`** keeps an incoming `X-Request-Id` only if it is 1–64 characters of
+  `[A-Za-z0-9_-]`, so a client cannot inject a line into the log; otherwise it generates one. It
+  echoes the id on the response. Read it with `middleware.RequestIDFrom(c)`.
+
+Unlike core, these allocate: 3 objects per request for `RealIP`, 2 for `RequestID` alone, and 6
+for `Logger` and `RequestID` together with slog's JSON handler — each pinned by a budget test,
+with its fixture named in the [performance model](docs/05-performance-model.md#opt-in-packages).
+
 ## Reading requests, writing JSON
 
 ```go
@@ -105,8 +145,8 @@ The opt-in `binding/` package writes that line for you. `binding.JSON[T](c)` dec
 `Validate() error` if it has one, and returns an error a handler returns into the funnel:
 400 for a body it could not parse, 422 for a rule it broke. It costs **9 allocations per
 call** for the test suite's fixture, pinned by a budget test rather than bounded. Every
-request-path row in the table below is a zero; this package is the one that buys ergonomics
-with allocations, and the figure is the price it charges
+request-path row in the table below is a zero; this package, like the middleware above, buys
+ergonomics with allocations, and the figure is the price it charges
 ([ADR-0011](docs/adr/0011-binding-is-generic-and-validation-is-a-method.md)).
 
 ```go
@@ -317,7 +357,7 @@ and cannot compare, and the reason for each result are in the performance model'
 | [05 — Performance model](docs/05-performance-model.md) | the allocation budget, per method |
 | [06 — Glossary](docs/06-glossary.md) | terms used precisely in these docs |
 | [07 — Retrospective](docs/07-retrospective.md) | what the project learned, and what surprised it |
-| [ADRs](docs/adr/) | eleven decisions, with the alternatives that lost |
+| [ADRs](docs/adr/) | thirteen decisions, with the alternatives that lost |
 | [Milestones](docs/milestones/) | retrospectives: what was measured, what surprised |
 | [Journal](docs/progress.md) | the running record, including the wrong turns |
 
