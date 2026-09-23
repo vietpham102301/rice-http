@@ -154,7 +154,6 @@ design decisions recorded in the ADRs?
 
 Not scheduled, not promised. Each would need its own brainstorm.
 
-- Route-level and global timeout middleware
 - Static file serving
 - Content negotiation
 - Streaming and server-sent events
@@ -220,7 +219,21 @@ Outside any milestone, because the API was already written down in
   falls back to the connection's address. `RequestID` keeps an incoming id only if it is safe to
   log. `Logger` records the status the client receives and is not told about a panic unless
   `Recover` sits inside it. The three allocate, and each figure is pinned with its fixture in
-  [05-performance-model.md](05-performance-model.md#opt-in-packages). Timeout stays on the list
-  above: a pre-emptive timeout would release the `Ctx` while the handler's goroutine still holds
-  it, and that needs a design of its own. CORS, which the miss chain makes possible, is the other
-  unbuilt middleware and has no design yet.
+  [05-performance-model.md](05-performance-model.md#opt-in-packages). Timeout stayed on the list
+  above, needing a design of its own: a pre-emptive timeout written as a middleware would release
+  the `Ctx` while the handler's goroutine still holds it. That is true of a middleware and not of
+  the transport, where fasthttp abandons the context it timed out rather than reuse it; the entry
+  below and ADR-0014 record the correction. CORS, which the miss chain makes possible, is still unbuilt and
+  has no design yet.
+- `middleware.Timeout(d)`, a deadline the work is asked to honour, not a switch that cuts it off.
+  It attaches `d` to `c.Context()`, which the database and HTTP clients a handler calls already
+  honour, and answers 503 when the chain returns an error after its own deadline has passed —
+  asking its context rather than the error, because drivers do not reliably unwrap to
+  `context.DeadlineExceeded` — unless the error is already an `*rice.HTTPError`. A handler that
+  ignores its context is not stopped, and its late answer is returned; a test pins that. A route's
+  `Timeout` inside an application-wide one only shortens the deadline.
+  [ADR-0014](adr/0014-timeout-is-cooperative.md) records why it is cooperative: a pre-emptive
+  timeout is safe at the transport, where fasthttp abandons the timed-out context, and races as a
+  middleware, where every middleware shares one `*Ctx`. It names `fasthttp.TimeoutHandler` as the
+  escape hatch and its costs. Its 4 allocations are pinned in
+  [05-performance-model.md](05-performance-model.md#opt-in-packages).

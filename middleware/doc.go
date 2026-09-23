@@ -14,7 +14,8 @@
 // makes c.ClientIP report the client's address behind a known number of
 // trusted proxies. RequestID gives every request an id, read back with
 // RequestIDFrom. Logger writes one log line per request with the status the
-// client actually receives.
+// client actually receives. Timeout gives the rest of the chain a deadline on
+// c.Context() and answers 503 when that deadline is what made it fail.
 //
 // Installed with App.Use, each of them also runs on a request that matched no
 // route, so Logger records 404s and RequestID gives them an id. On such a
@@ -23,10 +24,11 @@
 // # The recommended order
 //
 //	app.Use(
-//		middleware.Logger(l),   // outermost: times everything, settles errors, logs last
-//		middleware.Recover(),   // inside Logger: a panic becomes an error Logger can see
-//		middleware.RealIP(1),   // only behind a proxy; 1 is the number of trusted hops
+//		middleware.Logger(l),              // outermost: times everything, settles errors, logs last
+//		middleware.Recover(),              // inside Logger: a panic becomes an error Logger can see
+//		middleware.RealIP(1),              // only behind a proxy; 1 is the number of trusted hops
 //		middleware.RequestID(),
+//		middleware.Timeout(5*time.Second), // inside Logger, so the 503 it returns is what Logger records
 //	)
 //
 // Logger is outermost because it consumes the error: it settles it with
@@ -37,6 +39,11 @@
 //
 // Logger reads the address and the request id after the chain returns, so
 // although it is outermost it records what RealIP and RequestID did inside it.
+//
+// Timeout is cooperative: work that honours c.Context() stops at the deadline,
+// but a handler that ignores its context runs to completion and its late answer
+// is returned.
+// See docs/adr/0014-timeout-is-cooperative.md.
 //
 // # The one trap in that order
 //
@@ -67,6 +74,6 @@
 //
 // Unlike core, these allocate. Measured with the fixtures named in
 // docs/05-performance-model.md: RealIP 3 objects per request, RequestID 2 when
-// it generates an id, Logger 3 with slog's JSON handler, and Logger around
-// RequestID 6.
+// it generates an id, Logger 3 with slog's JSON handler, Logger around
+// RequestID 6, and Timeout 4.
 package middleware

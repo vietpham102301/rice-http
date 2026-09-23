@@ -203,6 +203,7 @@ this cost, and a user who never imports the package pays none of it.
 | `middleware.RequestID`, generating an id (no incoming header) | 2, exactly; at most 3 under `-race` | MEASURED after M8 | `TestAllocBudgetRequestIDGenerated` |
 | `middleware.Logger` alone, slog's JSON handler on `io.Discard`, five attributes | 3, exactly; at most 5 under `-race` | MEASURED after M8 | `TestAllocBudgetLogger` |
 | `middleware.Logger` wrapped around `middleware.RequestID`, same handler, six attributes | 6, exactly; at most 9 under `-race` | MEASURED after M8 | `TestAllocBudgetLoggerWithRequestID` |
+| `middleware.Timeout(time.Second)` around a handler that returns at once | 4, exactly, with and without `-race` | MEASURED after M8 | `TestAllocBudgetTimeout` |
 
 **Why it allocates at all.** `DisallowUnknownFields` exists only on `json.Decoder`, not on
 `json.Unmarshal`, so a strict decode needs a `Decoder` and a `bytes.Reader` for it to read from,
@@ -299,6 +300,31 @@ extra allocation per call, in `newRequestID` itself. Without `-race` the buffer 
 on every platform, so production pays 2. The `Logger` and `RequestID` row adds both mechanisms:
 a ceiling of `want+3`. Each budget's slack is derived in its own doc comment and is not a
 tolerance to tune; a budget with no mechanism passes zero and stays exact under `-race`.
+
+#### `middleware.Timeout`
+
+**`Timeout`, 4.** The fixture is `Timeout(time.Second)` around a handler that returns at once,
+measured the same way as the three above: inside a real dispatch, warmed once. The deadline never
+passes, so the figure is the cost of setting one up and tearing it down — `context.WithTimeout`,
+which allocates, and the `cancel` that releases its timer. A request that times out also builds
+the `*rice.HTTPError` for its 503, and is not what this row measures. How the 4 divide has not
+been profiled.
+
+**Exact under `-race`, and measured before that was written.** The figure was taken four ways: 4.0
+on darwin (go1.25.6, arm64) without and with `-race`, and 4.0 in a Linux container
+(golang:1.25.14, amd64) without and with `-race`. None of the mechanisms above applies — no pooled
+buffer, no buffer the race build moves to the heap — so the race slack is 0 and
+`TestAllocBudgetTimeout` pins 4 exactly under `-race` too. Without the race detector it was broken
+in both directions and failed both ways: `Timeout allocated 4.0 objects per call, want exactly 3`
+and `want exactly 5`.
+
+**The cost allocations do not show.** `Timeout` is the first thing rice ships that derives a
+context per request from the App's base context — one `context.WithCancel(context.Background())`
+shared by every request (`app.go:223`). Deriving from it registers a child in that one context's
+map under its mutex, and `cancel` removes it again under the same mutex, so an outermost `Timeout`
+puts two acquisitions of a single app-global lock on every request, on a path that previously took
+none. Whether that contends under concurrency is unmeasured: **no benchmark was recorded for
+`Timeout`**, only the allocation budget above.
 
 ## The techniques, and what each one costs
 
