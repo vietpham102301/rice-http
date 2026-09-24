@@ -162,6 +162,12 @@ func TestKeyStringIsItsName(t *testing.T) {
 	if got := NewKey[int]("user").String(); got != "user" {
 		t.Errorf("String() = %q, want user", got)
 	}
+	// A zero Key prints as empty rather than panicking, so fmt and log lines
+	// that show a key never crash on one.
+	var zero Key[int]
+	if got := zero.String(); got != "" {
+		t.Errorf("zero Key String() = %q, want empty", got)
+	}
 }
 
 // wantKeyPanic runs fn and checks it panics with a rice: message naming NewKey.

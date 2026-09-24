@@ -44,7 +44,7 @@ rice-http/
 ├── ctx.go              Ctx: the per-request handle, reset, Method/Path, Query/Header/Body, Context/ClientIP, HandleError
 ├── ctx_param.go        Ctx read side: route parameters, borrowed and copied
 ├── ctx_response.go     Ctx write side: Status, headers, String/Bytes/JSON, NoContent
-├── ctx_store.go        Ctx per-request store: Set, Get, and its pre-sized slice
+├── ctx_store.go        Key[T], NewKey: the typed per-request store and its pre-sized slice
 ├── pool.go             sync.Pool wiring: newCtx, acquire, release
 ├── poison_debug.go     ricedebug: mark a released Ctx, panic on any later use
 ├── poison_release.go   !ricedebug: the same API, empty, compiled away

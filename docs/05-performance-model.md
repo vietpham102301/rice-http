@@ -52,9 +52,10 @@ Every exported method of `Ctx`, one row each.
 | `c.String` | 0 | MEASURED M1 | `TestAllocBudgetString` |
 | `c.Bytes` | 0 | MEASURED M1 | `TestAllocBudgetBytes` |
 | `c.RequestCtx` | 0 | MEASURED M8 | `TestAllocBudgetRequestCtx` |
-| `c.Set` with a pointer value | 0 | MEASURED M6 | `TestAllocBudgetCtxSetPointer` |
-| `c.Set` with a non-constant string (the caller's boxing) | 1, exactly | MEASURED M6 | `TestAllocBudgetCtxSetString` |
-| `c.Get` | 0 | MEASURED M6 | `TestAllocBudgetCtxGet` |
+| `Key.Set` with a pointer value | 0 | MEASURED after M8 | `TestAllocBudgetKeySetPointer` |
+| `Key.Set` with a non-constant string (the caller's boxing) | 1, exactly | MEASURED after M8 | `TestAllocBudgetKeySetString` |
+| `Key.Get` with a pointer value | 0 | MEASURED after M8 | `TestAllocBudgetKeyGet` |
+| `Key.Get` with a string value | 0 | MEASURED after M8 | `TestAllocBudgetKeyGetString` |
 | `c.Query` | 0 | MEASURED after M8 | `TestAllocBudgetQueryHeaderBody` |
 | `c.Header` | 0 | MEASURED after M8 | `TestAllocBudgetQueryHeaderBody` |
 | `c.Body` | 0 | MEASURED after M8 | `TestAllocBudgetQueryHeaderBody` |
@@ -157,10 +158,16 @@ row was broken once on purpose, with a `fmt.Sprint` into a package-level sink in
 middleware, and failed with
 `404 through a miss chain with application middleware allocated 2.0 objects per call, budget is 0`.
 
-`c.Set` is the one row where the number is not rice's. The store never grows within its
-capacity, but converting a non-pointer value to `any` at the *call site* allocates the
-interface's data word, so `c.Set("k", s)` for a non-constant string costs one and a pointer or
-a constant costs nothing. The budget test pins all three so the distinction cannot rot.
+`Key.Set` is the one row where the number is not rice's. The store never grows within its
+capacity, but converting a non-pointer value to the store's `any` at the *call site* allocates the
+interface's data word, so `k.Set(c, s)` for a non-constant string costs one and a pointer or a
+constant costs nothing. The budget test pins the distinction so it cannot rot. `Key.Get` with a
+string reads the boxed value's header and allocates nothing. These four rows replaced M6's
+`c.Set`/`c.Get` rows when typed keys replaced that API
+([ADR-0016](adr/0016-typed-store-keys.md)); the figures did not move. Each was measured on darwin
+arm64 (go1.25.6) and in a Linux arm64 container (golang:1.25.14), with and without `-race`, and is
+the same in all four. `NewKey` allocates its key's identity once and, like registration, is not
+budgeted.
 
 Measured values come from the results files in `bench/results/` and from the `AllocsPerRun`
 assertions in `alloc_test.go` and, for the `ConnState` row, `lifecycle_internal_test.go`. The

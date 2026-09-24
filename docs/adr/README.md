@@ -46,3 +46,4 @@ Date: YYYY-MM-DD
 | [0013](0013-middleware-can-settle-a-request.md) | Middleware can settle a request with `c.HandleError` | Accepted |
 | [0014](0014-timeout-is-cooperative.md) | Timeout is cooperative | Accepted |
 | [0015](0015-cors-states-a-policy.md) | CORS states a policy; the browser enforces it | Accepted |
+| [0016](0016-typed-store-keys.md) | Typed store keys replace Set and Get | Accepted |

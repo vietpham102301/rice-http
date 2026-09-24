@@ -157,9 +157,6 @@ Not scheduled, not promised. Each would need its own brainstorm.
 - Static file serving
 - Content negotiation
 - Streaming and server-sent events
-- Typed per-request store keys (`rice.Key[T]` with a `Get` returning `T`), safer than
-  `Set(string, any)` and immune to key collisions between middleware. Rejected for M6 because
-  the documented API was already `string`/`any`.
 
 ## Done after M8
 
@@ -256,3 +253,12 @@ Outside any milestone, because the API was already written down in
   outside 1–65535 — still falls back to the connection's address. An entry with a port costs what a
   bare one does, 3 allocations, pinned in
   [05-performance-model.md](05-performance-model.md#opt-in-packages).
+- `rice.Key[T]`, the typed per-request store key, which came off the deferred list above and
+  replaced `c.Set(string, any)` and `c.Get(string)`. `NewKey[T](name)` makes a key whose identity is
+  a pointer, not its name, so two middleware choosing the same name never share a slot, and whose
+  type is fixed, so `k.Get(c)` returns `T` with no assertion. It is a breaking change, chosen over
+  keeping the string API beside it; [ADR-0016](adr/0016-typed-store-keys.md) records why, and names
+  package-level `rice.Set`/`rice.Get` and `context.WithValue`-style key types as the alternatives
+  that lost. The store's shape and every figure are unchanged, pinned in
+  [05-performance-model.md](05-performance-model.md): a pointer value costs nothing and a
+  non-pointer value still costs the caller one boxing allocation.
