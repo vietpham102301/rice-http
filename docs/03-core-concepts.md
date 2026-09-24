@@ -452,6 +452,22 @@ when parsing request", telling the client its request was malformed; rice's keep
 other answers — 431 for an oversized header, 408 for a read timeout, 400 for anything else —
 and adds the 413.
 
+### Serving static files
+
+```go
+func (a *App) Static(prefix string, fsys fs.FS, mw ...Middleware)
+func (g *Group) Static(prefix string, fsys fs.FS, mw ...Middleware)
+```
+
+`Static("/assets", fsys)` registers GET and HEAD for `/assets`, `/assets/` and
+`/assets/*filepath`. `fsys` is `os.DirFS` for a directory on disk or an `embed.FS` (through
+`fs.Sub`) for files compiled in. A directory is answered by its `index.html`; one without an index
+is a 404 and nothing is ever listed. A directory requested without its slash answers 301 to the
+same path with the slash. Byte ranges and `If-Modified-Since` are answered; nothing is compressed.
+Every failure reaches the ErrorHandler. Routes registered separately under the prefix outrank a
+file of the same name. Headers such as `Cache-Control` come from middleware passed in `mw`. See
+[ADR-0017](adr/0017-static-files-wrap-fasthttp-fs.md).
+
 ---
 
 ## 5. Group
@@ -462,6 +478,7 @@ type Group struct { /* unexported */ }
 func (g *Group) Use(mw ...Middleware)
 func (g *Group) GET(path string, h Handler, mw ...Middleware)
 func (g *Group) Group(prefix string, mw ...Middleware) *Group
+func (g *Group) Static(prefix string, fsys fs.FS, mw ...Middleware)
 ```
 
 A prefix plus a middleware list. It is purely a registration-time convenience: groups do

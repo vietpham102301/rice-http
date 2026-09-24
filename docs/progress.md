@@ -16,6 +16,79 @@ Each entry uses this shape:
 
 ---
 
+## 2026-09-25 — post-M8 — Static files wrap fasthttp.FS
+
+**Did:** `App.Static(prefix, fsys, mw...)` and `Group.Static`, serving an `fs.FS` — `os.DirFS` for
+a directory on disk, `embed.FS` (through `fs.Sub`) for files compiled in — for GET and HEAD.
+`Static` registers three patterns per call: the bare prefix, redirected to its slash;
+`prefix+"/"`, the fs root; and `prefix+"/*filepath"`, everything beneath it. Each call records a
+`staticEntry`; `Build` constructs its one long-lived `fasthttp.FS` and calls `NewRequestHandler`
+once, so an App that registers a `Static` route and is never built starts no goroutine. The route
+handler runs fasthttp's handler and reads the status it wrote: 2xx and 304 stand; 404 and a
+directory's 403 become `ErrNotFound`; any other status ≥ 400 becomes `NewHTTPError(status, "")`;
+fasthttp's 302 is replaced with rice's own 301, `Location` rebuilt from the request's own
+percent-encoded path plus `/`, with the query kept. Before fasthttp runs, `serve` refuses a NUL
+byte or a `..` segment with 404. `Shutdown` closes every entry's `CleanStop` channel after the
+drain and before the `OnShutdown` hooks. `static_test.go`'s tests group into serving
+(`TestStaticServesFiles`, `TestStaticServesAnEmptyFile`, `TestStaticHeadSendsHeadersWithoutBody`,
+`TestStaticAnswersARangeWithPartialContent`, `TestStaticAnswersNotModified`,
+`TestStaticWithAnEmptyPrefixServesFromTheRoot`,
+`TestGroupStaticJoinsThePrefixAndRunsTheGroupMiddleware`, `TestStaticRouteMiddlewareRuns`,
+`TestARegisteredRouteOutranksAStaticFile`, `TestStaticPanicsOnBadConfiguration`,
+`TestStaticDispatchedBeforeBuildIsAnError`), funnel (`TestStaticFailuresReachTheErrorHandler`,
+`TestStaticDefaultErrorBodyIsNotFasthttps`, `TestStaticHeadForAMissingFileIsNotFound`), traversal
+(`TestStaticNeverServesOutsideTheFS`, over `os.DirFS(t.TempDir())`, and `TestHasDotDotSegment`),
+redirect (`TestStaticRedirectsADirectoryWithoutItsSlash`, `TestStaticRedirectNeverLeavesTheSite`,
+`TestStaticRedirectFollowedServesTheIndex`) and lifecycle (`TestStaticStartsNoGoroutineUntilBuild`,
+`TestStaticShutdownTwiceDoesNotPanic`, `TestStaticShutdownOfAnUnbuiltAppDoesNotPanic`). Two
+budgets, `TestAllocBudgetStaticFile` and `TestAllocBudgetStatic404`.
+[ADR-0017](adr/0017-static-files-wrap-fasthttp-fs.md) records the decision; `03-core-concepts.md`
+gets a Static section and the `Group` signature; `05-performance-model.md` lists `Static` under
+the zero-allocation exclusions and pins its two budgets and the benchmark; `04-roadmap.md` moves
+the item from *Explicitly deferred* to *Done after M8*; the README gets a short example.
+
+**Learned:** Four things.
+
+1. *fasthttp's directory redirect is built from the rewritten path, not the request's.* Probing
+   found `/static/docs` (no trailing slash) answering 302 to `/docs/` — the prefix is gone,
+   because fasthttp appends `/` to the path `PathRewrite` handed it, not to the request's own.
+   rice replaces the status and `Location` itself rather than trusting fasthttp's.
+
+2. *`Root: "."` breaks the root index.* With `Root: "."`, fasthttp looks the root's `index.html`
+   up as `./index.html`, which is not a valid `fs.FS` path, and answers 403. `Root` has to be
+   `""`, with `AllowEmptyRoot: true`.
+
+3. *`Compress` writes to disk.* Turning it on makes fasthttp create `<file>.fasthttp.gz` (and
+   `.br`, `.zst`) next to the file through `os.CreateTemp`, relative to the process's working
+   directory for an `fs.FS` with an empty root — a write nobody asked a static file server to
+   make. `Compress` stays off.
+
+4. *A `..` segment never reaches the handler's own check, because fasthttp already normalised it
+   away.* `fctx.Path()` is normalised unconditionally before routing in fasthttp v1.73,
+   `DisablePathNormalizing` or not, so a request carrying `..` is a route miss — a 404 — before
+   `serve` runs; the `..` branch in `hasDotDotSegment` is a defensive second line, not the reason
+   `..` is refused today. It surfaced reading fasthttp's routing, not from a failing test. A
+   related surprise came from the lifecycle test: `TestStaticStartsNoGoroutineUntilBuild` flaked
+   under `-race`, because fasthttp v1.73 stops a handler's cache goroutine only through a
+   `runtime.AddCleanup`, which runs asynchronously after a GC — earlier tests' dropped,
+   unreachable Apps were losing their goroutines at unpredictable moments and moving the baseline
+   the test measured against. The fix, `stableCacheGoroutines`, turns automatic GC off for the
+   test and polls explicit `runtime.GC()` calls until the count stabilizes before taking the
+   baseline.
+
+**Measured:** `TestAllocBudgetStaticFile` (a small file already in fasthttp's handle cache): 0
+without `-race`, 0 with `-race`; budget pinned at 0. `TestAllocBudgetStatic404` (a missing file):
+17 without `-race`, 20 with `-race`; budget pinned at the ceiling, 20. `BenchmarkStaticSmallFile`:
+median 147.0 ns/op, 0 B/op, 0 allocs/op over ten runs, recorded in
+`bench/results/post-M8-static-files.txt` (darwin/arm64, go1.25.6, Darwin 27.0.0, Apple M2 Pro).
+All four figures are darwin arm64 only; no Linux container run was taken for this feature.
+Coverage from `make cover`: 99.5% total, root package 99.4%.
+
+**Next:** content negotiation, the next item on the roadmap's *Explicitly deferred* list, which
+needs its own brainstorm.
+
+---
+
 ## 2026-09-24 — post-M8 — Typed store keys replace Set and Get
 
 **Did:** `rice.Key[T]`, `rice.NewKey[T](name)` and the methods `Key.Set(c, v)`, `Key.Get(c)` and

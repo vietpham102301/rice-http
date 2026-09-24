@@ -154,7 +154,6 @@ design decisions recorded in the ADRs?
 
 Not scheduled, not promised. Each would need its own brainstorm.
 
-- Static file serving
 - Content negotiation
 - Streaming and server-sent events
 
@@ -262,3 +261,9 @@ Outside any milestone, because the API was already written down in
   that lost. The store's shape and every figure are unchanged, pinned in
   [05-performance-model.md](05-performance-model.md): a pointer value costs nothing and a
   non-pointer value still costs the caller one boxing allocation.
+- `App.Static` and `Group.Static`, serving an `fs.FS` — a directory through `os.DirFS` or files
+  compiled in through `embed.FS` — for GET and HEAD. Probing found that fasthttp's file server
+  answers its own errors, loses a prefix in its directory redirect and runs a cache goroutine
+  until told to stop, so rice wraps it and owns each edge: every failure reaches the ErrorHandler,
+  the redirect is rice's 301, and Shutdown stops the goroutine
+  ([ADR-0017](adr/0017-static-files-wrap-fasthttp-fs.md)).

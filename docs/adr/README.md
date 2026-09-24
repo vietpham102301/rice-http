@@ -47,3 +47,4 @@ Date: YYYY-MM-DD
 | [0014](0014-timeout-is-cooperative.md) | Timeout is cooperative | Accepted |
 | [0015](0015-cors-states-a-policy.md) | CORS states a policy; the browser enforces it | Accepted |
 | [0016](0016-typed-store-keys.md) | Typed store keys replace Set and Get | Accepted |
+| [0017](0017-static-files-wrap-fasthttp-fs.md) | Static files wrap fasthttp.FS behind the error funnel | Accepted |
