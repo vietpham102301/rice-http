@@ -437,9 +437,10 @@ func TestStaticRedirectFollowedServesTheIndex(t *testing.T) {
 }
 
 // cacheGoroutines counts fasthttp.FS cache goroutines by their frame, so the
-// count is exact whatever else the process runs. Tests before these build Apps
-// they never shut down, whose goroutines never exit, so every check is a delta
-// from a count taken at the start.
+// count is exact whatever else the process runs. The count is a snapshot at the
+// moment it is called; it may change afterwards, for example when an unreachable
+// App is garbage collected. fasthttp registers a runtime cleanup that stops the
+// cache goroutine at that time.
 func cacheGoroutines() int {
 	buf := make([]byte, 1<<20)
 	for {
@@ -448,6 +449,31 @@ func cacheGoroutines() int {
 			return strings.Count(string(buf[:n]), "(*inMemoryCacheManager).handleCleanCache(")
 		}
 		buf = make([]byte, 2*len(buf))
+	}
+}
+
+// stableCacheGoroutines returns the cache goroutine count once it stabilizes
+// after garbage collection. fasthttp registers a runtime cleanup that stops an
+// unreachable FS's cache goroutine at GC, and earlier tests in this package
+// build Apps and drop them, so the baseline can drift downward during the test
+// as those Apps are collected. This helper runs GC, reads the count, waits 20ms,
+// runs GC again, reads again, and returns the count once two consecutive reads
+// agree, or fails with Fatalf after a 2-second deadline.
+func stableCacheGoroutines(t *testing.T) int {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var prev int
+	for {
+		runtime.GC()
+		curr := cacheGoroutines()
+		if curr == prev {
+			return curr
+		}
+		prev = curr
+		if time.Now().After(deadline) {
+			t.Fatalf("cache goroutine count did not stabilize after 2s: last read %d", cacheGoroutines())
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 
@@ -465,19 +491,22 @@ func cacheGoroutinesSettleAt(t *testing.T, want int) {
 }
 
 func TestStaticStartsNoGoroutineUntilBuild(t *testing.T) {
-	base := cacheGoroutines()
+	base := stableCacheGoroutines(t)
 	app := New()
 	app.Static("/a", staticFS())
 	app.Static("/b", staticFS())
 	cacheGoroutinesSettleAt(t, base)
 
 	app.Build()
+	time.Sleep(10 * time.Millisecond)
 	cacheGoroutinesSettleAt(t, base+2)
 
 	if err := app.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	time.Sleep(10 * time.Millisecond)
 	cacheGoroutinesSettleAt(t, base)
+	runtime.KeepAlive(app)
 }
 
 func TestStaticShutdownTwiceDoesNotPanic(t *testing.T) {

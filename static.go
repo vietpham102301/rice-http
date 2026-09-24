@@ -35,7 +35,9 @@ var staticIndexNames = []string{"index.html"}
 // Files are served by one fasthttp.FS per call, created in Build. It caches open
 // file handles for ten seconds and runs one goroutine to expire them, which
 // Shutdown stops. An App mounted with FasthttpHandler and never shut down keeps
-// that goroutine until the process exits. fasthttp logs every missing file
+// that goroutine for as long as the App's handler is reachable—for a mounted App,
+// normally the life of the process—because fasthttp stops it only on Shutdown or
+// when the handler is garbage collected. fasthttp logs every missing file
 // through the server's logger. See ADR-0017.
 func (a *App) Static(prefix string, fsys fs.FS, mw ...Middleware) {
 	checkGroupPrefix(prefix)
