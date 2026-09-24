@@ -577,3 +577,42 @@ func TestStaticKeepsMiddlewareHeadersOnEveryResponse(t *testing.T) {
 		})
 	}
 }
+
+func TestStaticRedirectIgnoresTheRawPath(t *testing.T) {
+	cases := []struct{ prefix, uri, location string }{
+		{"/assets", "//evil.example/../assets/docs", "/assets/docs/"},
+		{"", "//evil.example/../docs", "/docs/"},
+	}
+	for _, tc := range cases {
+		app := New()
+		app.Static(tc.prefix, staticFS())
+		app.Build()
+
+		// An outer handler may turn normalising off; routing still uses the
+		// normalised path, but the raw one is what RequestURI returns. The Host
+		// header keeps fasthttp from reading "//evil.example" as an authority,
+		// as a server's request would.
+		var req fasthttp.Request
+		req.Header.SetMethod("GET")
+		req.Header.SetHost("site.example")
+		req.SetRequestURI(tc.uri)
+		req.URI().DisablePathNormalizing = true
+		if !strings.Contains(string(req.URI().RequestURI()), "evil.example") {
+			t.Fatalf("%s: precondition: RequestURI %q is normalised", tc.uri, req.URI().RequestURI())
+		}
+		fctx := &fasthttp.RequestCtx{}
+		fctx.Init(&req, nil, discardLogger{})
+		app.handle(fctx)
+
+		if got := fctx.Response.StatusCode(); got != 301 {
+			t.Errorf("GET %s: status %d, want 301", tc.uri, got)
+		}
+		loc := string(fctx.Response.Header.Peek("Location"))
+		if strings.HasPrefix(loc, "//") || strings.Contains(loc, "evil.example") {
+			t.Errorf("GET %s: Location %q leaves the site", tc.uri, loc)
+		}
+		if loc != tc.location {
+			t.Errorf("GET %s: Location %q, want %q", tc.uri, loc, tc.location)
+		}
+	}
+}

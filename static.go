@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"errors"
 	"io/fs"
+	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/valyala/fasthttp"
@@ -203,20 +205,26 @@ func redirectToDir(c *Ctx) error {
 // against its parent. That is the resource's semantics, not the router's, so it
 // does not contradict ADR-0007; see ADR-0017.
 //
-// The path comes from URI.RequestURI, which percent-encodes the normalised path.
-// Normalisation has already collapsed "//", so the Location is never
-// protocol-relative. It is relative, so no Host header is trusted. 301 is safe
-// because Static registers only GET and HEAD.
+// The path is fctx.Path(), the normalised path routing matched, percent-encoded.
+// It is never URI.RequestURI: with URI.DisablePathNormalizing set, that returns
+// the raw path, and "//evil.example/../docs" would become a protocol-relative
+// Location that leaves the site. It is not URI.SetPathBytes either, which
+// decodes the already decoded path a second time. A leading "//" or "/\" is
+// collapsed to "/" as well, defensively: normalisation removes the first and
+// encoding the second, and a root path gets no second slash. The Location is
+// relative, so no Host header is trusted. 301 is safe because Static registers
+// only GET and HEAD. This path allocates; a redirect is not a hot path.
 func writeDirRedirect(fctx *fasthttp.RequestCtx) {
-	uri := fctx.URI().RequestURI()
-	i := bytes.IndexByte(uri, '?')
-	if i < 0 {
-		i = len(uri)
-	}
-	loc := make([]byte, 0, len(uri)+1)
-	loc = append(loc, uri[:i]...)
+	p := strings.TrimLeft((&url.URL{Path: string(fctx.Path())}).EscapedPath(), "/\\")
+	loc := make([]byte, 0, len(p)+2)
 	loc = append(loc, '/')
-	loc = append(loc, uri[i:]...)
+	if p != "" {
+		loc = append(append(loc, p...), '/')
+	}
+	if q := fctx.URI().QueryString(); len(q) > 0 {
+		loc = append(loc, '?')
+		loc = append(loc, q...)
+	}
 
 	fctx.Response.ResetBody()
 	fctx.Response.Header.SetBytesV(fasthttp.HeaderLocation, loc)
