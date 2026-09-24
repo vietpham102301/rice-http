@@ -57,8 +57,11 @@ It states a policy and leaves the browser to enforce it.
   are copied, so a caller changing its slice later changes nothing.
 - **A configuration that cannot work panics at construction**, with the `rice: middleware.CORS: `
   prefix: no origins; an origin that is not `scheme://host[:port]` in lower case — `"*"`, `"null"`,
-  a path, a trailing slash, a query, an upper-case letter; a negative `MaxAge`; a list entry that
-  is empty or contains a comma or whitespace, which would corrupt the joined value.
+  a path, a trailing slash, a query, an upper-case letter, or an explicit default port such as
+  `:443` on `https` or `:80` on `http`, which a browser never sends and which could then never
+  match; a negative `MaxAge`, or a positive one under one second, since it would render as `0` and
+  silently discard what the caller asked for; a list entry that is empty or contains a comma,
+  whitespace or a control character, which would corrupt the joined value.
 - **Three branches per request**, chosen from the method and two header reads.
   1. *No `Origin`, or an empty one.* Same-origin, or not a browser. `Vary: Origin` is added and
      `next` is called.
@@ -133,7 +136,8 @@ without `Origin` or without `Access-Control-Request-Method`.
 
 **Makes hard: a custom `ErrorHandler` that resets the response drops the headers.** The headers
 survive the funnel only because `respond` does not reset them, and a custom `ErrorHandler` that
-calls `Response.Reset` removes them, so the browser reports that response as a CORS failure.
+calls `Response.Reset` removes them, so the browser reports that response as a CORS failure; so
+does a handler that resets the response through `c.RequestCtx()`, for example with `NotModified`.
 Nothing protects against it, because protection would cost every request. This also binds rice
 itself: a future change to `respond` that resets headers breaks every CORS error response, and
 `TestCORSHeadersSurviveTheFunnel` fails if it does.

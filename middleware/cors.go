@@ -15,8 +15,10 @@ import (
 // Origins are compared byte-for-byte with the Origin header a browser sends:
 // lower case, scheme://host, a port only when it is not the scheme's default,
 // no path and no trailing slash. "https://app.example.com/" never matches
-// anything, and CORS panics on it. There is no wildcard and no pattern; each
-// origin is listed.
+// anything, and CORS panics on it; so does an origin carrying its scheme's
+// own default port explicitly, such as "https://app.example.com:443", since
+// a browser never sends one and the origin could then never match. There is
+// no wildcard and no pattern; each origin is listed.
 //
 // AllowMethods defaults to GET, HEAD, POST, PUT, PATCH and DELETE — the verbs
 // a JSON API uses — when empty. AllowHeaders has no default: the browser's
@@ -24,7 +26,10 @@ import (
 // so a JSON API lists both. ExposeHeaders names the response headers a script
 // may read beyond the safelist; X-Request-Id lets a client quote its id.
 // MaxAge is sent in whole seconds and omitted when zero, in which case the
-// browser caches a preflight for five seconds. AllowCredentials adds
+// browser caches a preflight for five seconds; a positive value under one
+// second panics at construction, since it would render as 0 and be
+// indistinguishable from "not sent" while silently discarding what the
+// caller asked for. AllowCredentials adds
 // Access-Control-Allow-Credentials: true to every response for an allowed
 // origin, which a browser requires before it will send cookies.
 type CORSConfig struct {
@@ -66,7 +71,9 @@ var defaultAllowMethods = []string{"GET", "HEAD", "POST", "PUT", "PATCH", "DELET
 //
 // Every header is written before the rest of the chain runs, and rice's error
 // funnel does not reset headers, so they survive whatever the chain returns.
-// A custom ErrorHandler that resets the response drops them.
+// A custom ErrorHandler that resets the response drops them. So does a
+// handler that resets the response through c.RequestCtx() itself, for
+// example with NotModified, NotFound or Error: each calls Response.Reset.
 //
 // Vary: Origin is added to every response, with or without an Origin header,
 // so a shared cache never serves one origin's response to another.
@@ -144,6 +151,9 @@ func compileCORS(cfg CORSConfig) (origins []string, real, preflight []header) {
 	if cfg.MaxAge < 0 {
 		panic("rice: middleware.CORS: MaxAge must not be negative")
 	}
+	if cfg.MaxAge > 0 && cfg.MaxAge < time.Second {
+		panic("rice: middleware.CORS: MaxAge must be zero or at least one second")
+	}
 	methods := cfg.AllowMethods
 	if len(methods) == 0 {
 		methods = defaultAllowMethods
@@ -169,13 +179,20 @@ func compileCORS(cfg CORSConfig) (origins []string, real, preflight []header) {
 
 // validOrigin reports whether o has the shape a browser puts in Origin:
 // scheme://host[:port], lower case, with no path, query or fragment. A
-// trailing slash is a path. "*" and "null" have no scheme and fail.
+// trailing slash is a path. "*" and "null" have no scheme and fail. An
+// explicit default port — :443 on https, :80 on http — fails too: a browser
+// never sends one, so an origin carrying it can never match what arrives on
+// the wire.
 func validOrigin(o string) bool {
 	scheme, rest, ok := strings.Cut(o, "://")
 	if !ok || scheme == "" || rest == "" {
 		return false
 	}
 	if strings.ContainsAny(rest, "/?# \t") {
+		return false
+	}
+	if scheme == "https" && strings.HasSuffix(rest, ":443") ||
+		scheme == "http" && strings.HasSuffix(rest, ":80") {
 		return false
 	}
 	for i := 0; i < len(o); i++ {
@@ -187,15 +204,30 @@ func validOrigin(o string) bool {
 }
 
 // joinList joins items as "A, B, C", or returns "" for none. An empty item, or
-// one containing a comma or whitespace, would corrupt the joined value and
-// panics naming the field.
+// one containing a comma, whitespace or a control character, would corrupt
+// the joined value and panics naming the field.
 func joinList(field string, items []string) string {
 	for _, it := range items {
-		if it == "" || strings.ContainsAny(it, ", \t") {
-			panic("rice: middleware.CORS: " + field + " entry " + strconv.Quote(it) + " must not be empty or contain a comma or whitespace")
+		if it == "" || hasCommaOrControl(it) {
+			panic("rice: middleware.CORS: " + field + " entry " + strconv.Quote(it) + " must not be empty or contain a comma, whitespace, or a control character")
 		}
 	}
 	return strings.Join(items, ", ")
+}
+
+// hasCommaOrControl reports whether s has a comma or any byte a joined header
+// value must not carry: everything at or below space (0x20 — this catches
+// space and tab along with \n, \r and every other control byte), and DEL
+// (0x7f). fasthttp strips newlines from a header value at write time, so
+// without this check a "\n"-carrying entry would silently mangle the header
+// on the wire rather than fail loudly here.
+func hasCommaOrControl(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if b := s[i]; b <= 0x20 || b == 0x7f || b == ',' {
+			return true
+		}
+	}
+	return false
 }
 
 // isPreflight reports whether this is a browser's preflight: OPTIONS with an

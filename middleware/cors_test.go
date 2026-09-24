@@ -75,10 +75,14 @@ func TestCORSPanicsOnAConfigurationThatCannotWork(t *testing.T) {
 		{"no scheme", middleware.CORSConfig{Origins: []string{"app.example.com"}}, "app.example.com"},
 		{"empty host", middleware.CORSConfig{Origins: []string{"https://"}}, `"https://"`},
 		{"null", middleware.CORSConfig{Origins: []string{"null"}}, `"null"`},
+		{"https default port", middleware.CORSConfig{Origins: []string{"https://app.example.com:443"}}, "https://app.example.com:443"},
+		{"http default port", middleware.CORSConfig{Origins: []string{"http://app.example.com:80"}}, "http://app.example.com:80"},
 		{"negative max age", middleware.CORSConfig{Origins: []string{allowedOrigin}, MaxAge: -time.Second}, "MaxAge"},
+		{"sub-second positive max age", middleware.CORSConfig{Origins: []string{allowedOrigin}, MaxAge: 500 * time.Millisecond}, "MaxAge"},
 		{"empty method", middleware.CORSConfig{Origins: []string{allowedOrigin}, AllowMethods: []string{""}}, "AllowMethods"},
 		{"comma in header", middleware.CORSConfig{Origins: []string{allowedOrigin}, AllowHeaders: []string{"A,B"}}, "AllowHeaders"},
 		{"space in exposed header", middleware.CORSConfig{Origins: []string{allowedOrigin}, ExposeHeaders: []string{"X Y"}}, "ExposeHeaders"},
+		{"newline in header", middleware.CORSConfig{Origins: []string{allowedOrigin}, AllowHeaders: []string{"Authorization\nContent-Type"}}, "AllowHeaders"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -317,6 +321,13 @@ func TestCORSAnswersAPreflight(t *testing.T) {
 			if got := fctx.Response.Body(); len(got) != 0 {
 				t.Errorf("body = %q, want empty", got)
 			}
+			// Header.ContentType() cannot pin this: fasthttp substitutes its
+			// default (text/plain; charset=utf-8) whenever the field is unset,
+			// masking whether a Content-Type was actually sent. Assert against
+			// the bytes on the wire instead.
+			if s := fctx.Response.Header.String(); strings.Contains(s, "Content-Type:") {
+				t.Errorf("response header %q contains Content-Type, want none on a preflight", s)
+			}
 			credWant := ""
 			if credentials {
 				credWant = "true"
@@ -396,6 +407,7 @@ func TestCORSPreflightNeedsAllThreeSignals(t *testing.T) {
 		{"OPTIONS with an empty request method", "OPTIONS", map[string]string{"Origin": allowedOrigin, "Access-Control-Request-Method": ""}},
 		{"request method on a POST", "POST", preflight(allowedOrigin)},
 		{"OPTIONS with a request method and no Origin", "OPTIONS", map[string]string{"Access-Control-Request-Method": "DELETE"}},
+		{"OPTIONS with an empty Origin and a request method", "OPTIONS", map[string]string{"Origin": "", "Access-Control-Request-Method": "DELETE"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -414,7 +426,7 @@ func TestCORSPreflightNeedsAllThreeSignals(t *testing.T) {
 			if got := fctx.Response.StatusCode(); got != 200 {
 				t.Errorf("status = %d, want 200 from the handler", got)
 			}
-			if _, hasOrigin := tc.headers["Origin"]; hasOrigin {
+			if tc.headers["Origin"] != "" {
 				if got := hdr(fctx, "Access-Control-Allow-Origin"); got != allowedOrigin {
 					t.Errorf("Access-Control-Allow-Origin = %q, want %q: a real request from an allowed origin is decorated", got, allowedOrigin)
 				}
