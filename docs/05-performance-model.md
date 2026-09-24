@@ -200,6 +200,7 @@ this cost, and a user who never imports the package pays none of it.
 | --- | --- | --- | --- |
 | `binding.JSON` with the `createUser` fixture | 9, exactly | MEASURED after M8 | `TestAllocBudgetJSONBinding` |
 | `middleware.RealIP(1)`, a two-entry `X-Forwarded-For` header | 3, exactly | MEASURED after M8 | `TestAllocBudgetRealIP` |
+| `middleware.RealIP(1)`, the same header with a port on the chosen entry | 3, exactly, with and without `-race` | MEASURED after M8 | `TestAllocBudgetRealIPWithPort` |
 | `middleware.RequestID`, generating an id (no incoming header) | 2, exactly; at most 3 under `-race` | MEASURED after M8 | `TestAllocBudgetRequestIDGenerated` |
 | `middleware.Logger` alone, slog's JSON handler on `io.Discard`, five attributes | 3, exactly; at most 5 under `-race` | MEASURED after M8 | `TestAllocBudgetLogger` |
 | `middleware.Logger` wrapped around `middleware.RequestID`, same handler, six attributes | 6, exactly; at most 9 under `-race` | MEASURED after M8 | `TestAllocBudgetLoggerWithRequestID` |
@@ -260,6 +261,14 @@ The candidates are the string the chosen entry is converted to for `net.ParseIP`
 returns, and the `*net.TCPAddr` handed to `SetRemoteAddr`. That is an account, not an attribution:
 no profile was taken. A request with no header takes the fallback, `SetRemoteAddr(nil)`, and is not
 what this row measures.
+
+**`RealIP` with a port, 3.** The fixture is the same header with a port on the chosen entry,
+`198.51.100.7, 203.0.113.9:4711`. Checking the port reads the entry's bytes in place, and the
+string converted for `net.ParseIP` is the host alone, so the account is the bare entry's. It was
+measured at 3.0 on darwin arm64 (go1.25.6) and in a Linux arm64 container (golang:1.25.14), each
+without and with `-race`, and `TestAllocBudgetRealIPWithPort` pins 3 exactly under `-race` too. It
+was broken in both directions and failed both ways: `RealIP (entry with a port) allocated 3.0
+objects per call, want exactly 2` and `want exactly 4`.
 
 **`RequestID`, 2.** The fixture sends no `X-Request-Id`, so an id is generated: 16 bytes from
 `crypto/rand`, hex-encoded into a new string, then stored with `c.Set`. The likely two are that

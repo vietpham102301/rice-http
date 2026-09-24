@@ -68,15 +68,66 @@ func TestRealIPFallsBackWhenThereAreTooFewEntries(t *testing.T) {
 	}
 }
 
-// TestRealIPFallsBackOnAnEntryThatIsNotAnIP includes the two shapes some load
-// balancers write, an address with a port and a bracketed IPv6 address. Neither
-// parses today, so both fall back to the connection's address; parsing them is
-// on the roadmap as deferred work.
+// TestRealIPReadsTheShapesLoadBalancersWrite covers the entries RealIP
+// accepts. Some load balancers append the address they saw with its port, and
+// an IPv6 address with a port must be bracketed to be told apart. The port is
+// dropped: ClientIP reports an address, not a socket.
+func TestRealIPReadsTheShapesLoadBalancersWrite(t *testing.T) {
+	for _, tc := range []struct{ entry, want string }{
+		{"203.0.113.9", "203.0.113.9"},
+		{"203.0.113.9:4711", "203.0.113.9"},
+		{"2001:db8::1", "2001:db8::1"},
+		{"[2001:db8::1]", "2001:db8::1"},
+		{"[2001:db8::1]:4711", "2001:db8::1"},
+		{" [2001:db8::1]:4711 ", "2001:db8::1"},
+		{"203.0.113.9:65535", "203.0.113.9"},
+		{"[::ffff:203.0.113.9]", "203.0.113.9"}, // IPv4-mapped, written as IPv6
+		{"203.0.113.9:04711", "203.0.113.9"},    // a leading zero is still five digits
+	} {
+		got := dispatchFrom(t, ipApp(1), "10.0.0.2", tc.entry)
+		if got != tc.want {
+			t.Errorf("%q: address = %s, want %s", tc.entry, got, tc.want)
+		}
+	}
+}
+
+// TestRealIPReadsAnUnbracketedIPv6AddressWhole pins that an entry with more
+// than one colon and no brackets is never split at its last colon. The
+// address below is a valid IPv6 address; reading "4711" as a port would
+// attribute the request to 2001:db8::1, an address nobody wrote.
+func TestRealIPReadsAnUnbracketedIPv6AddressWhole(t *testing.T) {
+	got := dispatchFrom(t, ipApp(1), "10.0.0.2", "2001:db8::1:4711")
+	if got != "2001:db8::1:4711" {
+		t.Errorf("address = %s, want 2001:db8::1:4711 read whole", got)
+	}
+}
+
+// TestRealIPFallsBackOnAnEntryThatIsNotAnIP pins every malformed shape: each
+// falls back to the connection's address rather than to a guess.
 func TestRealIPFallsBackOnAnEntryThatIsNotAnIP(t *testing.T) {
 	for _, entry := range []string{
 		"not-an-ip",
-		"203.0.113.9:4711",
-		"[2001:db8::1]",
+		"198.51.100.7, ",     // the chosen entry is empty after trimming
+		"203.0.113.9:000080", // six characters, though the value is 80
+		"\u00a0203.0.113.9",  // only space and tab are HTTP whitespace
+		"[203.0.113.9]",      // brackets are for IPv6 only
+		"[203.0.113.9]:4711", // likewise
+		"[2001:db8::1",       // unclosed
+		"2001:db8::1]",       // unopened
+		"[2001:db8::1]x",     // junk after the bracket
+		"[2001:db8::1]:",     // empty port
+		"[2001:db8::1]:0",    // port zero
+		"[]",
+		"[]:4711",
+		"203.0.113.9:",
+		"203.0.113.9:0",
+		"203.0.113.9:65536",
+		"203.0.113.9:99999999999999999999",
+		"203.0.113.9:47a1",
+		"203.0.113.9:+4711",
+		"203.0.113.9: 4711",
+		":4711",
+		"example.com:4711",
 	} {
 		got := dispatchFrom(t, ipApp(1), "10.0.0.2", entry)
 		if got != "10.0.0.2" {

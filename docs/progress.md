@@ -16,6 +16,49 @@ Each entry uses this shape:
 
 ---
 
+## 2026-09-24 — post-M8 — RealIP reads an entry with a port
+
+**Did:** `middleware.RealIP` now reads an `X-Forwarded-For` entry carrying the port some load
+balancers append. A new function, `parseEntry`, accepts five shapes — a bare IPv4 or IPv6
+address, `203.0.113.9:4711`, `[2001:db8::1]` and `[2001:db8::1]:4711` — and drops the port; any
+other entry returns nil and the request falls back to the connection's address, as before.
+`TestRealIPFallsBackOnAnEntryThatIsNotAnIP`, which had pinned the port and bracket shapes as
+fallbacks, is replaced by `TestRealIPReadsTheShapesLoadBalancersWrite` for the accepted shapes,
+`TestRealIPReadsAnUnbracketedIPv6AddressWhole`, and a new `TestRealIPFallsBackOnAnEntryThatIsNotAnIP`
+with twenty-two rejected shapes. One budget, `TestAllocBudgetRealIPWithPort`. The roadmap moves the
+item from *Explicitly deferred* to *Done after M8*; the README, `middleware/doc.go`,
+`03-core-concepts.md` and `05-performance-model.md` drop the sentence saying such an entry falls
+back. Worked as a bounded change — a design approved in conversation, no spec or plan — because it
+changes one existing function and no interface.
+
+**Learned:** Two things.
+
+1. *An IPv6 address without brackets cannot carry a port, and guessing one is the unsafe
+   direction.* `2001:db8::1:4711` is a valid address; `net.SplitHostPort` would reject it, and a
+   last-colon split would read it as `2001:db8::1` with port 4711. The rule is therefore
+   structural: brackets mean IPv6 with an optional port, exactly one colon means IPv4 and a port,
+   more than one colon means an IPv6 address read whole. A port is one to five digits valued 1 to
+   65535, so a leading zero is accepted and `:000080` is not; only space and tab are trimmed.
+   Brackets are recognised by whether the
+   text inside has a colon, not by `To4()`, so an IPv4-mapped `[::ffff:203.0.113.9]` is accepted
+   and `[203.0.113.9]` is not.
+
+2. *Validating the port costs nothing.* The digits are read in place, and the string converted
+   for `net.ParseIP` is the host alone, so an entry with a port costs the 3 allocations a bare one
+   does. Measuring it went wrong once: a `sed` meant to break only the new budget's `want` matched
+   every `const want float64 = …` line in the file and changed `RequestID`'s and `Timeout`'s. The
+   failing suite caught it, and the two lines were restored by the function they sit in. A budget
+   is broken on purpose by editing its own function, not by pattern.
+
+**Measured:** `TestAllocBudgetRealIPWithPort`, 3.0 on darwin arm64 (go1.25.6) and in a Linux arm64
+container (golang:1.25.14), each without and with `-race`. Coverage: 99.4% total, `middleware`
+100.0%.
+
+**Next:** none scheduled. The roadmap's *Explicitly deferred* list names what remains, each needing
+its own brainstorm.
+
+---
+
 ## 2026-09-24 — post-M8 — CORS, a policy the browser enforces
 
 **Did:** `middleware.CORS(cfg CORSConfig)`. `CORSConfig` has six fields — `Origins`, required;

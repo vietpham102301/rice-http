@@ -75,10 +75,11 @@ knowing it happened. It counts from the right, because only the entries the trus
 appended cannot be forged, and it sets the address on every request, resolved or not: fasthttp
 serves every request on a keep-alive connection from one context and clears a rewritten address
 only when the connection closes, so a middleware that sometimes skipped the rewrite would report
-the previous request's client. It parses bare IP addresses only. An entry with a port
-(`203.0.113.9:4711`) or a bracketed IPv6 entry (`[2001:db8::1]`) falls back to the connection's
-address — safe, since it never reports an address the client chose, but behind a proxy that
-always appends a port, `RealIP` always reports the proxy. There is no `ClientIPString`; a caller
+the previous request's client. It reads a bare address, IPv4 or IPv6, or one with the port some
+load balancers append — `203.0.113.9:4711`, or `[2001:db8::1]:4711`, since an IPv6 address must
+be bracketed to carry a port — and drops the port. An unbracketed IPv6 address is read whole,
+never split at its last colon. Any other entry falls back to the connection's address, which is
+safe: it never reports an address the client chose. There is no `ClientIPString`; a caller
 who wants one calls `.String()` and pays the allocation where it can be seen.
 
 ### The context

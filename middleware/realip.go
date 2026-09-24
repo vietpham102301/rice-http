@@ -17,6 +17,11 @@ import (
 // than that, or an entry that is not an IP address, c.ClientIP reports the
 // connection's own address. It never falls back to the leftmost entry.
 //
+// An entry may carry a port, as some load balancers write it:
+// 203.0.113.9:4711, or [2001:db8::1]:4711 for IPv6, which must be bracketed to
+// carry one. The port is dropped. An unbracketed IPv6 address is read whole
+// and never split at its last colon.
+//
 // It sets the address on every request, resolved or not. fasthttp serves every
 // request on a connection from one context and clears a rewritten address only
 // when the connection closes, so a middleware that sometimes skipped the rewrite
@@ -44,7 +49,8 @@ func RealIP(trustedHops int) rice.Middleware {
 // line, or nil when there is none that parses as an IP address.
 //
 // An empty entry — from a trailing comma, say — counts as a position and, not
-// being an IP address, forces the fallback rather than being skipped.
+// being an IP address, forces the fallback rather than being skipped. So does
+// any entry parseEntry rejects.
 //
 // A nil return is an untyped nil net.Addr, which SetRemoteAddr documents as
 // restoring the connection's address. Returning a typed nil *net.TCPAddr
@@ -64,7 +70,7 @@ func resolve(lines [][]byte, trustedHops int) net.Addr {
 			if seen < trustedHops {
 				continue
 			}
-			ip := net.ParseIP(string(bytes.TrimSpace(entry)))
+			ip := parseEntry(entry)
 			if ip == nil {
 				return nil
 			}
@@ -72,4 +78,67 @@ func resolve(lines [][]byte, trustedHops int) net.Addr {
 		}
 	}
 	return nil
+}
+
+// parseEntry returns the address in one X-Forwarded-For entry, or nil.
+//
+// It accepts the shapes load balancers write: a bare address, IPv4 or IPv6;
+// an IPv4 address with a port, 203.0.113.9:4711; and a bracketed IPv6
+// address with or without a port, [2001:db8::1] and [2001:db8::1]:4711. The
+// port is dropped. It rejects everything else, including brackets around an
+// IPv4 address and a port outside 1–65535, so a malformed entry falls back to
+// the connection's address rather than to a guess.
+//
+// An entry with more than one colon and no brackets is an IPv6 address and is
+// read whole. It is never split at its last colon: 2001:db8::1:4711 is itself
+// a valid address, and reading 4711 as a port would attribute the request to
+// 2001:db8::1, an address nobody wrote.
+func parseEntry(entry []byte) net.IP {
+	// HTTP's optional whitespace is space and tab only; bytes.TrimSpace would
+	// also strip Unicode spaces such as U+00A0, which no proxy writes.
+	entry = bytes.Trim(entry, " \t")
+	if len(entry) > 0 && entry[0] == '[' {
+		end := bytes.IndexByte(entry, ']')
+		if end < 0 || !validPortSuffix(entry[end+1:]) {
+			return nil
+		}
+		host := entry[1:end]
+		// Written with a colon or it is not IPv6: [203.0.113.9] is rejected,
+		// while an IPv4-mapped [::ffff:203.0.113.9] is accepted.
+		if bytes.IndexByte(host, ':') < 0 {
+			return nil
+		}
+		return net.ParseIP(string(host))
+	}
+	if i := bytes.IndexByte(entry, ':'); i >= 0 && bytes.IndexByte(entry[i+1:], ':') < 0 {
+		// Exactly one colon: an IPv4 address and a port. The host has no
+		// colon, so ParseIP can only return IPv4 or nil.
+		if !validPort(entry[i+1:]) {
+			return nil
+		}
+		return net.ParseIP(string(entry[:i]))
+	}
+	return net.ParseIP(string(entry))
+}
+
+// validPortSuffix reports whether what follows a closing bracket is nothing or
+// a colon and a valid port.
+func validPortSuffix(rest []byte) bool {
+	return len(rest) == 0 || rest[0] == ':' && validPort(rest[1:])
+}
+
+// validPort reports whether p is a decimal port from 1 to 65535, written with
+// digits only: no sign, no space, at most five characters.
+func validPort(p []byte) bool {
+	if len(p) == 0 || len(p) > 5 {
+		return false
+	}
+	n := 0
+	for _, b := range p {
+		if b < '0' || b > '9' {
+			return false
+		}
+		n = n*10 + int(b-'0')
+	}
+	return n >= 1 && n <= 65535
 }

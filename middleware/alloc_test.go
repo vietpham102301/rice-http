@@ -54,6 +54,23 @@ func TestAllocBudgetRealIP(t *testing.T) {
 	}
 }
 
+// TestAllocBudgetRealIPWithPort pins RealIP's cost when the chosen entry
+// carries a port, as some load balancers write it. Checking the port reads the
+// bytes in place, so the figure is the bare entry's: the string converted for
+// net.ParseIP is the host alone, and nothing else is built.
+//
+// Measured at 3 on darwin arm64 (go1.25.6) and in a Linux arm64 container
+// (golang:1.25.14), with and without -race, so the race slack is 0: no
+// mechanism in assertAllocBudget's doc comment applies.
+func TestAllocBudgetRealIPWithPort(t *testing.T) {
+	const want float64 = 3
+
+	got := measure(t, middleware.RealIP(1), map[string]string{
+		"X-Forwarded-For": "198.51.100.7, 203.0.113.9:4711",
+	})
+	assertAllocBudget(t, "RealIP (entry with a port)", got, want, 0)
+}
+
 // TestAllocBudgetRequestIDGenerated pins RequestID's cost when it generates an
 // id, the common case. Encoding the id and storing it both allocate.
 //

@@ -109,10 +109,10 @@ app.Use(
   does:** the panic unwinds through `Logger` before it can write anything.
 - **`RealIP(trustedHops int)`** makes `c.ClientIP` report the client behind that many trusted
   proxies, counting `X-Forwarded-For` from the right, where the entries cannot be forged. Without
-  a proxy, do not install it: the rightmost entry is then whatever the client sent. It parses
-  bare IP addresses only — an entry with a port (`203.0.113.9:4711`) or a bracketed IPv6 entry
-  falls back to the connection's address, so behind a proxy that always appends a port it always
-  reports the proxy.
+  a proxy, do not install it: the rightmost entry is then whatever the client sent. It reads a
+  bare address or one with the port some load balancers append — `203.0.113.9:4711`, or
+  `[2001:db8::1]:4711` for IPv6 — and drops the port. A malformed entry falls back to the
+  connection's address, never to a guess.
 - **`RequestID()`** keeps an incoming `X-Request-Id` only if it is 1–64 characters of
   `[A-Za-z0-9_-]`, so a client cannot inject a line into the log; otherwise it generates one. It
   echoes the id on the response. Read it with `middleware.RequestIDFrom(c)`.
