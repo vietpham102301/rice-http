@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io/fs"
 	"strconv"
+	"sync"
 
 	"github.com/valyala/fasthttp"
 )
@@ -30,7 +31,8 @@ var staticIndexNames = []string{"index.html"}
 // A directory is answered by its index.html; one without an index is a 404,
 // and no directory is ever listed. Every failure reaches the ErrorHandler like
 // any other route's. Byte ranges and If-Modified-Since are answered; responses
-// are never compressed.
+// are never compressed. Headers set by middleware before next are kept on every
+// response, including a 304 and an error.
 //
 // Files are served by one fasthttp.FS per call, created in Build. It caches open
 // file handles for ten seconds and runs one goroutine to expire them, which
@@ -114,6 +116,13 @@ func (e *staticEntry) build() {
 // check. This is a defensive second line that keeps rice's answer a 404 if that
 // ever changes, rather than fasthttp.FS's 500. A NUL byte does reach here (it
 // survives normalisation, e.g. %00) and fasthttp.FS would answer it with 400.
+//
+// fasthttp answers 304 with ctx.NotModified and every error with ctx.Error, and
+// both reset the whole response, headers included. The headers middleware set
+// before next (CORS, a request ID, Cache-Control) would be lost on exactly the
+// responses a normal route keeps them on, so serve saves them first and puts
+// them back on any response that is not a 2xx. A 2xx is never reset, so it
+// keeps them without the copy.
 func (e *staticEntry) serve(c *Ctx) error {
 	if e.h == nil {
 		return errStaticNotBuilt
@@ -122,8 +131,40 @@ func (e *staticEntry) serve(c *Ctx) error {
 	if bytes.IndexByte(p, 0) >= 0 || hasDotDotSegment(p) {
 		return ErrNotFound
 	}
+	hdr := &c.fctx.Response.Header
+	var saved *fasthttp.ResponseHeader
+	if hasHeaders(hdr) {
+		saved = staticHeaderPool.Get().(*fasthttp.ResponseHeader)
+		hdr.CopyTo(saved)
+	}
 	e.h(c.fctx)
+	if saved != nil {
+		if code := hdr.StatusCode(); code < 200 || code >= 300 {
+			// CopyTo copies the saved status too; put back fasthttp's.
+			saved.CopyTo(hdr)
+			hdr.SetStatusCode(code)
+		}
+		saved.Reset()
+		staticHeaderPool.Put(saved)
+	}
 	return staticResult(c.fctx)
+}
+
+// staticHeaderPool holds the headers serve saves across fasthttp's handler.
+var staticHeaderPool = sync.Pool{New: func() any { return new(fasthttp.ResponseHeader) }}
+
+// hasHeaders reports whether h holds a header other than Content-Type.
+//
+// ResponseHeader.Len counts Content-Type even when it is only fasthttp's
+// default, so a fresh response has a length of 1 and Len alone cannot tell
+// whether middleware set anything. Content-Type is left out: respond sets its
+// own on every error, and a 304 carries no body for it to describe.
+func hasHeaders(h *fasthttp.ResponseHeader) bool {
+	n := h.Len()
+	if len(h.ContentType()) > 0 {
+		n--
+	}
+	return n > 0
 }
 
 // staticResult reads the status fasthttp's file handler wrote and returns the

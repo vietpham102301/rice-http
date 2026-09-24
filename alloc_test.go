@@ -746,3 +746,20 @@ func TestAllocBudgetStatic404(t *testing.T) {
 		app.handle(fctx)
 	})
 }
+
+// TestAllocBudgetStatic404WithHeaders pins the same miss behind one middleware
+// that sets a header, so serve saves the header before fasthttp resets it and
+// puts it back after. Measured on darwin arm64: 17 without -race, 21 with it,
+// where sync.Pool's dropped Puts make the saved header allocate now and then.
+func TestAllocBudgetStatic404WithHeaders(t *testing.T) {
+	app := New()
+	app.Static("/assets", staticFS(), setHeader("X-Request-Id", "r1"))
+	app.Build()
+	fctx := staticFctx("/assets/missing")
+
+	const want float64 = 21
+	budget(t, "static 404 with a middleware header", want, func() {
+		fctx.Response.Reset()
+		app.handle(fctx)
+	})
+}

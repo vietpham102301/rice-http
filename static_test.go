@@ -528,3 +528,52 @@ func TestStaticShutdownOfAnUnbuiltAppDoesNotPanic(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// setHeader is middleware that sets one response header before calling next.
+func setHeader(name, value string) Middleware {
+	return func(next Handler) Handler {
+		return func(c *Ctx) error {
+			c.SetHeader(name, value)
+			return next(c)
+		}
+	}
+}
+
+func TestStaticKeepsMiddlewareHeadersOnEveryResponse(t *testing.T) {
+	app := New()
+	app.Use(setHeader("Access-Control-Allow-Origin", "*"), setHeader("X-Request-Id", "r1"))
+	app.Static("/assets", staticFS(), setHeader("Cache-Control", "max-age=60"))
+	app.Build()
+
+	since := string(fasthttp.AppendHTTPDate(nil, staticModTime))
+	cases := []struct {
+		name    string
+		uri     string
+		headers []string
+		code    int
+	}{
+		{"file", "/assets/a.txt", nil, 200},
+		{"not modified", "/assets/a.txt", []string{"If-Modified-Since", since}, 304},
+		{"missing file", "/assets/missing", nil, 404},
+		{"directory without index", "/assets/nodir/", nil, 404},
+		{"unsatisfiable range", "/assets/a.txt", []string{"Range", "bytes=99-"}, 416},
+		{"directory without its slash", "/assets/docs", nil, 301},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fctx := doStatic(app, "GET", tc.uri, tc.headers...)
+			if got := fctx.Response.StatusCode(); got != tc.code {
+				t.Errorf("status %d, want %d", got, tc.code)
+			}
+			for name, want := range map[string]string{
+				"Access-Control-Allow-Origin": "*",
+				"X-Request-Id":                "r1",
+				"Cache-Control":               "max-age=60",
+			} {
+				if got := string(fctx.Response.Header.Peek(name)); got != want {
+					t.Errorf("%s %q, want %q", name, got, want)
+				}
+			}
+		})
+	}
+}
