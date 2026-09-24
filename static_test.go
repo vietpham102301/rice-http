@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -453,27 +454,29 @@ func cacheGoroutines() int {
 }
 
 // stableCacheGoroutines returns the cache goroutine count once it stabilizes
-// after garbage collection. fasthttp registers a runtime cleanup that stops an
-// unreachable FS's cache goroutine at GC, and earlier tests in this package
-// build Apps and drop them, so the baseline can drift downward during the test
-// as those Apps are collected. This helper runs GC, reads the count, waits 20ms,
-// runs GC again, reads again, and returns the count once two consecutive reads
-// agree, or fails with Fatalf after a 2-second deadline.
+// after garbage collection. fasthttp stops an unreachable FS's cache goroutine
+// through a runtime cleanup that runs asynchronously after a GC, and earlier
+// tests in this package drop built Apps. This helper turns automatic GC off for
+// the test and waits until explicit GCs stop changing the count, allowing all
+// queued cleanups to run before returning the baseline.
 func stableCacheGoroutines(t *testing.T) int {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	var prev int
+	old := debug.SetGCPercent(-1)
+	t.Cleanup(func() { debug.SetGCPercent(old) })
+
+	deadline := time.Now().Add(3 * time.Second)
+	prev := -1
 	for {
 		runtime.GC()
+		time.Sleep(50 * time.Millisecond)
 		curr := cacheGoroutines()
 		if curr == prev {
 			return curr
 		}
 		prev = curr
 		if time.Now().After(deadline) {
-			t.Fatalf("cache goroutine count did not stabilize after 2s: last read %d", cacheGoroutines())
+			t.Fatalf("cache goroutine count did not stabilize after 3s: last read %d", prev)
 		}
-		time.Sleep(20 * time.Millisecond)
 	}
 }
 
@@ -498,13 +501,11 @@ func TestStaticStartsNoGoroutineUntilBuild(t *testing.T) {
 	cacheGoroutinesSettleAt(t, base)
 
 	app.Build()
-	time.Sleep(10 * time.Millisecond)
 	cacheGoroutinesSettleAt(t, base+2)
 
 	if err := app.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(10 * time.Millisecond)
 	cacheGoroutinesSettleAt(t, base)
 	runtime.KeepAlive(app)
 }
