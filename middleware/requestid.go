@@ -7,13 +7,12 @@ import (
 	rice "github.com/vietpham102301/rice-http"
 )
 
-const (
-	requestIDHeader = "X-Request-Id"
+const requestIDHeader = "X-Request-Id"
 
-	// requestIDKey is the store key. It is unexported and namespaced so that no
-	// handler's own c.Set can collide with it; read the id with RequestIDFrom.
-	requestIDKey = "rice/middleware.request-id"
-)
+// requestIDKey is the store key. A Key is identified by the value NewKey made,
+// not by its name, so no other middleware can read or overwrite this slot; the
+// namespaced name is only what String prints. Read the id with RequestIDFrom.
+var requestIDKey = rice.NewKey[string]("rice/middleware.request-id")
 
 // RequestID gives every request an id, stores it for RequestIDFrom, and writes
 // it to the X-Request-Id response header so a client can quote it.
@@ -43,7 +42,7 @@ func RequestID() rice.Middleware {
 			} else {
 				id = newRequestID()
 			}
-			c.Set(requestIDKey, id)
+			requestIDKey.Set(c, id)
 			c.SetHeader(requestIDHeader, id)
 			return next(c)
 		}
@@ -53,11 +52,7 @@ func RequestID() rice.Middleware {
 // RequestIDFrom returns the id RequestID assigned, or "" when RequestID is not
 // installed.
 func RequestIDFrom(c *rice.Ctx) string {
-	v, ok := c.Get(requestIDKey)
-	if !ok {
-		return ""
-	}
-	id, _ := v.(string)
+	id, _ := requestIDKey.Get(c)
 	return id
 }
 

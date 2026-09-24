@@ -16,6 +16,57 @@ Each entry uses this shape:
 
 ---
 
+## 2026-09-24 — post-M8 — Typed store keys replace Set and Get
+
+**Did:** `rice.Key[T]`, `rice.NewKey[T](name)` and the methods `Key.Set(c, v)`, `Key.Get(c)` and
+`Key.String()`. A key's identity is a `*keyID` that `NewKey` allocates; the name is only what
+`String` prints. `Ctx.Set(string, any)` and `Ctx.Get(string)` are removed. The store keeps M6's
+shape — a slice pre-sized to four, scanned linearly, zeroed on release — with `entry.key` now a
+`*keyID`. `Key` also carries a zero-size `_ [0]*T`, so a conversion between keys of different types
+does not compile; the review of the whole branch found that without it `Key[int](aStringKey)`
+compiled and `Get` panicked at run time. `NewKey("")` panics, and so do `Set` and `Get` on a zero
+`Key`; both methods call the poison check first, so under `ricedebug` a released `Ctx` reports
+use-after-release before the zero-key panic. `middleware.RequestID` stores its id under a
+`Key[string]`, and `bench/rice_bench_test.go`'s `BenchmarkCtxSetGet` moved to a key without changing
+its name, which the M6 and M7 results files record. `ctx_store_test.go` was rewritten for keys:
+fourteen tests, among them `TestTwoKeysWithTheSameNameNeverCollide` and
+`TestKeyStoresANilInterfaceValue`; one new `ricedebug` test, `TestKeyMethodsPanicAfterRelease`; the
+three store budgets renamed and one added, `TestAllocBudgetKeyGetString`.
+[ADR-0016](adr/0016-typed-store-keys.md) records the decision. The roadmap moves the item from
+*Explicitly deferred* to *Done after M8*; `02-architecture.md`, `03-core-concepts.md` and
+`05-performance-model.md` describe keys. Executed natively from a plan, with one review of the whole
+branch at the end.
+
+**Learned:** Three things.
+
+1. *A Go method cannot declare its own type parameters, so the typed operation lives on the key.*
+   `c.Get[T](k)` is not expressible. The choice was `k.Get(c)` or a package-level `rice.Get(c,
+   k)`; the method reads like every other accessor, which hangs off its subject.
+
+2. *A typed key buys safety, not speed.* Boxing is the value's cost, not the key's: `Key.Set` with a
+   non-constant string still costs one allocation, as `c.Set` did, and every figure is unchanged.
+   The one new hazard was in `Get`: a nil stored for an interface `T` is a nil `any`, and asserting
+   a nil `any` to an interface type panics. `Get` returns the zero `T` for it, and
+   `TestKeyStoresANilInterfaceValue` failed with `interface conversion: interface is nil, not
+   error` when that branch was removed.
+
+3. *`Key`'s methods escape the reflection walk that guards the borrow contract.*
+   `TestEveryCtxMethodPanicsAfterRelease` walks the method set of `*Ctx`, and `Key.Set` and
+   `Key.Get` are methods on `Key`. They have their own test, which also shows the poison check comes
+   first: with the two checks swapped, its zero-key `Get` case failed.
+
+**Measured:** `Key.Set` with a pointer 0, `Key.Get` with a pointer 0, `Key.Set` with a non-constant
+string 1, `Key.Get` with a string 0 — each on darwin arm64 (go1.25.6) and in a Linux arm64 container
+(golang:1.25.14), without and with `-race`. `RequestID`'s budgets pass unchanged: 2 generating an
+id, 6 under `Logger`. `BenchmarkCtxSetGet` reports 0 allocs/op. Coverage: 99.4% total, root package
+99.4%. They were measured through a temporary test that logged `AllocsPerRun` and was deleted before
+commit, so no budget's `want` was edited to read its figure.
+
+**Next:** none scheduled. The roadmap's *Explicitly deferred* list names what remains, each needing
+its own brainstorm.
+
+---
+
 ## 2026-09-24 — post-M8 — RealIP reads an entry with a port
 
 **Did:** `middleware.RealIP` now reads an `X-Forwarded-For` entry carrying the port some load

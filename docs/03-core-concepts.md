@@ -168,18 +168,41 @@ belongs outermost. See [ADR-0013](adr/0013-middleware-can-settle-a-request.md).
 ### Per-request store
 
 ```go
-func (c *Ctx) Set(key string, v any)
-func (c *Ctx) Get(key string) (any, bool)
+type Key[T any] struct{ /* unexported */ }
+
+func NewKey[T any](name string) Key[T]
+func (k Key[T]) Set(c *Ctx, v T)
+func (k Key[T]) Get(c *Ctx) (T, bool)
+func (k Key[T]) String() string
 ```
 
-Backed by a small slice of key/value pairs, not a map, pre-sized to four entries on each
-pooled `Ctx`. Middleware typically stores one or two values, and a linear scan over a few
-entries beats a map allocation. A fifth key grows the slice — once per pooled `Ctx`, since
-the grown slice is kept. That is a documented cliff, not a secret.
+A value is stored and read through a `Key`, which fixes its type:
 
-`Set` allocates nothing itself, but a non-pointer value is boxed into `any` at the call
-site, and that can allocate: `c.Set("id", someString)` costs one allocation, and it is the
-caller's. Store a pointer to avoid it.
+```go
+var userKey = rice.NewKey[*User]("user") // once, at package level
+
+userKey.Set(c, u)
+u, ok := userKey.Get(c) // u is a *User
+```
+
+A key's identity is made by `NewKey`, not by its name: two `NewKey` calls give two keys that never
+share a value, even with the same name and type, so two middleware that both choose `"user"` do
+not overwrite each other. A copy of a `Key` is the same key, and `String` returns its name. `Get`
+with nothing stored returns the zero `T` and `false`; a second `Set` replaces the first; a nil
+value is a value. `NewKey("")` panics, and so do `Set` and `Get` on a zero `Key` that `NewKey` did
+not make, since every zero key would otherwise share one slot. Declare keys as package-level
+variables: `NewKey` allocates once for the key's identity, and a key made per request pays that
+each time and cannot be read back by the next call. Why this replaced `c.Set(string, any)` is
+[ADR-0016](adr/0016-typed-store-keys.md).
+
+The store is backed by a small slice of key/value pairs, not a map, pre-sized to four entries on
+each pooled `Ctx`. Middleware typically stores one or two values, and a linear scan over a few
+entries beats a map allocation. A fifth key grows the slice — once per pooled `Ctx`, since the
+grown slice is kept. That is a documented cliff, not a secret.
+
+`Set` allocates nothing itself, but a non-pointer value is boxed into the store's `any` at the call
+site, and that can allocate: `idKey.Set(c, someString)` costs one allocation, and it is the
+caller's. Store a pointer to avoid it. Typed keys change what can go wrong, not what it costs.
 
 ### Lifetime
 
@@ -215,10 +238,12 @@ A decorator: it takes the next handler and returns a replacement. This is the
 `func(Handler) Handler` shape, not the `c.Next()` shape used by Gin and Fiber.
 
 ```go
+var requestIDKey = rice.NewKey[string]("request_id")
+
 func RequestID() rice.Middleware {
     return func(next rice.Handler) rice.Handler {
         return func(c *rice.Ctx) error {
-            c.Set("request_id", newID())
+            requestIDKey.Set(c, newID())
             return next(c)
         }
     }
@@ -226,8 +251,8 @@ func RequestID() rice.Middleware {
 ```
 
 This one is an illustration of the shape. rice ships a real one, `middleware.RequestID`, which
-stores the id under its own unexported key: read it with `middleware.RequestIDFrom(c)`, not
-`c.Get("request_id")`, which returns nothing.
+stores the id under its own unexported key: read it with `middleware.RequestIDFrom(c)`. A key of
+your own named `"request_id"` is a different key and reads nothing.
 
 Three properties follow from this shape, and they are why it was chosen:
 

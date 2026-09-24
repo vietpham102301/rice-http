@@ -117,3 +117,27 @@ func TestTheDebugBuildNeverReusesAContext(t *testing.T) {
 		t.Error("poolReuse is true under ricedebug; a poisoned Ctx would be un-poisoned by its next acquire")
 	}
 }
+
+// TestKeyMethodsPanicAfterRelease covers what the reflection walk above cannot:
+// Key's methods are methods on Key, not on *Ctx. A zero Key is included so the
+// use-after-release panic is shown to come before the zero-key check.
+func TestKeyMethodsPanicAfterRelease(t *testing.T) {
+	c := releasedCtx(t)
+	k := NewKey[string]("k")
+	var zero Key[string]
+	for name, call := range map[string]func(){
+		"Set":          func() { k.Set(c, "v") },
+		"Get":          func() { k.Get(c) },
+		"zero key Set": func() { zero.Set(c, "v") },
+		"zero key Get": func() { zero.Get(c) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				if r := recover(); r != errUseAfterRelease {
+					t.Errorf("%s on a released Ctx: recovered %v, want the use-after-release panic", name, r)
+				}
+			}()
+			call()
+		})
+	}
+}
