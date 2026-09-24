@@ -1,6 +1,7 @@
 package rice
 
 import (
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -194,4 +195,20 @@ func TestAZeroKeyPanics(t *testing.T) {
 	var k Key[int]
 	t.Run("Set", func(t *testing.T) { wantKeyPanic(t, func() { k.Set(c, 1) }) })
 	t.Run("Get", func(t *testing.T) { wantKeyPanic(t, func() { k.Get(c) }) })
+}
+
+// TestKeysOfDifferentTypesDoNotConvert pins that the type a key fixes cannot
+// be undone by a conversion. Without a field that mentions T, every Key has the
+// same underlying type, Key[int](aStringKey) compiles, and Get panics at run
+// time with the wrong-type failure keys exist to remove. reflect is confined
+// to this test; ADR-0006 governs production code.
+func TestKeysOfDifferentTypesDoNotConvert(t *testing.T) {
+	from := reflect.TypeOf(Key[string]{})
+	to := reflect.TypeOf(Key[int]{})
+	if from.ConvertibleTo(to) {
+		t.Error("Key[string] converts to Key[int]; the key no longer fixes its type")
+	}
+	if !from.Comparable() {
+		t.Error("Key is not comparable; it can no longer be a map key or compared with ==")
+	}
 }

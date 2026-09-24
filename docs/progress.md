@@ -22,17 +22,20 @@ Each entry uses this shape:
 `Key.String()`. A key's identity is a `*keyID` that `NewKey` allocates; the name is only what
 `String` prints. `Ctx.Set(string, any)` and `Ctx.Get(string)` are removed. The store keeps M6's
 shape — a slice pre-sized to four, scanned linearly, zeroed on release — with `entry.key` now a
-`*keyID`. `NewKey("")` panics, and so do `Set` and `Get` on a zero `Key`; both methods call the
-poison check first, so under `ricedebug` a released `Ctx` reports use-after-release before the
-zero-key panic. `middleware.RequestID` stores its id under a `Key[string]`, and
-`bench/rice_bench_test.go`'s `BenchmarkCtxSetGet` moved to a key without changing its name, which
-the M6 and M7 results files record. `ctx_store_test.go` was rewritten for keys: thirteen tests,
-among them `TestTwoKeysWithTheSameNameNeverCollide` and `TestKeyStoresANilInterfaceValue`; one new
-`ricedebug` test, `TestKeyMethodsPanicAfterRelease`; the three store budgets renamed and one added,
-`TestAllocBudgetKeyGetString`. [ADR-0016](adr/0016-typed-store-keys.md) records the decision. The
-roadmap moves the item from *Explicitly deferred* to *Done after M8*; `02-architecture.md`,
-`03-core-concepts.md` and `05-performance-model.md` describe keys. Executed natively from a plan,
-with one review of the whole branch at the end.
+`*keyID`. `Key` also carries a zero-size `_ [0]*T`, so a conversion between keys of different types
+does not compile; the review of the whole branch found that without it `Key[int](aStringKey)`
+compiled and `Get` panicked at run time. `NewKey("")` panics, and so do `Set` and `Get` on a zero
+`Key`; both methods call the poison check first, so under `ricedebug` a released `Ctx` reports
+use-after-release before the zero-key panic. `middleware.RequestID` stores its id under a
+`Key[string]`, and `bench/rice_bench_test.go`'s `BenchmarkCtxSetGet` moved to a key without changing
+its name, which the M6 and M7 results files record. `ctx_store_test.go` was rewritten for keys:
+fourteen tests, among them `TestTwoKeysWithTheSameNameNeverCollide` and
+`TestKeyStoresANilInterfaceValue`; one new `ricedebug` test, `TestKeyMethodsPanicAfterRelease`; the
+three store budgets renamed and one added, `TestAllocBudgetKeyGetString`.
+[ADR-0016](adr/0016-typed-store-keys.md) records the decision. The roadmap moves the item from
+*Explicitly deferred* to *Done after M8*; `02-architecture.md`, `03-core-concepts.md` and
+`05-performance-model.md` describe keys. Executed natively from a plan, with one review of the whole
+branch at the end.
 
 **Learned:** Three things.
 

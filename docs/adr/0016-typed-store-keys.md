@@ -29,7 +29,7 @@ function.
 The store is reached only through a typed key.
 
 ```go
-type Key[T any] struct{ id *keyID }
+type Key[T any] struct{ /* unexported */ }
 
 func NewKey[T any](name string) Key[T]
 
@@ -46,6 +46,11 @@ u, ok := userKey.Get(c) // u is a *User
 ```
 
 - **The key fixes the type.** `userKey.Set(c, "a string")` does not compile, and `Get` returns `T`.
+  `Key` carries a zero-size field `_ [0]*T` ahead of its identity, so `Key[int]` and
+  `Key[string]` have different underlying types and `Key[int](aStringKey)` does not compile either.
+  Without it every instantiation shares one underlying type, the conversion compiles, and `Get`
+  panics on the wrong type at run time — the failure this decision removes. The field adds no
+  size and keeps `Key` comparable, so a key can be compared with `==` or used as a map key.
 - **Identity is a pointer `NewKey` allocates; the name is for people.** Two `NewKey` calls give two
   keys that never share a slot, even with the same name and type. A copy of a `Key` is the same
   key. `String` returns the name.

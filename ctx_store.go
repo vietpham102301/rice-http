@@ -32,7 +32,14 @@ type entry struct {
 //
 // Borrowed: a value lives as long as the Ctx it was stored on, and cannot be
 // read back through that Ctx once the handler has returned.
-type Key[T any] struct{ id *keyID }
+type Key[T any] struct {
+	// _ mentions T so that Key[int] and Key[string] have different underlying
+	// types. Without it Key[int](aStringKey) would compile, and Get would panic
+	// on the wrong type at run time. [0]*T is zero-sized and keeps Key
+	// comparable; it comes first so it adds no trailing padding.
+	_  [0]*T
+	id *keyID
+}
 
 // NewKey returns a new key for values of type T. name appears in String and
 // in nothing else; it must not be empty.

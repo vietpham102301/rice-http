@@ -19,6 +19,17 @@ func TestRegisterTracksTheLargestParameterCount(t *testing.T) {
 	}
 }
 
+// releaseKeys are more keys than storeCapacity, so the store in
+// TestReleaseDropsEveryReference grows and its whole grown backing array, not
+// only the first storeCapacity slots, is checked after release.
+var releaseKeys = func() []Key[*struct{}] {
+	ks := make([]Key[*struct{}], storeCapacity+2)
+	for i := range ks {
+		ks[i] = NewKey[*struct{}]("release")
+	}
+	return ks
+}()
+
 // TestReleaseDropsEveryReference is the reason release exists as more than a
 // Put. A pooled Ctx that kept its fctx, its App or its parameter values would
 // keep a finished request's memory reachable for as long as it sat in the pool.
@@ -27,7 +38,9 @@ func TestReleaseDropsEveryReference(t *testing.T) {
 	app := New()
 	app.GET("/users/:id", func(c *Ctx) error {
 		retained = c
-		NewKey[*struct{}]("k").Set(c, &struct{}{})
+		for _, k := range releaseKeys {
+			k.Set(c, &struct{}{})
+		}
 		return c.String(200, "ok")
 	})
 
@@ -53,6 +66,9 @@ func TestReleaseDropsEveryReference(t *testing.T) {
 	}
 	// Truncating is not enough: the backing array would still hold the value and
 	// the pool would keep it alive.
+	if got := cap(retained.store); got <= storeCapacity {
+		t.Fatalf("store capacity is %d; the test must grow it past %d to check the grown array", got, storeCapacity)
+	}
 	for i, e := range retained.store[:cap(retained.store)] {
 		if e.key != nil || e.val != nil {
 			t.Errorf("store backing slot %d still holds %+v after release", i, e)
