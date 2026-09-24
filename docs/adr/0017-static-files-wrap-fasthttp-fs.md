@@ -24,15 +24,23 @@ server's logger; and with `Compress` it writes compressed copies of files to dis
 - **Errors.** After fasthttp's handler returns, rice reads the status it wrote. 404, and the 403
   for a directory without an index, become `ErrNotFound`; any other status ≥ 400 becomes an
   `HTTPError` with that code. The funnel's `respond` overwrites fasthttp's body.
+- **Middleware headers.** fasthttp answers a 304 with `ctx.NotModified` and every error with
+  `ctx.Error`, and both reset the whole response. When middleware has set a header before `next`,
+  rice copies the response header aside first and puts it back, with fasthttp's status, on any
+  response that is not a 2xx, so CORS, a request ID or `Cache-Control` survive a 304, a 404 or a
+  416 as they do on any other route. A 2xx is never reset and is not copied.
 - **Traversal.** fasthttp normalises `fctx.Path()` unconditionally before routing, so a request
   carrying a `..` segment is already a route miss — a 404 — before a Static handler runs; the
   handler's own `..` check is a second line, kept in case that ever changes, not the reason a `..`
   fails today. A NUL byte does survive normalisation and reaches the handler, which refuses it
   with a 404 before fasthttp sees the path — fasthttp.FS alone would answer 400.
 - **Directory redirect.** fasthttp's 302 is replaced by a 301 whose relative `Location` is the
-  request's own percent-encoded path plus `/`, query kept.
+  request's normalised path — `fctx.Path()`, the one routing matched — percent-encoded, plus `/`,
+  query kept. Never `URI.RequestURI`: with `URI.DisablePathNormalizing` set it returns the raw
+  path, and `//evil.example/../docs` would redirect off the site.
 - **Lifecycle.** `Shutdown` closes every `CleanStop` after the drain and before the `OnShutdown`
-  hooks.
+  hooks. A `Build` after `Shutdown` creates no `fasthttp.FS`, since nothing would stop its
+  goroutine; its Static routes answer 500.
 - **Configuration is fixed:** `index.html` only, no listings, ranges on, compression off.
 
 ## Alternatives
@@ -62,11 +70,18 @@ upgrade that changes a status fails a test rather than a client.
 Silencing it needs a stat per request or replacing fasthttp's logger for everything; an
 application that cares sets `fasthttp.Server.Logger` when mounting, or puts a proxy in front.
 
-**A mounted App keeps its goroutines for the life of the process.** fasthttp registers a
+**A mounted App keeps its goroutines while its handler is reachable — normally the life of the
+process.** fasthttp registers a
 `runtime.AddCleanup` on each FS handler, so the cache goroutine stops at `Shutdown` or when the
 App's handler becomes unreachable and is garbage collected. For an App mounted through
 `FasthttpHandler` and never shut down, its handler stays reachable for as long as the process
 runs, which is normally the life of the process.
 
-**Static files are outside the zero-allocation claim.** Their cost is pinned in
+**fasthttp's 416 carries no `Content-Range`.** RFC 9110 says an unsatisfiable range SHOULD be
+answered with `Content-Range: bytes */<length>`; fasthttp's `ctx.Error` writes none, and rice does
+not add one.
+
+**Static files are outside the zero-allocation claim.** A cache hit measures 0 allocations, but
+the budget and the benchmark measure the handler only: they exclude writing the file's bytes to
+the connection, which fasthttp does after the handler returns. Their cost is pinned in
 [05-performance-model.md](../05-performance-model.md).

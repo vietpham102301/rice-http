@@ -26,10 +26,13 @@ a directory on disk, `embed.FS` (through `fs.Sub`) for files compiled in — for
 once, so an App that registers a `Static` route and is never built starts no goroutine. The route
 handler runs fasthttp's handler and reads the status it wrote: 2xx and 304 stand; 404 and a
 directory's 403 become `ErrNotFound`; any other status ≥ 400 becomes `NewHTTPError(status, "")`;
-fasthttp's 302 is replaced with rice's own 301, `Location` rebuilt from the request's own
-percent-encoded path plus `/`, with the query kept. Before fasthttp runs, `serve` refuses a NUL
-byte or a `..` segment with 404. `Shutdown` closes every entry's `CleanStop` channel after the
-drain and before the `OnShutdown` hooks. `static_test.go`'s tests group into serving
+fasthttp's 302 is replaced with rice's own 301, `Location` rebuilt from the normalised
+`fctx.Path()` percent-encoded plus `/`, with the query kept. Before fasthttp runs, `serve` refuses
+a NUL byte or a `..` segment with 404; when middleware has set a header, it also copies the
+response header into a pooled one, and puts it back, with fasthttp's status, on any response that
+is not a 2xx. `Shutdown` closes every entry's `CleanStop` channel after the drain and before the
+`OnShutdown` hooks, and a `Build` after it creates no `fasthttp.FS`. `static_test.go`'s tests
+group into serving
 (`TestStaticServesFiles`, `TestStaticServesAnEmptyFile`, `TestStaticHeadSendsHeadersWithoutBody`,
 `TestStaticAnswersARangeWithPartialContent`, `TestStaticAnswersNotModified`,
 `TestStaticWithAnEmptyPrefixServesFromTheRoot`,
@@ -39,15 +42,22 @@ drain and before the `OnShutdown` hooks. `static_test.go`'s tests group into ser
 `TestStaticDefaultErrorBodyIsNotFasthttps`, `TestStaticHeadForAMissingFileIsNotFound`), traversal
 (`TestStaticNeverServesOutsideTheFS`, over `os.DirFS(t.TempDir())`, and `TestHasDotDotSegment`),
 redirect (`TestStaticRedirectsADirectoryWithoutItsSlash`, `TestStaticRedirectNeverLeavesTheSite`,
-`TestStaticRedirectFollowedServesTheIndex`) and lifecycle (`TestStaticStartsNoGoroutineUntilBuild`,
-`TestStaticShutdownTwiceDoesNotPanic`, `TestStaticShutdownOfAnUnbuiltAppDoesNotPanic`). Two
-budgets, `TestAllocBudgetStaticFile` and `TestAllocBudgetStatic404`.
+`TestStaticRedirectFollowedServesTheIndex`, `TestStaticRedirectIgnoresTheRawPath`), headers
+(`TestStaticKeepsMiddlewareHeadersOnEveryResponse`) and lifecycle
+(`TestStaticStartsNoGoroutineUntilBuild`, `TestStaticShutdownTwiceDoesNotPanic`,
+`TestStaticShutdownOfAnUnbuiltAppDoesNotPanic`, `TestStaticBuildAfterShutdownStartsNoGoroutine`).
+Three budgets, `TestAllocBudgetStaticFile`, `TestAllocBudgetStatic404` and
+`TestAllocBudgetStatic404WithHeaders`. The review of the whole branch found three bugs, fixed
+before merge: fasthttp's 304 and error responses dropped every header middleware had set; the
+directory redirect took its `Location` from `URI.RequestURI`, which is the raw path when
+`URI.DisablePathNormalizing` is set, so `//evil.example/../assets/docs` redirected off the site;
+and a `Shutdown` before `Build` left a later `Build` starting goroutines nothing would stop.
 [ADR-0017](adr/0017-static-files-wrap-fasthttp-fs.md) records the decision; `03-core-concepts.md`
 gets a Static section and the `Group` signature; `05-performance-model.md` lists `Static` under
-the zero-allocation exclusions and pins its two budgets and the benchmark; `04-roadmap.md` moves
+the zero-allocation exclusions and pins its three budgets and the benchmark; `04-roadmap.md` moves
 the item from *Explicitly deferred* to *Done after M8*; the README gets a short example.
 
-**Learned:** Four things.
+**Learned:** Six things.
 
 1. *fasthttp's directory redirect is built from the rewritten path, not the request's.* Probing
    found `/static/docs` (no trailing slash) answering 302 to `/docs/` — the prefix is gone,
@@ -76,13 +86,31 @@ the item from *Explicitly deferred* to *Done after M8*; the README gets a short 
    test and polls explicit `runtime.GC()` calls until the count stabilizes before taking the
    baseline.
 
+5. *fasthttp's `ctx.NotModified` and `ctx.Error` reset the whole response, headers included.* A
+   Static route's 304, 404, 403 and 416 lost the CORS, request-ID and `Cache-Control` headers
+   middleware had set, which a normal route returning `ErrNotFound` keeps. `ResponseHeader.Len`
+   is no test for "middleware set something": it counts `Content-Type` even when that is only
+   fasthttp's default, so a fresh response has a length of 1; `serve` discounts it.
+
+6. *`fctx.Path()` is always normalised; `URI.RequestURI()` is not.* With
+   `DisablePathNormalizing` it returns the raw path, so anything built from it can disagree with
+   what routing matched. `URI.SetPathBytes` is no way back either: it decodes its argument, so
+   feeding it the already decoded path decodes twice. The redirect encodes `fctx.Path()` with
+   `net/url` instead. A test of it needs a `Host` header, or fasthttp reads the leading
+   `//evil.example` as an authority.
+
 **Measured:** `TestAllocBudgetStaticFile` (a small file already in fasthttp's handle cache): 0
 without `-race`, 0 with `-race`; budget pinned at 0. `TestAllocBudgetStatic404` (a missing file):
-17 without `-race`, 20 with `-race`; budget pinned at the ceiling, 20. `BenchmarkStaticSmallFile`:
-median 147.0 ns/op, 0 B/op, 0 allocs/op over ten runs, recorded in
-`bench/results/post-M8-static-files.txt` (darwin/arm64, go1.25.6, Darwin 27.0.0, Apple M2 Pro).
-All four figures are darwin arm64 only; no Linux container run was taken for this feature.
-Coverage from `make cover`: 99.5% total, root package 99.4%.
+17 without `-race`, 20 with `-race`; budget pinned at the ceiling, 20. Both were re-measured after
+the header fix and did not change: with no middleware, `serve` copies nothing.
+`TestAllocBudgetStatic404WithHeaders` (the same miss behind one middleware that sets a header): 17
+without `-race`, 21 with `-race`, the extra one from `sync.Pool` dropping Puts under the race
+detector; budget pinned at 21. `BenchmarkStaticSmallFile`: median 147.0 ns/op, 0 B/op, 0
+allocs/op over ten runs, recorded in `bench/results/post-M8-static-files.txt` (darwin/arm64,
+go1.25.6, Darwin 27.0.0, Apple M2 Pro); the budgets and the benchmark measure the handler and
+exclude writing the file's bytes to the connection. Every figure here is darwin arm64 only; no
+Linux container run was taken for this feature.
+Coverage from `make cover` after the fixes: 99.5% total, root package 99.5%.
 
 **Next:** content negotiation, the next item on the roadmap's *Explicitly deferred* list, which
 needs its own brainstorm.

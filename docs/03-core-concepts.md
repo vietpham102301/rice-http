@@ -465,8 +465,9 @@ func (g *Group) Static(prefix string, fsys fs.FS, mw ...Middleware)
 is a 404 and nothing is ever listed. A directory requested without its slash answers 301 to the
 same path with the slash. Byte ranges and `If-Modified-Since` are answered; nothing is compressed.
 Every failure reaches the ErrorHandler. Routes registered separately under the prefix outrank a
-file of the same name. Headers such as `Cache-Control` come from middleware passed in `mw`. See
-[ADR-0017](adr/0017-static-files-wrap-fasthttp-fs.md).
+file of the same name. Headers such as `Cache-Control` come from middleware passed in `mw`, and
+every header middleware sets survives a 304 and an error response, although fasthttp resets the
+response for both. See [ADR-0017](adr/0017-static-files-wrap-fasthttp-fs.md).
 
 ---
 
