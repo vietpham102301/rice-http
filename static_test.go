@@ -1,10 +1,12 @@
 package rice
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -431,5 +433,68 @@ func TestStaticRedirectFollowedServesTheIndex(t *testing.T) {
 	fctx := doStatic(app, "GET", loc)
 	if got := string(fctx.Response.Body()); got != "docs" {
 		t.Errorf("following %q: body %q, want %q", loc, got, "docs")
+	}
+}
+
+// cacheGoroutines counts fasthttp.FS cache goroutines by their frame, so the
+// count is exact whatever else the process runs. Tests before these build Apps
+// they never shut down, whose goroutines never exit, so every check is a delta
+// from a count taken at the start.
+func cacheGoroutines() int {
+	buf := make([]byte, 1<<20)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			return strings.Count(string(buf[:n]), "(*inMemoryCacheManager).handleCleanCache(")
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+}
+
+// cacheGoroutinesSettleAt polls, because a goroutine told to stop is still
+// listed until it has been scheduled to return.
+func cacheGoroutinesSettleAt(t *testing.T, want int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for cacheGoroutines() != want {
+		if time.Now().After(deadline) {
+			t.Fatalf("fasthttp.FS cache goroutines: %d, want %d", cacheGoroutines(), want)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestStaticStartsNoGoroutineUntilBuild(t *testing.T) {
+	base := cacheGoroutines()
+	app := New()
+	app.Static("/a", staticFS())
+	app.Static("/b", staticFS())
+	cacheGoroutinesSettleAt(t, base)
+
+	app.Build()
+	cacheGoroutinesSettleAt(t, base+2)
+
+	if err := app.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	cacheGoroutinesSettleAt(t, base)
+}
+
+func TestStaticShutdownTwiceDoesNotPanic(t *testing.T) {
+	app := New()
+	app.Static("/a", staticFS())
+	app.Build()
+	for i := 0; i < 2; i++ {
+		if err := app.Shutdown(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestStaticShutdownOfAnUnbuiltAppDoesNotPanic(t *testing.T) {
+	app := New()
+	app.Static("/a", staticFS())
+	if err := app.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }

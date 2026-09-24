@@ -195,3 +195,15 @@ func hasDotDotSegment(p []byte) bool {
 	}
 	return false
 }
+
+// stopStatic ends every Static entry's cache goroutine. runShutdown calls it
+// once, after the drain — a body stream may read a cached file until then —
+// and before the OnShutdown hooks, which cannot reorder it. An entry that was
+// never built has no channel.
+func (a *App) stopStatic() {
+	for _, e := range a.statics {
+		if e.stop != nil {
+			close(e.stop)
+		}
+	}
+}
