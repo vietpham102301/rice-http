@@ -439,7 +439,9 @@ func TestCORSPreflightNeedsAllThreeSignals(t *testing.T) {
 }
 
 // TestCORSPreflightOmitsWhatIsNotConfigured pins the empty-field rule: no
-// pair is built, so no header is sent. MaxAge below one second renders as 0.
+// pair is built, so no header is sent. MaxAge of one second or more renders
+// as whole seconds (1500 ms -> "1"); zero sends no header, and a positive
+// value under one second panics at construction instead of rendering as 0.
 func TestCORSPreflightOmitsWhatIsNotConfigured(t *testing.T) {
 	var ran bool
 	fctx := serveCORS(t, corsApp(middleware.CORSConfig{Origins: []string{allowedOrigin}, AllowMethods: []string{"GET", "POST"}}, &ran), "OPTIONS", "/r", preflight(allowedOrigin))
