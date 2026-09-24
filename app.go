@@ -92,6 +92,12 @@ type App struct {
 	// Build compiles from; the registration-time trees are only a validator.
 	routes []route
 
+	// statics records every Static call. Build gives each its fasthttp file
+	// handler and Shutdown stops each one's cache goroutine. Written during
+	// registration and read by Build and Shutdown, on the same argument as
+	// routes: registration ends before serving begins.
+	statics []*staticEntry
+
 	buildOnce sync.Once
 
 	// built is read by registration to reject a late route, without a lock. That

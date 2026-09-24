@@ -1,0 +1,108 @@
+package rice
+
+import (
+	"errors"
+	"io/fs"
+	"strconv"
+
+	"github.com/valyala/fasthttp"
+)
+
+// errStaticNotBuilt answers a Static route dispatched on an App that was never
+// built. Run, Serve and FasthttpHandler all build, so only a test that calls
+// the dispatch path directly can reach it; it becomes a 500 rather than a nil
+// function call.
+var errStaticNotBuilt = errors.New("rice: a Static route was dispatched before Build")
+
+// staticIndexNames is the file a directory is answered with. It is the only one:
+// the spec's D3 fixes the configuration, and more names are an option nobody
+// has asked for.
+var staticIndexNames = []string{"index.html"}
+
+// Static serves the files in fsys under prefix, for GET and HEAD, wrapped in mw.
+//
+// fsys is any fs.FS: os.DirFS for a directory on disk, an embed.FS for files
+// compiled into the binary (use fs.Sub to serve one of its directories).
+// prefix follows the Group prefix rule: empty, or beginning with "/" and not
+// ending with "/". An empty prefix serves from the root of the URL space.
+//
+// A directory is answered by its index.html; one without an index is a 404,
+// and no directory is ever listed. Every failure reaches the ErrorHandler like
+// any other route's. Byte ranges and If-Modified-Since are answered; responses
+// are never compressed.
+//
+// Files are served by one fasthttp.FS per call, created in Build. It caches open
+// file handles for ten seconds and runs one goroutine to expire them, which
+// Shutdown stops. An App mounted with FasthttpHandler and never shut down keeps
+// that goroutine until the process exits. fasthttp logs every missing file
+// through the server's logger. See ADR-0017.
+func (a *App) Static(prefix string, fsys fs.FS, mw ...Middleware) {
+	checkGroupPrefix(prefix)
+	a.static(prefix, fsys, nil, mw)
+}
+
+// Static serves the files in fsys under the group's prefix joined with prefix,
+// wrapped in the group's middleware and then mw. See App.Static.
+func (g *Group) Static(prefix string, fsys fs.FS, mw ...Middleware) {
+	checkGroupPrefix(prefix)
+	g.app.static(g.prefix+prefix, fsys, g, mw)
+}
+
+// staticEntry is one Static call.
+type staticEntry struct {
+	prefix string // joined with any group prefix; "" for the root
+	fsys   fs.FS
+
+	// stop is fasthttp.FS's CleanStop. Closing it ends the cache goroutine.
+	// Nil until build.
+	stop chan struct{}
+
+	// h is fasthttp's file handler. Nil until build.
+	h fasthttp.RequestHandler
+}
+
+// static registers GET and HEAD for prefix+"/" and prefix+"/*filepath". A
+// wildcard captures at least one byte, so the fs root needs its own pattern.
+func (a *App) static(prefix string, fsys fs.FS, g *Group, mw []Middleware) {
+	if fsys == nil {
+		panic("rice: nil fs.FS for static prefix " + strconv.Quote(prefix))
+	}
+	e := &staticEntry{prefix: prefix, fsys: fsys}
+	for _, method := range [...]string{"GET", "HEAD"} {
+		a.register(method, prefix+"/", e.serve, g, mw)
+		a.register(method, prefix+"/*filepath", e.serve, g, mw)
+	}
+	a.statics = append(a.statics, e)
+}
+
+// build creates the entry's fasthttp file handler. Build calls it once.
+//
+// Root must be empty, not ".": with "." fasthttp looks up the root's index as
+// "./index.html", which is not a valid fs.FS path, and answers 403.
+func (e *staticEntry) build() {
+	n := len(e.prefix)
+	e.stop = make(chan struct{})
+	f := &fasthttp.FS{
+		FS:              e.fsys,
+		Root:            "",
+		AllowEmptyRoot:  true,
+		IndexNames:      staticIndexNames,
+		AcceptByteRange: true,
+		CleanStop:       e.stop,
+		// The route matched, so the normalised path begins with the prefix.
+		// Slicing it off costs nothing and needs no user value.
+		PathRewrite: func(fctx *fasthttp.RequestCtx) []byte {
+			return fctx.Path()[n:]
+		},
+	}
+	e.h = f.NewRequestHandler()
+}
+
+// serve is the handler every Static pattern runs.
+func (e *staticEntry) serve(c *Ctx) error {
+	if e.h == nil {
+		return errStaticNotBuilt
+	}
+	e.h(c.fctx)
+	return nil
+}

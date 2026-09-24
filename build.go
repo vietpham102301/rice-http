@@ -44,6 +44,12 @@ func (a *App) build() {
 	// it did before this chain existed.
 	a.miss = chain.Compile(Handler(notFound), a.mws)
 
+	// Each Static call gets its file handler here, not at the call, because
+	// creating one starts a goroutine; an App that is never built starts none.
+	for _, e := range a.statics {
+		e.build()
+	}
+
 	a.built = true
 }
 
