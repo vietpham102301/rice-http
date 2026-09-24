@@ -25,7 +25,7 @@ other entry returns nil and the request falls back to the connection's address, 
 `TestRealIPFallsBackOnAnEntryThatIsNotAnIP`, which had pinned the port and bracket shapes as
 fallbacks, is replaced by `TestRealIPReadsTheShapesLoadBalancersWrite` for the accepted shapes,
 `TestRealIPReadsAnUnbracketedIPv6AddressWhole`, and a new `TestRealIPFallsBackOnAnEntryThatIsNotAnIP`
-with twenty rejected shapes. One budget, `TestAllocBudgetRealIPWithPort`. The roadmap moves the
+with twenty-two rejected shapes. One budget, `TestAllocBudgetRealIPWithPort`. The roadmap moves the
 item from *Explicitly deferred* to *Done after M8*; the README, `middleware/doc.go`,
 `03-core-concepts.md` and `05-performance-model.md` drop the sentence saying such an entry falls
 back. Worked as a bounded change — a design approved in conversation, no spec or plan — because it
@@ -37,7 +37,9 @@ changes one existing function and no interface.
    direction.* `2001:db8::1:4711` is a valid address; `net.SplitHostPort` would reject it, and a
    last-colon split would read it as `2001:db8::1` with port 4711. The rule is therefore
    structural: brackets mean IPv6 with an optional port, exactly one colon means IPv4 and a port,
-   more than one colon means an IPv6 address read whole. Brackets are recognised by whether the
+   more than one colon means an IPv6 address read whole. A port is one to five digits valued 1 to
+   65535, so a leading zero is accepted and `:000080` is not; only space and tab are trimmed.
+   Brackets are recognised by whether the
    text inside has a colon, not by `To4()`, so an IPv4-mapped `[::ffff:203.0.113.9]` is accepted
    and `[203.0.113.9]` is not.
 

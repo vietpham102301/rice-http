@@ -204,17 +204,17 @@ Outside any milestone, because the API was already written down in
 - `middleware.RealIP`, `middleware.RequestID` and `middleware.Logger`, the access log, and two
   changes to core without which the log could not tell the truth. Probing before the design found
   that application middleware never ran on a route miss, so a logger would never have recorded a
-  404; and that a middleware reading the status after `next` read it before the funnel wrote it,
-  so a logger would have recorded every 500 as a 200. Core now compiles a miss chain from the
-  application's middleware ([ADR-0012](adr/0012-application-middleware-runs-on-route-misses.md))
-  and gains `c.HandleError`, which runs the `ErrorHandler` at once and marks the request settled
+  404; and that a middleware reading the status after `next` read it before the funnel wrote it, so
+  a logger would have recorded every 500 as a 200. Core now compiles a miss chain from the
+  application's middleware ([ADR-0012](adr/0012-application-middleware-runs-on-route-misses.md)) and
+  gains `c.HandleError`, which runs the `ErrorHandler` at once and marks the request settled
   ([ADR-0013](adr/0013-middleware-can-settle-a-request.md)); both hold their paths at zero
   allocations. `RealIP(trustedHops)` counts `X-Forwarded-For` from the trusted end and sets the
-  address on every request, because fasthttp keeps a rewritten address for the life of a
-  keep-alive connection. It did not then parse an entry with a port or a bracketed IPv6 entry;
-  the last entry below records that it now does. `RequestID` keeps an incoming id only if it is safe to
-  log. `Logger` records the status the client receives and is not told about a panic unless
-  `Recover` sits inside it. The three allocate, and each figure is pinned with its fixture in
+  address on every request, because fasthttp keeps a rewritten address for the life of a keep-alive
+  connection. It did not then parse an entry with a port or a bracketed IPv6 entry; the last entry
+  below records that it now does. `RequestID` keeps an incoming id only if it is safe to log.
+  `Logger` records the status the client receives and is not told about a panic unless `Recover`
+  sits inside it. The three allocate, and each figure is pinned with its fixture in
   [05-performance-model.md](05-performance-model.md#opt-in-packages). Timeout stayed on the list
   above, needing a design of its own: a pre-emptive timeout written as a middleware would release
   the `Ctx` while the handler's goroutine still holds it. That is true of a middleware and not of
@@ -253,6 +253,6 @@ Outside any milestone, because the API was already written down in
   now reads `203.0.113.9:4711`, `[2001:db8::1]` and `[2001:db8::1]:4711` as well as a bare address,
   and drops the port. An unbracketed IPv6 address is read whole and never split at its last colon,
   since `2001:db8::1:4711` is itself a valid address. Anything else — brackets around IPv4, a port
-  outside 1–65535 — still falls back to the connection's address. An entry with a port costs what
-  a bare one does, 3 allocations, pinned in
+  outside 1–65535 — still falls back to the connection's address. An entry with a port costs what a
+  bare one does, 3 allocations, pinned in
   [05-performance-model.md](05-performance-model.md#opt-in-packages).

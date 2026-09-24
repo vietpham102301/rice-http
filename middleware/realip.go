@@ -94,7 +94,9 @@ func resolve(lines [][]byte, trustedHops int) net.Addr {
 // a valid address, and reading 4711 as a port would attribute the request to
 // 2001:db8::1, an address nobody wrote.
 func parseEntry(entry []byte) net.IP {
-	entry = bytes.TrimSpace(entry)
+	// HTTP's optional whitespace is space and tab only; bytes.TrimSpace would
+	// also strip Unicode spaces such as U+00A0, which no proxy writes.
+	entry = bytes.Trim(entry, " \t")
 	if len(entry) > 0 && entry[0] == '[' {
 		end := bytes.IndexByte(entry, ']')
 		if end < 0 || !validPortSuffix(entry[end+1:]) {

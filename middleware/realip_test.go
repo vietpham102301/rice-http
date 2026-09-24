@@ -82,6 +82,7 @@ func TestRealIPReadsTheShapesLoadBalancersWrite(t *testing.T) {
 		{" [2001:db8::1]:4711 ", "2001:db8::1"},
 		{"203.0.113.9:65535", "203.0.113.9"},
 		{"[::ffff:203.0.113.9]", "203.0.113.9"}, // IPv4-mapped, written as IPv6
+		{"203.0.113.9:04711", "203.0.113.9"},    // a leading zero is still five digits
 	} {
 		got := dispatchFrom(t, ipApp(1), "10.0.0.2", tc.entry)
 		if got != tc.want {
@@ -106,7 +107,9 @@ func TestRealIPReadsAnUnbracketedIPv6AddressWhole(t *testing.T) {
 func TestRealIPFallsBackOnAnEntryThatIsNotAnIP(t *testing.T) {
 	for _, entry := range []string{
 		"not-an-ip",
-		"",
+		"198.51.100.7, ",     // the chosen entry is empty after trimming
+		"203.0.113.9:000080", // six characters, though the value is 80
+		"\u00a0203.0.113.9",  // only space and tab are HTTP whitespace
 		"[203.0.113.9]",      // brackets are for IPv6 only
 		"[203.0.113.9]:4711", // likewise
 		"[2001:db8::1",       // unclosed
