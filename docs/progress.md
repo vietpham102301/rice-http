@@ -41,7 +41,8 @@ to it; the README, `middleware/doc.go`, `02-architecture.md`, `03-core-concepts.
 `05-performance-model.md` gain it. The 2026-09-23 entry below, the performance model's `Timeout`
 subsection and ADR-0014 said the Linux container was amd64 (golang:1.25.14). It was arm64: the
 machine that took both the `Timeout` and the `CORS` measurements has only arm64 `golang` images.
-The performance model is corrected in place; that entry and ADR-0014 stay as they were.
+The performance model and ADR-0014 are corrected in place; that entry stays as it was, because
+the journal is append-only.
 
 **Learned:** Three things.
 

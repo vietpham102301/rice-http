@@ -163,7 +163,7 @@ app.Use(
   custom `ErrorHandler` resets the response ([ADR-0015](docs/adr/0015-cors-states-a-policy.md)).
 
 Unlike core, most of these allocate: 3 objects per request for `RealIP`, 2 for `RequestID` alone,
-6 for `Logger` and `RequestID` together with slog's JSON handler, 4 for `Timeout`, and 0 for CORS
+6 for `Logger` and `RequestID` together with slog's JSON handler, 4 for `Timeout`, and 0 for `CORS`
 on every branch — each pinned by a budget test, with its fixture named in the
 [performance model](docs/05-performance-model.md#opt-in-packages).
 

@@ -125,8 +125,7 @@ mistake. `CORS`'s doc comment and `middleware/doc.go` say so.
 
 **Makes hard: a preflight for a path that does not exist is answered 204.** The middleware cannot
 tell a miss from a route — ADR-0012 gives it no signal — so it answers every preflight. The real
-request that follows then receives a 404, which carries the CORS headers. Every widely used CORS
-middleware behaves this way.
+request that follows then receives a 404, which carries the CORS headers.
 
 **Makes hard: a route's own `OPTIONS` handler never sees a preflight.** `CORS` answers the
 preflight without calling `next`. The route receives only ordinary `OPTIONS` requests — those

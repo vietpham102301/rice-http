@@ -73,7 +73,7 @@ then cancels it and restores the previous context. It never runs the chain on an
 
 `Timeout` costs 4 allocations per request around a handler that returns at once —
 `context.WithTimeout` allocates. `TestAllocBudgetTimeout` pins it exactly, measured at 4 on darwin
-(go1.25.6, arm64) and in a Linux container (golang:1.25.14, amd64), with and without `-race`.
+(go1.25.6, arm64) and in a Linux container (golang:1.25.14, arm64), with and without `-race`.
 
 ## Alternatives
 
