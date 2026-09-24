@@ -1,6 +1,10 @@
 package rice
 
 import (
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -255,5 +259,123 @@ func TestStaticDispatchedBeforeBuildIsAnError(t *testing.T) {
 	fctx := doStatic(app, "GET", "/assets/a.txt")
 	if got := fctx.Response.StatusCode(); got != 500 {
 		t.Errorf("status %d, want 500", got)
+	}
+}
+
+// jsonErrors answers every error as {"status": code}, so a test can tell a
+// response the funnel wrote from one fasthttp wrote itself.
+func jsonErrors(c *Ctx, err error) {
+	code := 500
+	var he *HTTPError
+	if errors.As(err, &he) {
+		code = he.Code
+	}
+	_ = c.JSON(code, map[string]int{"status": code})
+}
+
+func TestStaticFailuresReachTheErrorHandler(t *testing.T) {
+	app := New(WithErrorHandler(jsonErrors))
+	app.Static("/assets", staticFS())
+	app.Build()
+
+	cases := []struct {
+		name    string
+		uri     string
+		headers []string
+		code    int
+	}{
+		{"missing file", "/assets/missing", nil, 404},
+		{"directory without index", "/assets/nodir/", nil, 404},
+		{"unsatisfiable range", "/assets/a.txt", []string{"Range", "bytes=99-"}, 416},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fctx := doStatic(app, "GET", tc.uri, tc.headers...)
+			if got := fctx.Response.StatusCode(); got != tc.code {
+				t.Errorf("status %d, want %d", got, tc.code)
+			}
+			var body struct{ Status int }
+			if err := json.Unmarshal(fctx.Response.Body(), &body); err != nil || body.Status != tc.code {
+				t.Errorf("body %q is not the ErrorHandler's JSON for %d", fctx.Response.Body(), tc.code)
+			}
+		})
+	}
+}
+
+func TestStaticDefaultErrorBodyIsNotFasthttps(t *testing.T) {
+	app := New()
+	app.Static("/assets", staticFS())
+	app.Build()
+
+	fctx := doStatic(app, "GET", "/assets/nodir/")
+	if got := string(fctx.Response.Body()); got != "Not Found" {
+		t.Errorf("body %q, want %q", got, "Not Found")
+	}
+}
+
+func TestStaticHeadForAMissingFileIsNotFound(t *testing.T) {
+	app := New()
+	app.Static("/assets", staticFS())
+	app.Build()
+
+	fctx := doStatic(app, "HEAD", "/assets/missing")
+	if got := fctx.Response.StatusCode(); got != 404 {
+		t.Errorf("status %d, want 404", got)
+	}
+}
+
+func TestStaticNeverServesOutsideTheFS(t *testing.T) {
+	root := t.TempDir()
+	pub := filepath.Join(root, "pub")
+	if err := os.Mkdir(pub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "secret.txt"), []byte("top secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pub, "a.txt"), []byte("public"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	app.Static("/assets", os.DirFS(pub))
+	app.Build()
+
+	if got := string(doStatic(app, "GET", "/assets/a.txt").Response.Body()); got != "public" {
+		t.Fatalf("control request: body %q, want %q", got, "public")
+	}
+	for _, uri := range []string{
+		"/assets/../secret.txt",
+		"/assets/%2e%2e/secret.txt",
+		"/assets/..%2fsecret.txt",
+		"/assets/a.txt%00",
+	} {
+		fctx := doStatic(app, "GET", uri)
+		if strings.Contains(string(fctx.Response.Body()), "top secret") {
+			t.Errorf("GET %s served a file outside the fs", uri)
+		}
+		if got := fctx.Response.StatusCode(); got != 404 {
+			t.Errorf("GET %s: status %d, want 404", uri, got)
+		}
+	}
+}
+
+func TestHasDotDotSegment(t *testing.T) {
+	cases := map[string]bool{
+		"":        false,
+		"/":       false,
+		"/a/b":    false,
+		"/..a":    false,
+		"/a..":    false,
+		"/...":    false,
+		"/..":     true,
+		"/a/..":   true,
+		"/a/../b": true,
+		"..":      true,
+	}
+	for p, want := range cases {
+		if got := hasDotDotSegment([]byte(p)); got != want {
+			t.Errorf("hasDotDotSegment(%q) = %v, want %v", p, got, want)
+		}
 	}
 }

@@ -1,6 +1,7 @@
 package rice
 
 import (
+	"bytes"
 	"errors"
 	"io/fs"
 	"strconv"
@@ -99,10 +100,53 @@ func (e *staticEntry) build() {
 }
 
 // serve is the handler every Static pattern runs.
+//
+// A NUL byte or a ".." segment is refused before fasthttp sees the path.
+// fctx.Path() is already normalised, so this is a second line rather than the
+// only one, and it makes rice's answer — a 404 — independent of fasthttp's, which
+// is 400 and 500 for these.
 func (e *staticEntry) serve(c *Ctx) error {
 	if e.h == nil {
 		return errStaticNotBuilt
 	}
+	p := c.fctx.Path()
+	if bytes.IndexByte(p, 0) >= 0 || hasDotDotSegment(p) {
+		return ErrNotFound
+	}
 	e.h(c.fctx)
+	return staticResult(c.fctx)
+}
+
+// staticResult reads the status fasthttp's file handler wrote and returns the
+// error the funnel should answer instead, or nil when the response stands.
+//
+// fasthttp writes its own error responses with ctx.Error. respond overwrites the
+// body, so none of fasthttp's texts reaches a client. A directory without an
+// index is fasthttp's 403; it becomes a 404 so a response never confirms that a
+// directory exists. Tests pin every row, so a fasthttp upgrade that changes a
+// status fails a test rather than a client.
+func staticResult(fctx *fasthttp.RequestCtx) error {
+	switch code := fctx.Response.StatusCode(); {
+	case code == fasthttp.StatusNotFound, code == fasthttp.StatusForbidden:
+		return ErrNotFound
+	case code >= 400:
+		return NewHTTPError(code, "")
+	}
 	return nil
+}
+
+// hasDotDotSegment reports whether p has a path segment that is exactly "..".
+func hasDotDotSegment(p []byte) bool {
+	for len(p) > 0 {
+		seg := p
+		if i := bytes.IndexByte(p, '/'); i >= 0 {
+			seg, p = p[:i], p[i+1:]
+		} else {
+			p = nil
+		}
+		if len(seg) == 2 && seg[0] == '.' && seg[1] == '.' {
+			return true
+		}
+	}
+	return false
 }
