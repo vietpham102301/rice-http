@@ -27,7 +27,7 @@ func TestReleaseDropsEveryReference(t *testing.T) {
 	app := New()
 	app.GET("/users/:id", func(c *Ctx) error {
 		retained = c
-		c.Set("k", &struct{}{})
+		NewKey[*struct{}]("k").Set(c, &struct{}{})
 		return c.String(200, "ok")
 	})
 
@@ -54,7 +54,7 @@ func TestReleaseDropsEveryReference(t *testing.T) {
 	// Truncating is not enough: the backing array would still hold the value and
 	// the pool would keep it alive.
 	for i, e := range retained.store[:cap(retained.store)] {
-		if e.key != "" || e.val != nil {
+		if e.key != nil || e.val != nil {
 			t.Errorf("store backing slot %d still holds %+v after release", i, e)
 		}
 	}

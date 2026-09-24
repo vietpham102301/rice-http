@@ -507,40 +507,44 @@ func TestAllocBudgetHTTPErrorReturn(t *testing.T) {
 // storeSink keeps Get's result reachable so the compiler cannot elide the call.
 var storeSink any
 
-func TestAllocBudgetCtxSetPointer(t *testing.T) {
+func TestAllocBudgetKeySetPointer(t *testing.T) {
 	c := New().newCtx()
+	k := NewKey[*struct{ n int }]("k")
 	v := &struct{ n int }{}
 
-	budget(t, "Ctx.Set with a pointer value", 0, func() {
+	budget(t, "Key.Set with a pointer value", 0, func() {
 		c.resetStore()
-		c.Set("k", v)
+		k.Set(c, v)
 	})
 }
 
-func TestAllocBudgetCtxGet(t *testing.T) {
+func TestAllocBudgetKeyGet(t *testing.T) {
 	c := New().newCtx()
-	c.Set("k", &struct{ n int }{})
+	k := NewKey[*struct{ n int }]("k")
+	k.Set(c, &struct{ n int }{})
 
-	budget(t, "Ctx.Get", 0, func() {
-		storeSink, _ = c.Get("k")
+	budget(t, "Key.Get with a pointer value", 0, func() {
+		storeSink, _ = k.Get(c)
 	})
 }
 
-// TestAllocBudgetCtxSetString asserts exactly one allocation, and the allocation
-// is not rice's. Converting a non-constant string to any at the call site boxes
-// it; Set itself allocates nothing, as TestAllocBudgetCtxSetPointer shows. The
-// budget is exact rather than an upper bound so that a change to Go's boxing
-// rules shows up here instead of silently changing what the documentation says.
-func TestAllocBudgetCtxSetString(t *testing.T) {
+// TestAllocBudgetKeySetString asserts exactly one allocation, and the
+// allocation is not rice's. Converting a non-constant string to the store's
+// any boxes it; Set itself allocates nothing, as TestAllocBudgetKeySetPointer
+// shows. The budget is exact rather than an upper bound so that a change to
+// Go's boxing rules shows up here instead of silently changing what the
+// documentation says.
+func TestAllocBudgetKeySetString(t *testing.T) {
 	c := New().newCtx()
+	k := NewKey[string]("k")
 	s := strconv.Itoa(123456)
 
 	got := testing.AllocsPerRun(1000, func() {
 		c.resetStore()
-		c.Set("k", s)
+		k.Set(c, s)
 	})
 	if got != 1 {
-		t.Errorf("Ctx.Set with a non-constant string allocated %.1f objects per call, want exactly 1 (the caller's boxing)", got)
+		t.Errorf("Key.Set with a non-constant string allocated %.1f objects per call, want exactly 1 (the caller's boxing)", got)
 	}
 }
 

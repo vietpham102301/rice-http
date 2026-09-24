@@ -8,6 +8,10 @@ import (
 	"github.com/valyala/fasthttp"
 )
 
+// raceIDKey is package-level, as keys are meant to be, so every concurrent
+// request shares one key and only the Ctx separates their values.
+var raceIDKey = NewKey[string]("id")
+
 // TestConcurrentRequestsNeverSeeEachOthersState hammers the pool from many
 // goroutines. Each request carries a distinct id in its path; a middleware copies
 // it into the store; the handler echoes both. A Ctx shared between two in-flight
@@ -17,13 +21,13 @@ func TestConcurrentRequestsNeverSeeEachOthersState(t *testing.T) {
 	app := New()
 	app.Use(func(next Handler) Handler {
 		return func(c *Ctx) error {
-			c.Set("id", c.ParamString("id"))
+			raceIDKey.Set(c, c.ParamString("id"))
 			return next(c)
 		}
 	})
 	app.GET("/users/:id", func(c *Ctx) error {
-		stored, _ := c.Get("id")
-		return c.String(200, string(c.Param("id"))+"|"+stored.(string))
+		stored, _ := raceIDKey.Get(c)
+		return c.String(200, string(c.Param("id"))+"|"+stored)
 	})
 	h := app.FasthttpHandler()
 

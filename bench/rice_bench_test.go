@@ -90,14 +90,16 @@ func BenchmarkDispatchParameterised(b *testing.B) {
 
 type benchUser struct{ id int }
 
-// BenchmarkCtxSetGet measures one Set and one Get with a pointer value, the
+var benchUserKey = rice.NewKey[*benchUser]("user")
+
+// BenchmarkCtxSetGet measures one Key.Set and one Key.Get with a pointer value, the
 // allocation-free way to use the store.
 func BenchmarkCtxSetGet(b *testing.B) {
 	u := &benchUser{id: 1}
 	app := rice.New()
 	app.GET("/x", func(c *rice.Ctx) error {
-		c.Set("user", u)
-		v, _ := c.Get("user")
+		benchUserKey.Set(c, u)
+		v, _ := benchUserKey.Get(c)
 		if v != u {
 			return rice.NewHTTPError(500, "store lost the value")
 		}
