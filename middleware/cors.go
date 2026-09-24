@@ -73,14 +73,42 @@ var defaultAllowMethods = []string{"GET", "HEAD", "POST", "PUT", "PATCH", "DELET
 //
 // A configuration that cannot work panics at construction: see CORSConfig.
 func CORS(cfg CORSConfig) rice.Middleware {
-	origins, _, _ := compileCORS(cfg)
-	_ = origins
+	origins, real, _ := compileCORS(cfg)
 	return func(next rice.Handler) rice.Handler {
 		return func(c *rice.Ctx) error {
-			c.RequestCtx().Response.Header.Add("Vary", "Origin")
+			h := &c.RequestCtx().Response.Header
+			// Every response, with or without an Origin: a shared cache must
+			// learn from the response that had none that the next one may
+			// differ. Add, not Set, so a handler's own Vary survives.
+			h.Add("Vary", "Origin")
+
+			origin := c.Header("Origin")
+			if len(origin) == 0 {
+				return next(c)
+			}
+			if allowed := matchOrigin(origins, origin); allowed != "" {
+				// The configured string, equal to the header's bytes: no
+				// []byte-to-string conversion and no allocation.
+				h.Set("Access-Control-Allow-Origin", allowed)
+				for _, p := range real {
+					h.Set(p.key, p.value)
+				}
+			}
 			return next(c)
 		}
 	}
+}
+
+// matchOrigin returns the configured origin equal to the request's, or "".
+// The comparison is exact: no case folding, no prefix, no normalisation.
+// string(origin) == o compiles to a comparison, not a conversion.
+func matchOrigin(origins []string, origin []byte) string {
+	for _, o := range origins {
+		if string(origin) == o {
+			return o
+		}
+	}
+	return ""
 }
 
 // compileCORS validates cfg and does every piece of work that can be done

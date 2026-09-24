@@ -128,5 +128,160 @@ func TestCORSPassesARequestWithoutOriginThrough(t *testing.T) {
 	}
 }
 
-// keep the imports used until later tasks add their tests
-var _ = errors.New
+func TestCORSDecoratesAResponseForAnAllowedOrigin(t *testing.T) {
+	for _, credentials := range []bool{false, true} {
+		t.Run(map[bool]string{false: "without credentials", true: "with credentials"}[credentials], func(t *testing.T) {
+			cfg := baseCORS()
+			cfg.AllowCredentials = credentials
+			var ran bool
+			fctx := serveCORS(t, corsApp(cfg, &ran), "GET", "/r", map[string]string{"Origin": allowedOrigin})
+
+			if !ran {
+				t.Error("the handler did not run")
+			}
+			if got := hdr(fctx, "Access-Control-Allow-Origin"); got != allowedOrigin {
+				t.Errorf("Access-Control-Allow-Origin = %q, want %q", got, allowedOrigin)
+			}
+			if got := hdr(fctx, "Access-Control-Expose-Headers"); got != "X-Request-Id" {
+				t.Errorf("Access-Control-Expose-Headers = %q, want X-Request-Id", got)
+			}
+			want := ""
+			if credentials {
+				want = "true"
+			}
+			if got := hdr(fctx, "Access-Control-Allow-Credentials"); got != want {
+				t.Errorf("Access-Control-Allow-Credentials = %q, want %q", got, want)
+			}
+			for _, name := range []string{"Access-Control-Allow-Methods", "Access-Control-Allow-Headers", "Access-Control-Max-Age"} {
+				if got := hdr(fctx, name); got != "" {
+					t.Errorf("%s = %q on a real response, want it only on a preflight", name, got)
+				}
+			}
+			if got := hdr(fctx, "Vary"); got != "Origin" {
+				t.Errorf("Vary = %q, want Origin", got)
+			}
+		})
+	}
+}
+
+// TestCORSMatchesTheOriginExactly pins the comparison: byte-for-byte against
+// the configured string. A browser never sends the first two forms; they prove
+// there is no case folding and no normalisation. The third is what an
+// attacker registers to defeat a prefix match.
+func TestCORSMatchesTheOriginExactly(t *testing.T) {
+	for _, origin := range []string{
+		"https://APP.example.com",
+		"https://app.example.com/",
+		"https://app.example.com.evil.com",
+		"https://evil.example",
+	} {
+		t.Run(origin, func(t *testing.T) {
+			var ran bool
+			fctx := serveCORS(t, corsApp(baseCORS(), &ran), "GET", "/r", map[string]string{"Origin": origin})
+
+			if !ran {
+				t.Error("the handler did not run: an unknown origin is still served; the browser does the blocking")
+			}
+			if got := fctx.Response.StatusCode(); got != 200 {
+				t.Errorf("status = %d, want 200", got)
+			}
+			for _, name := range []string{"Access-Control-Allow-Origin", "Access-Control-Expose-Headers", "Access-Control-Allow-Credentials"} {
+				if got := hdr(fctx, name); got != "" {
+					t.Errorf("%s = %q for an origin not in the list, want absent", name, got)
+				}
+			}
+			if got := hdr(fctx, "Vary"); got != "Origin" {
+				t.Errorf("Vary = %q, want Origin even when the origin is not allowed", got)
+			}
+		})
+	}
+}
+
+// TestCORSKeepsItsOwnCopyOfTheOrigins pins that CORS copies cfg.Origins at
+// construction. A caller that reuses or mutates its slice afterwards must not
+// change the allowed set under a running server.
+func TestCORSKeepsItsOwnCopyOfTheOrigins(t *testing.T) {
+	cfg := baseCORS()
+	var ran bool
+	app := corsApp(cfg, &ran)
+	cfg.Origins[0] = "https://evil.example"
+
+	fctx := serveCORS(t, app, "GET", "/r", map[string]string{"Origin": allowedOrigin})
+
+	if got := hdr(fctx, "Access-Control-Allow-Origin"); got != allowedOrigin {
+		t.Errorf("Access-Control-Allow-Origin = %q, want %q: the middleware must not share the caller's slice", got, allowedOrigin)
+	}
+}
+
+func TestCORSTreatsAnEmptyOriginAsAbsent(t *testing.T) {
+	var ran bool
+	fctx := serveCORS(t, corsApp(baseCORS(), &ran), "GET", "/r", map[string]string{"Origin": ""})
+
+	if !ran {
+		t.Error("the handler did not run")
+	}
+	if got := hdr(fctx, "Access-Control-Allow-Origin"); got != "" {
+		t.Errorf("Access-Control-Allow-Origin = %q, want absent for an empty Origin", got)
+	}
+}
+
+// TestCORSHeadersSurviveTheFunnel is the reason the headers are written
+// before next: the funnel sets status, content type and body and nothing
+// else, so a 401 reaches the browser as a 401 and not as a CORS failure.
+// The panic cases pin it on both the Recover path and core's own recovery.
+func TestCORSHeadersSurviveTheFunnel(t *testing.T) {
+	cases := []struct {
+		name   string
+		path   string
+		h      rice.Handler
+		inside []rice.Middleware
+		want   int
+	}{
+		{"plain error", "/e", func(c *rice.Ctx) error { return errors.New("db down") }, nil, 500},
+		{"HTTPError", "/e", func(c *rice.Ctx) error { return rice.NewHTTPError(401, "who are you") }, nil, 401},
+		{"panic under Recover", "/e", panickingHandler, []rice.Middleware{middleware.Recover()}, 500},
+		{"panic with core recovery only", "/e", panickingHandler, nil, 500},
+		{"no route", "/nowhere", nil, nil, 404},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var ran bool
+			app := corsApp(baseCORS(), &ran, tc.inside...)
+			if tc.h != nil {
+				app.GET("/e", tc.h)
+			}
+
+			fctx := serveCORS(t, app, "GET", tc.path, map[string]string{"Origin": allowedOrigin})
+
+			if got := fctx.Response.StatusCode(); got != tc.want {
+				t.Errorf("status = %d, want %d", got, tc.want)
+			}
+			if got := hdr(fctx, "Access-Control-Allow-Origin"); got != allowedOrigin {
+				t.Errorf("Access-Control-Allow-Origin = %q on a %d, want %q: the browser would report a CORS failure instead of the status", got, tc.want, allowedOrigin)
+			}
+			if got := hdr(fctx, "Vary"); got != "Origin" {
+				t.Errorf("Vary = %q, want Origin", got)
+			}
+		})
+	}
+}
+
+// TestCORSKeepsAHandlersOwnVary is why Vary is written with Add and not Set.
+func TestCORSKeepsAHandlersOwnVary(t *testing.T) {
+	var ran bool
+	app := corsApp(baseCORS(), &ran)
+	app.GET("/v", func(c *rice.Ctx) error {
+		c.RequestCtx().Response.Header.Add("Vary", "Accept")
+		return c.String(200, "ok")
+	})
+
+	fctx := serveCORS(t, app, "GET", "/v", map[string]string{"Origin": allowedOrigin})
+
+	var got []string
+	for _, v := range fctx.Response.Header.PeekAll("Vary") {
+		got = append(got, string(v))
+	}
+	if len(got) != 2 || got[0] != "Origin" || got[1] != "Accept" {
+		t.Errorf("Vary = %q, want [Origin Accept]", got)
+	}
+}
