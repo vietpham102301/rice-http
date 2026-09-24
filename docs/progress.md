@@ -16,6 +16,76 @@ Each entry uses this shape:
 
 ---
 
+## 2026-09-24 — post-M8 — CORS, a policy the browser enforces
+
+**Did:** `middleware.CORS(cfg CORSConfig)`. `CORSConfig` has six fields — `Origins`, required;
+`AllowMethods`, defaulting to `GET, HEAD, POST, PUT, PATCH, DELETE`; `AllowHeaders`,
+`ExposeHeaders`, `MaxAge` and `AllowCredentials`, each sending nothing when empty. At construction
+`CORS` copies the origins, joins the lists, renders `MaxAge` in seconds, and builds two fixed lists
+of header pairs, one for a real response and one for a preflight; it panics on no origins, on an
+origin that is not `scheme://host[:port]` in lower case — `"*"`, `"null"` and a trailing slash
+among them — on a negative `MaxAge`, and on a list entry that is empty or holds a comma or
+whitespace. Per request it takes one of three branches. No `Origin`: add `Vary: Origin`, call
+`next`. `Origin` and not a preflight: add `Vary`, compare the origin exactly, on a match set
+`Access-Control-Allow-Origin` and the real-response pairs, and call `next` either way. A preflight
+— `OPTIONS` with `Origin` and `Access-Control-Request-Method` — add `Vary`, set the preflight
+pairs on a match, and answer 204 without calling `next`, matched or not. Every header is written
+before `next`. Sixteen behaviour tests, among them `TestCORSHeadersSurviveTheFunnel`, which
+requires the headers on a plain error answered 500, an `*HTTPError` 401, a panic under `Recover`,
+a panic caught only by core's recovery, and a 404; and three budgets,
+`TestAllocBudgetCORSNoOrigin`, `TestAllocBudgetCORSAllowedOrigin` and
+`TestAllocBudgetCORSPreflight`, measured through a new helper, `measureResetting`, that resets the
+response header before each call. [ADR-0015](adr/0015-cors-states-a-policy.md) records the
+decision. The roadmap gains a *Done after M8* entry, and its earlier sentence on CORS now points
+to it; the README, `middleware/doc.go`, `02-architecture.md`, `03-core-concepts.md` and
+`05-performance-model.md` gain it. The 2026-09-23 entry below, the performance model's `Timeout`
+subsection and ADR-0014 said the Linux container was amd64 (golang:1.25.14). It was arm64: the
+machine that took both the `Timeout` and the `CORS` measurements has only arm64 `golang` images.
+The performance model and ADR-0014 are corrected in place; that entry stays as it was, because
+the journal is append-only.
+
+**Learned:** Three things.
+
+1. *The server cannot delegate the origin check, and can delegate the method and header checks to
+   the browser.* Under the Fetch standard the browser compares the method and headers it intends
+   to send against `Access-Control-Allow-Methods` and `-Headers` and blocks the request itself.
+   `Access-Control-Allow-Origin`, with credentials, must name one origin, and only the server
+   knows which. So `CORS` states the configured lists and never parses
+   `Access-Control-Request-Method` or `-Headers`: no comma-separated list is split per preflight,
+   nothing is allocated for it, and the preflight's answer depends on `Origin` alone, so
+   `Vary: Origin` is enough. That is what put all three branches at 0.
+
+2. *A CORS middleware can only answer a preflight from `app.Use`, because a preflight is a miss.*
+   ADR-0012 said a miss runs "only the application's middleware", and for `Logger` and
+   `RequestID` that was a detail: they run on every request from `app.Use` anyway. `CORS` is the
+   first middleware for which it is a constraint on the user. Installed on a group, it decorates
+   real responses, never sees a preflight, and the browser fails on the first non-simple request
+   — and nothing at run time can detect the placement, so the documentation carries it:
+   `CORS`'s doc comment, `middleware/doc.go`, the README and ADR-0015.
+
+3. *The funnel's not resetting headers is what makes a 401 arrive as a 401.* `respond`
+   (`errors.go:156`) sets the status, the content type and the body, and nothing else; every
+   error path, a recovered panic included, goes through it. So a header written before `next`
+   survives whatever the chain returns, and a browser sees an authentication middleware's 401
+   rather than a CORS failure. That had been true since the funnel was written, and had never been
+   written down. ADR-0015 now records it, so a future change to `respond` has to reckon with it,
+   and `TestCORSHeadersSurviveTheFunnel` fails if one breaks it.
+
+**Measured:** The three CORS budgets, fixture `corsBudgetConfig` — one origin, two allowed headers,
+one exposed header, a ten-minute `MaxAge`, credentials on: **0.0** each on darwin (go1.25.6,
+arm64) without `-race` and with it, and **0.0** each in a Linux arm64 container (golang:1.25.14)
+without `-race` and with it. The four agree, so each budget is 0 exactly with a race slack of 0.
+Raised to 1, the preflight and no-`Origin` budgets failed: `CORS (preflight) allocated 0.0 objects
+per call, want exactly 1`, and the same for `CORS (no Origin)`. `make cover`: root package 99.3%,
+`binding` 100.0%, `internal/chain` 100.0%, `internal/router` 98.9%, `middleware` 100.0% with every
+function in `cors.go` fully covered, 99.4% overall. No benchmark was re-recorded: nothing on the
+dispatch path changed.
+
+**Next:** None scheduled. The next item comes off the roadmap's *Explicitly deferred* list, with a
+brainstorm of its own.
+
+---
+
 ## 2026-09-23 — post-M8 — Timeout, a deadline the work is asked to honour
 
 **Did:** `middleware.Timeout(d time.Duration)`. For each request it derives

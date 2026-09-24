@@ -161,3 +161,90 @@ func TestAllocBudgetTimeout(t *testing.T) {
 	got := measure(t, middleware.Timeout(time.Second), nil)
 	assertAllocBudget(t, "Timeout", got, want, 0)
 }
+
+// measureResetting is measure for a middleware that writes response headers:
+// it resets the response header before each call, as fasthttp does between
+// requests on a connection, so that Vary added a thousand times is not
+// counted as growth. Reset keeps the header's buffers, so after the warm call
+// every Set and Add writes into memory that already exists.
+func measureResetting(t *testing.T, mw rice.Middleware, method, uri string, headers map[string]string) float64 {
+	t.Helper()
+	wrapped := mw(func(c *rice.Ctx) error { return nil })
+	var got float64
+	app := rice.New()
+	app.Handle(method, "/m", func(c *rice.Ctx) error {
+		h := &c.RequestCtx().Response.Header
+		_ = wrapped(c) // warm
+		got = testing.AllocsPerRun(1000, func() {
+			h.Reset()
+			_ = wrapped(c)
+		})
+		return nil
+	})
+	fctx := newRequest(method, uri, headers)
+	app.FasthttpHandler()(fctx)
+	return got
+}
+
+// corsBudgetConfig is the fixture for the three CORS budgets: the
+// configuration a JSON API behind a proxy needs, with credentials on so that
+// every pair CORS can build is built.
+var corsBudgetConfig = middleware.CORSConfig{
+	Origins:          []string{"https://app.example.com"},
+	AllowHeaders:     []string{"Authorization", "Content-Type"},
+	ExposeHeaders:    []string{"X-Request-Id"},
+	MaxAge:           10 * time.Minute,
+	AllowCredentials: true,
+}
+
+// TestAllocBudgetCORSNoOrigin pins the branch a same-origin request takes:
+// one Vary added, nothing compared.
+//
+// Measured at 0 on darwin arm64 go1.25.6 and in a Linux arm64 golang:1.25.14
+// container, with and without -race, so the race slack is 0: no mechanism in
+// assertAllocBudget's doc comment applies to Header.Add, and none was found
+// to add an allocation on either platform.
+func TestAllocBudgetCORSNoOrigin(t *testing.T) {
+	const want float64 = 0
+
+	got := measureResetting(t, middleware.CORS(corsBudgetConfig), "GET", "/m", nil)
+	assertAllocBudget(t, "CORS (no Origin)", got, want, 0)
+}
+
+// TestAllocBudgetCORSAllowedOrigin pins a real request from an allowed
+// origin: the comparison, Allow-Origin, Allow-Credentials, Expose-Headers.
+//
+// Measured at 0 on darwin arm64 go1.25.6 and in a Linux arm64 golang:1.25.14
+// container, with and without -race, so the race slack is 0: no mechanism in
+// assertAllocBudget's doc comment applies — matchOrigin's string(origin) ==
+// o comparison and the Header.Set calls all write into memory the compiled
+// pairs and the reset header already own — and none was found to add an
+// allocation on either platform.
+func TestAllocBudgetCORSAllowedOrigin(t *testing.T) {
+	const want float64 = 0
+
+	got := measureResetting(t, middleware.CORS(corsBudgetConfig), "GET", "/m", map[string]string{
+		"Origin": "https://app.example.com",
+	})
+	assertAllocBudget(t, "CORS (allowed origin)", got, want, 0)
+}
+
+// TestAllocBudgetCORSPreflight pins a preflight from an allowed origin: the
+// comparison, the four preflight pairs, and NoContent.
+//
+// Measured at 0 on darwin arm64 go1.25.6 and in a Linux arm64 golang:1.25.14
+// container, with and without -race, so the race slack is 0: no mechanism in
+// assertAllocBudget's doc comment applies — isPreflight's checks, the four
+// Header.Set calls and c.NoContent all write into memory the compiled pairs
+// and the reset header already own, and NoContent sets a status and writes
+// no body — and none was found to add an allocation on either platform.
+func TestAllocBudgetCORSPreflight(t *testing.T) {
+	const want float64 = 0
+
+	got := measureResetting(t, middleware.CORS(corsBudgetConfig), "OPTIONS", "/m", map[string]string{
+		"Origin":                         "https://app.example.com",
+		"Access-Control-Request-Method":  "DELETE",
+		"Access-Control-Request-Headers": "authorization, content-type",
+	})
+	assertAllocBudget(t, "CORS (preflight)", got, want, 0)
+}

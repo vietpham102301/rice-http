@@ -15,7 +15,9 @@
 // trusted proxies. RequestID gives every request an id, read back with
 // RequestIDFrom. Logger writes one log line per request with the status the
 // client actually receives. Timeout gives the rest of the chain a deadline on
-// c.Context() and answers 503 when that deadline is what made it fail.
+// c.Context() and answers 503 when that deadline is what made it fail. CORS
+// lets a browser application on a listed origin call the service: it answers
+// the preflight and puts the CORS headers on every other response.
 //
 // Installed with App.Use, each of them also runs on a request that matched no
 // route, so Logger records 404s and RequestID gives them an id. On such a
@@ -28,6 +30,7 @@
 //		middleware.Recover(),              // inside Logger: a panic becomes an error Logger can see
 //		middleware.RealIP(1),              // only behind a proxy; 1 is the number of trusted hops
 //		middleware.RequestID(),
+//		middleware.CORS(cfg),              // before auth, so a 401 carries the CORS headers
 //		middleware.Timeout(5*time.Second), // inside Logger, so the 503 it returns is what Logger records
 //	)
 //
@@ -45,6 +48,12 @@
 // is returned.
 // See docs/adr/0014-timeout-is-cooperative.md.
 //
+// CORS states a policy and the browser enforces it: it checks the origin and
+// nothing else. It writes its headers before the rest of the chain runs, and
+// the error funnel does not reset them, so a 401, a 404 and a 500 carry them —
+// unless a custom ErrorHandler resets the response.
+// See docs/adr/0015-cors-states-a-policy.md.
+//
 // # The one trap in that order
 //
 // A request that panics is not logged unless Recover is installed inside
@@ -56,6 +65,13 @@
 // Logger does not recover and re-panic to close this gap: that would move the
 // stack trace core records to Logger's frame and point whoever debugs the panic
 // at the wrong code.
+//
+// # CORS must be installed with app.Use
+//
+// A browser's preflight is an OPTIONS request for a path that usually has no
+// OPTIONS route, so it is a miss. Only application middleware runs on a miss.
+// A CORS installed on a group or a route decorates real responses and never
+// answers a preflight, so the browser fails on its first non-simple request.
 //
 // # RealIP trusts a count, not a header
 //
@@ -72,8 +88,8 @@
 //
 // # What they cost
 //
-// Unlike core, these allocate. Measured with the fixtures named in
+// Unlike core, most of these allocate. Measured with the fixtures named in
 // docs/05-performance-model.md: RealIP 3 objects per request, RequestID 2 when
 // it generates an id, Logger 3 with slog's JSON handler, Logger around
-// RequestID 6, and Timeout 4.
+// RequestID 6, Timeout 4, and CORS 0 on every branch.
 package middleware

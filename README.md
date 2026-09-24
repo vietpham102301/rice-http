@@ -85,8 +85,8 @@ is empty there ([ADR-0012](docs/adr/0012-application-middleware-runs-on-route-mi
 
 ### The middleware rice ships
 
-`logging` above shows the shape. For an access log and a request deadline, use the opt-in
-`middleware` package, in this order:
+`logging` above shows the shape. For an access log, a request deadline and calls from a browser
+on another origin, use the opt-in `middleware` package, in this order:
 
 ```go
 app.Use(
@@ -94,6 +94,7 @@ app.Use(
 	middleware.Recover(),              // inside Logger: a panic becomes an error Logger can see
 	middleware.RealIP(1),              // only behind proxies you run; 1 is how many
 	middleware.RequestID(),
+	middleware.CORS(cfg),              // before auth, so a 401 carries the CORS headers
 	middleware.Timeout(5*time.Second), // inside Logger, so Logger records its 503
 )
 ```
@@ -132,10 +133,38 @@ app.Use(
   plain `fasthttp.TimeoutHandler` answers 408 rather than 503 — and it means running a
   `fasthttp.Server` of your own in place of `Run`, `RunContext` and `Shutdown`, on top of the
   other costs [ADR-0014](docs/adr/0014-timeout-is-cooperative.md) names.
+- **`CORS(cfg CORSConfig)`** lets a browser application on one of a fixed list of origins call
+  the service: it answers the preflight with 204 and puts the CORS headers on every other
+  response.
 
-Unlike core, these allocate: 3 objects per request for `RealIP`, 2 for `RequestID` alone, 6 for
-`Logger` and `RequestID` together with slog's JSON handler, and 4 for `Timeout` — each pinned by a
-budget test, with its fixture named in the
+  ```go
+  cfg := middleware.CORSConfig{
+  	Origins:          []string{"https://app.example.com"},
+  	AllowHeaders:     []string{"Authorization", "Content-Type"},
+  	ExposeHeaders:    []string{"X-Request-Id"},
+  	MaxAge:           10 * time.Minute,
+  	AllowCredentials: true,
+  }
+  ```
+
+  `Origins` is required, and each is compared exactly with the `Origin` a browser sends: lower
+  case, no path, no trailing slash — `"https://app.example.com/"` panics at construction, as do
+  `"*"` and `"null"`. `AllowMethods` defaults to `GET, HEAD, POST, PUT, PATCH, DELETE`.
+  `AllowHeaders` has no default; a JSON API lists `Authorization` and `Content-Type`, because the
+  browser's safelist covers neither `Authorization` nor `Content-Type: application/json`.
+  `ExposeHeaders` names the response headers a script may read. `MaxAge` is how long a browser may
+  cache a preflight, sent in whole seconds and omitted when zero. `AllowCredentials` lets the
+  browser send cookies. **`CORS` states the policy and the browser enforces it:** it checks the
+  origin and nothing else, and leaves the browser to compare the method and headers it wants to
+  send against the ones listed. **It must go in `app.Use`, and before any middleware that answers
+  401 or 403.** A preflight matches no route, and only application middleware runs on a miss, so a
+  `CORS` on a group never answers one. Its headers are written before the rest of the chain runs,
+  and survive a 401 and a 500 — so the browser reports the status, not a CORS failure — unless a
+  custom `ErrorHandler` resets the response ([ADR-0015](docs/adr/0015-cors-states-a-policy.md)).
+
+Unlike core, most of these allocate: 3 objects per request for `RealIP`, 2 for `RequestID` alone,
+6 for `Logger` and `RequestID` together with slog's JSON handler, 4 for `Timeout`, and 0 for `CORS`
+on every branch — each pinned by a budget test, with its fixture named in the
 [performance model](docs/05-performance-model.md#opt-in-packages).
 
 ## Reading requests, writing JSON

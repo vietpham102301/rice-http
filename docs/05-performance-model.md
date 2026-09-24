@@ -204,6 +204,9 @@ this cost, and a user who never imports the package pays none of it.
 | `middleware.Logger` alone, slog's JSON handler on `io.Discard`, five attributes | 3, exactly; at most 5 under `-race` | MEASURED after M8 | `TestAllocBudgetLogger` |
 | `middleware.Logger` wrapped around `middleware.RequestID`, same handler, six attributes | 6, exactly; at most 9 under `-race` | MEASURED after M8 | `TestAllocBudgetLoggerWithRequestID` |
 | `middleware.Timeout(time.Second)` around a handler that returns at once | 4, exactly, with and without `-race` | MEASURED after M8 | `TestAllocBudgetTimeout` |
+| `middleware.CORS(corsBudgetConfig)`, a request with no `Origin` | 0, exactly, with and without `-race` | MEASURED after M8 | `TestAllocBudgetCORSNoOrigin` |
+| `middleware.CORS(corsBudgetConfig)`, a real request from the allowed origin | 0, exactly, with and without `-race` | MEASURED after M8 | `TestAllocBudgetCORSAllowedOrigin` |
+| `middleware.CORS(corsBudgetConfig)`, a preflight from the allowed origin | 0, exactly, with and without `-race` | MEASURED after M8 | `TestAllocBudgetCORSPreflight` |
 
 **Why it allocates at all.** `DisallowUnknownFields` exists only on `json.Decoder`, not on
 `json.Unmarshal`, so a strict decode needs a `Decoder` and a `bytes.Reader` for it to read from,
@@ -312,7 +315,7 @@ been profiled.
 
 **Exact under `-race`, and measured before that was written.** The figure was taken four ways: 4.0
 on darwin (go1.25.6, arm64) without and with `-race`, and 4.0 in a Linux container
-(golang:1.25.14, amd64) without and with `-race`. None of the mechanisms above applies — no pooled
+(golang:1.25.14, arm64) without and with `-race`. None of the mechanisms above applies — no pooled
 buffer, no buffer the race build moves to the heap — so the race slack is 0 and
 `TestAllocBudgetTimeout` pins 4 exactly under `-race` too. Without the race detector it was broken
 in both directions and failed both ways: `Timeout allocated 4.0 objects per call, want exactly 3`
@@ -325,6 +328,44 @@ map under its mutex, and `cancel` removes it again under the same mutex, so an o
 puts two acquisitions of a single app-global lock on every request, on a path that previously took
 none. Whether that contends under concurrency is unmeasured: **no benchmark was recorded for
 `Timeout`**, only the allocation budget above.
+
+#### `middleware.CORS`
+
+**`CORS`, 0, on each of its three branches.** The fixture is `corsBudgetConfig`: one origin,
+`https://app.example.com`; two allowed headers, `Authorization` and `Content-Type`; one exposed
+header, `X-Request-Id`; a ten-minute `MaxAge`; and credentials on — so every header pair `CORS`
+can build is built, and the preflight writes all five of its headers. The three rows are a `GET`
+with no `Origin`, which only adds `Vary`; a `GET` from the allowed origin, which compares it and
+writes `Access-Control-Allow-Origin`, `-Allow-Credentials` and `-Expose-Headers`; and a preflight
+from the allowed origin, which compares it, writes `Access-Control-Allow-Origin` and the four
+preflight pairs, and answers with `c.NoContent`.
+
+**Why it costs nothing.** Everything that can be done once is done when `CORS` is called: the
+lists are joined, `MaxAge` is rendered, and the header pairs for a real response and for a
+preflight are built as fixed `(key, value)` strings, so a request loops over strings that already
+exist. The origin comparison, `string(origin) == o` in `matchOrigin`, compiles to a comparison and
+not a conversion. `Header.Set` and `Header.Add` with `string` arguments copy into fasthttp's
+header buffers, which a `RequestCtx` keeps across requests. And the value written for
+`Access-Control-Allow-Origin` is the configured string, equal to the header's bytes, so nothing is
+converted from `[]byte` to write it. A request from an origin not in the list takes the same
+comparison and writes less, and is not measured separately.
+
+**The header is reset before each call, and why.** `CORS` writes response headers, and `Vary:
+Origin` goes on with `Add`. Measured the way the rows above are — the same wrapped handler called
+a thousand times on one `Ctx` — the thousandth call would add the thousandth `Vary`, and the
+figure would count the header growing, which no request ever sees. So the three budgets measure
+through `measureResetting`, which calls `Response.Header.Reset` before each timed call, as fasthttp
+does between requests on a connection. `Reset` keeps the header's buffers, so after the warm call
+every `Set` and `Add` writes into memory that already exists: that is the steady state of a
+server, and it is what the figure describes.
+
+**Exact under `-race`, and measured before that was written.** Each of the three was taken four
+ways: 0.0 on darwin (go1.25.6, arm64) without and with `-race`, and 0.0 in a Linux container
+(golang:1.25.14, arm64) without and with `-race`. None of the mechanisms above applies — no pooled
+buffer, no buffer the race build moves to the heap — so the race slack is 0 and each budget pins 0
+exactly under `-race` too. A budget of 0 cannot be broken downwards; broken upwards it failed as
+expected: `CORS (preflight) allocated 0.0 objects per call, want exactly 1`, and the same for
+`CORS (no Origin)`. No benchmark was recorded for `CORS`.
 
 ## The techniques, and what each one costs
 
