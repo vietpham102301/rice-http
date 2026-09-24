@@ -1,14 +1,17 @@
 package rice
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
+	"unsafe"
 
 	"github.com/valyala/fasthttp"
 )
@@ -377,5 +380,60 @@ func TestHasDotDotSegment(t *testing.T) {
 		if got := hasDotDotSegment([]byte(p)); got != want {
 			t.Errorf("hasDotDotSegment(%q) = %v, want %v", p, got, want)
 		}
+	}
+}
+
+func TestStaticRefusesDotDotWhenPathNormalizingIsDisabled(t *testing.T) {
+	root := t.TempDir()
+	pub := filepath.Join(root, "pub")
+	if err := os.Mkdir(pub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "secret.txt"), []byte("top secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pub, "a.txt"), []byte("public"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	app.Static("/assets", os.DirFS(pub))
+	app.Build()
+
+	// When an outer fasthttp handler sets URI().DisablePathNormalizing = true before
+	// rice is invoked, fasthttp.RequestCtx.Path() keeps the ".." unnormalized.
+	// fasthttp's SetRequestURI normalizes by default, so we construct the RequestCtx
+	// and then use unsafe to inject the unnormalized path.
+	var req fasthttp.Request
+	req.Header.SetMethod("GET")
+	req.SetRequestURI("/assets/../secret.txt")
+	fctx := &fasthttp.RequestCtx{}
+	fctx.Init(&req, nil, discardLogger{})
+
+	// Manually set the path to contain ".." using unsafe, simulating the scenario
+	// where an outer handler set DisablePathNormalizing before the URI was parsed.
+	unnormPath := []byte("/assets/../secret.txt")
+	uriVal := reflect.ValueOf(fctx.URI()).Elem()
+	pathField := uriVal.FieldByName("path")
+	// Use unsafe to modify the unexported field directly
+	ptr := (*[]byte)(unsafe.Pointer(pathField.UnsafeAddr()))
+	*ptr = unnormPath
+
+	// Precondition: verify that fctx.Path() now contains "..".
+	if !bytes.Contains(fctx.Path(), []byte("..")) {
+		t.Fatalf("precondition: fctx.Path() = %q, want to contain '..'", fctx.Path())
+	}
+
+	// Dispatch the request. The serve() handler should detect ".." and return 404.
+	app.handle(fctx)
+
+	// Verify the response is 404, not 500.
+	if got := fctx.Response.StatusCode(); got != 404 {
+		t.Errorf("status %d, want 404", got)
+	}
+
+	// Verify the secret content is not served.
+	if strings.Contains(string(fctx.Response.Body()), "top secret") {
+		t.Errorf("body contains 'top secret', request was not blocked")
 	}
 }

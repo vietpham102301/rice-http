@@ -101,10 +101,11 @@ func (e *staticEntry) build() {
 
 // serve is the handler every Static pattern runs.
 //
-// A NUL byte or a ".." segment is refused before fasthttp sees the path.
-// fctx.Path() is already normalised, so this is a second line rather than the
-// only one, and it makes rice's answer — a 404 — independent of fasthttp's, which
-// is 400 and 500 for these.
+// A NUL byte or a ".." segment is refused here, with a 404.
+// Normally fctx.Path() is normalised before routing, so neither reaches here
+// when rice runs its own server. The check matters when rice is mounted via
+// FasthttpHandler behind a handler that sets URI().DisablePathNormalizing,
+// where fasthttp.FS would answer 500 for ".." and 400 for NUL bytes.
 func (e *staticEntry) serve(c *Ctx) error {
 	if e.h == nil {
 		return errStaticNotBuilt
