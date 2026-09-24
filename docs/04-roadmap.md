@@ -223,8 +223,8 @@ Outside any milestone, because the API was already written down in
   above, needing a design of its own: a pre-emptive timeout written as a middleware would release
   the `Ctx` while the handler's goroutine still holds it. That is true of a middleware and not of
   the transport, where fasthttp abandons the context it timed out rather than reuse it; the entry
-  below and ADR-0014 record the correction. CORS, which the miss chain makes possible, is still unbuilt and
-  has no design yet.
+  below and ADR-0014 record the correction. CORS, which the miss chain makes possible, is built
+  below.
 - `middleware.Timeout(d)`, a deadline the work is asked to honour, not a switch that cuts it off.
   It attaches `d` to `c.Context()`, which the database and HTTP clients a handler calls already
   honour, and answers 503 when the chain returns an error after its own deadline has passed —
@@ -237,3 +237,17 @@ Outside any milestone, because the API was already written down in
   middleware, where every middleware shares one `*Ctx`. It names `fasthttp.TimeoutHandler` as the
   escape hatch and its costs. Its 4 allocations are pinned in
   [05-performance-model.md](05-performance-model.md#opt-in-packages).
+- `middleware.CORS(cfg)`, which lets a browser application on one of a fixed list of origins call
+  the service: it answers the preflight with 204 and puts the CORS headers on every other
+  response. It states a policy and the browser enforces it — the configured methods and headers
+  are sent as they are, and `Access-Control-Request-Method` and `-Headers` are never parsed; the
+  one check it makes is the origin, compared exactly, and an origin not in the list receives no
+  CORS headers. It must be installed with `app.Use`: a preflight is a route miss, and only
+  application middleware runs on a miss, so a `CORS` on a group never answers one. It writes its
+  headers before `next`, and the funnel does not reset headers, so a 401, a 404 and a 500 arrive
+  carrying them and the browser reports the status rather than a CORS failure. A configuration
+  that cannot work — no origins, `"*"`, an origin with a trailing slash or an upper-case letter —
+  panics at construction. [ADR-0015](adr/0015-cors-states-a-policy.md) records the three findings
+  behind it, and names server-side validation of the requested method and headers, a wildcard
+  origin and a per-group preflight as the alternatives that lost. It costs 0 allocations on all
+  three branches, pinned in [05-performance-model.md](05-performance-model.md#opt-in-packages).

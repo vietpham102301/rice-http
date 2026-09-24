@@ -254,10 +254,42 @@ empty on a miss, because nothing was captured. This is what lets a logger record
 [ADR-0012](adr/0012-application-middleware-runs-on-route-misses.md).
 
 **What rice ships.** `middleware.Recover`, `middleware.RealIP`, `middleware.RequestID`,
-`middleware.Logger` and `middleware.Timeout`, in the opt-in `middleware` package. Their
-recommended order, and the one trap in it — a panicking request is not logged unless `Recover`
-sits inside `Logger` — are in that package's documentation and in the
-[README](../README.md#the-middleware-rice-ships).
+`middleware.Logger`, `middleware.CORS` and `middleware.Timeout`, in the opt-in `middleware`
+package. Their recommended order, and the one trap in it — a panicking request is not logged
+unless `Recover` sits inside `Logger` — are in that package's documentation and in the
+[README](../README.md#the-middleware-rice-ships). `CORS` must be installed with `app.Use`: a
+preflight is a miss, and a group's middleware never sees one.
+
+```go
+// package middleware
+type CORSConfig struct {
+    Origins          []string
+    AllowMethods     []string
+    AllowHeaders     []string
+    ExposeHeaders    []string
+    MaxAge           time.Duration
+    AllowCredentials bool
+}
+
+func CORS(cfg CORSConfig) rice.Middleware
+```
+
+`CORSConfig` is everything `CORS` needs. `CORS` copies the origins and compiles the rest into
+fixed header values when it is called, and never reads the struct again. `Origins` is the one required field: empty,
+`CORS` panics. Each origin is compared exactly, byte for byte, with the `Origin` header a browser
+sends — lower case, `scheme://host`, a port only when it is not the scheme's default, no path and
+no trailing slash — so `"https://app.example.com/"` would never match, and panics instead, as do
+`"*"` and `"null"`. `AllowMethods` empty means `GET, HEAD, POST, PUT, PATCH, DELETE`.
+`AllowHeaders` empty means no `Access-Control-Allow-Headers` is sent, so the browser allows only
+its safelisted headers, which leave out `Authorization` and `Content-Type: application/json`.
+`ExposeHeaders` empty means a script reads only the safelisted response headers. `MaxAge` zero
+means no `Access-Control-Max-Age` is sent and the browser caches a preflight for five seconds; a
+negative value panics. `AllowCredentials` false means no `Access-Control-Allow-Credentials` is
+sent, which a browser requires before it will send cookies. An origin not in the list receives no
+CORS headers: its real requests are served all the same, and the browser, not rice, keeps the
+script from reading the result. The method and headers a script wants to send are checked the same way,
+by the browser, against what is listed; rice never parses them. See
+[ADR-0015](adr/0015-cors-states-a-policy.md).
 
 ---
 

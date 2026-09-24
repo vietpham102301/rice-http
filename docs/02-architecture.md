@@ -65,6 +65,7 @@ rice-http/
 │   ├── realip.go       RealIP: X-Forwarded-For counted from the trusted end
 │   ├── requestid.go    RequestID, RequestIDFrom: an id per request, an incoming one kept only if safe to log
 │   ├── logger.go       Logger: one slog line per request, with the status the client receives
+│   ├── cors.go         CORS: answers a preflight, decorates every other response, for a fixed list of origins
 │   └── timeout.go      Timeout: a deadline on c.Context(), and 503 when it is what made the request fail
 ├── binding/            optional, opt-in: binding.JSON[T], strict decode plus Validate; imports rice, and nothing imports it
 ├── docs/               these documents, the ADRs, milestone retrospectives, the journal
@@ -73,8 +74,8 @@ rice-http/
 └── .github/workflows/  CI
 ```
 
-CORS is still unbuilt and needs its own design; `middleware/` holds `Recover`, `RealIP`,
-`RequestID`, `Logger` and `Timeout`.
+`middleware/` holds six middleware: `Recover`, `RealIP`, `RequestID`, `Logger`, `CORS` and
+`Timeout`.
 
 **What later milestones add.** These are named here so the layout is predictable, not
 because they exist:
