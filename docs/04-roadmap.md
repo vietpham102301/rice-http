@@ -160,10 +160,6 @@ Not scheduled, not promised. Each would need its own brainstorm.
 - Typed per-request store keys (`rice.Key[T]` with a `Get` returning `T`), safer than
   `Set(string, any)` and immune to key collisions between middleware. Rejected for M6 because
   the documented API was already `string`/`any`.
-- `middleware.RealIP` parsing an `X-Forwarded-For` entry that carries a port
-  (`203.0.113.9:4711`) or is a bracketed IPv6 address (`[2001:db8::1]`). Some load balancers
-  append `ip:port`, and behind them `RealIP` currently falls back to the connection's address and
-  reports the proxy.
 
 ## Done after M8
 
@@ -215,8 +211,8 @@ Outside any milestone, because the API was already written down in
   ([ADR-0013](adr/0013-middleware-can-settle-a-request.md)); both hold their paths at zero
   allocations. `RealIP(trustedHops)` counts `X-Forwarded-For` from the trusted end and sets the
   address on every request, because fasthttp keeps a rewritten address for the life of a
-  keep-alive connection; it does not parse an entry with a port or a bracketed IPv6 entry, which
-  falls back to the connection's address. `RequestID` keeps an incoming id only if it is safe to
+  keep-alive connection. It did not then parse an entry with a port or a bracketed IPv6 entry;
+  the last entry below records that it now does. `RequestID` keeps an incoming id only if it is safe to
   log. `Logger` records the status the client receives and is not told about a panic unless
   `Recover` sits inside it. The three allocate, and each figure is pinned with its fixture in
   [05-performance-model.md](05-performance-model.md#opt-in-packages). Timeout stayed on the list
@@ -251,3 +247,12 @@ Outside any milestone, because the API was already written down in
   behind it, and names server-side validation of the requested method and headers, a wildcard
   origin and a per-group preflight as the alternatives that lost. It costs 0 allocations on all
   three branches, pinned in [05-performance-model.md](05-performance-model.md#opt-in-packages).
+- `middleware.RealIP` reading an `X-Forwarded-For` entry with a port, which came off the deferred
+  list above. Some load balancers append the address they saw with its port, and behind them
+  `RealIP` had fallen back to the connection's address and reported the proxy on every request. It
+  now reads `203.0.113.9:4711`, `[2001:db8::1]` and `[2001:db8::1]:4711` as well as a bare address,
+  and drops the port. An unbracketed IPv6 address is read whole and never split at its last colon,
+  since `2001:db8::1:4711` is itself a valid address. Anything else — brackets around IPv4, a port
+  outside 1–65535 — still falls back to the connection's address. An entry with a port costs what
+  a bare one does, 3 allocations, pinned in
+  [05-performance-model.md](05-performance-model.md#opt-in-packages).

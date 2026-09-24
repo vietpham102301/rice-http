@@ -79,12 +79,14 @@
 // run, and give it their number. Without a proxy, the rightmost entry of
 // X-Forwarded-For is whatever the client sent, and RealIP(1) would report it.
 //
-// RealIP parses each X-Forwarded-For entry as a bare IP address. An entry with
-// a port, such as 203.0.113.9:4711, or a bracketed IPv6 entry, such as
-// [2001:db8::1], does not parse, and the request falls back to the connection's
-// own address. That fallback is safe — it never attributes a request to an
-// address the client chose — but behind a proxy that always appends a port,
-// RealIP always reports the proxy's address.
+// RealIP reads an X-Forwarded-For entry as a bare address, IPv4 or IPv6, or
+// with the port some load balancers append: 203.0.113.9:4711, or
+// [2001:db8::1]:4711 for IPv6, which must be bracketed to carry one. The port
+// is dropped. An unbracketed IPv6 address is read whole, never split at its
+// last colon. Any other entry — brackets around IPv4, a port outside 1–65535,
+// a host name — does not parse, and the request falls back to the
+// connection's own address. That fallback is safe: it never attributes a
+// request to an address the client chose.
 //
 // # What they cost
 //
