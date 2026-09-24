@@ -13,8 +13,9 @@ import (
 )
 
 // errStaticNotBuilt answers a Static route dispatched on an App that was never
-// built. Run, Serve and FasthttpHandler all build, so only a test that calls
-// the dispatch path directly can reach it; it becomes a 500 rather than a nil
+// built, or was built only after Shutdown. Run, Serve and FasthttpHandler all
+// build, so only a test that calls the dispatch path directly, or an App shut
+// down before it was built, can reach it; it becomes a 500 rather than a nil
 // function call.
 var errStaticNotBuilt = errors.New("rice: a Static route was dispatched before Build")
 
@@ -250,8 +251,9 @@ func hasDotDotSegment(p []byte) bool {
 // stopStatic ends every Static entry's cache goroutine. runShutdown calls it
 // once, after the drain — a body stream may read a cached file until then —
 // and before the OnShutdown hooks, which cannot reorder it. An entry that was
-// never built has no channel.
+// never built has no channel, and a later Build builds none.
 func (a *App) stopStatic() {
+	a.staticStopped = true
 	for _, e := range a.statics {
 		if e.stop != nil {
 			close(e.stop)

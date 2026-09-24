@@ -46,8 +46,11 @@ func (a *App) build() {
 
 	// Each Static call gets its file handler here, not at the call, because
 	// creating one starts a goroutine; an App that is never built starts none.
-	for _, e := range a.statics {
-		e.build()
+	// Nor does one already shut down: its routes answer errStaticNotBuilt.
+	if !a.staticStopped {
+		for _, e := range a.statics {
+			e.build()
+		}
 	}
 
 	a.built = true

@@ -98,6 +98,14 @@ type App struct {
 	// routes: registration ends before serving begins.
 	statics []*staticEntry
 
+	// staticStopped is set by stopStatic. A Build that runs after it gives no
+	// Static entry a file handler: that would start a goroutine nothing is left
+	// to stop, since Shutdown stops them once. It is written and read with no
+	// lock, on the same argument as built below. A Shutdown that overlaps the
+	// Build at the start of Run or Serve is outside that argument, here as for
+	// each entry's stop channel.
+	staticStopped bool
+
 	buildOnce sync.Once
 
 	// built is read by registration to reject a late route, without a lock. That

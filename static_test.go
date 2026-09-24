@@ -616,3 +616,21 @@ func TestStaticRedirectIgnoresTheRawPath(t *testing.T) {
 		}
 	}
 }
+
+func TestStaticBuildAfterShutdownStartsNoGoroutine(t *testing.T) {
+	base := stableCacheGoroutines(t)
+	app := New()
+	app.Static("/a", staticFS())
+	if err := app.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	app.Build()
+	cacheGoroutinesSettleAt(t, base)
+
+	// Nothing would ever stop a goroutine started now, so the route answers
+	// as an unbuilt one does.
+	if got := doStatic(app, "GET", "/a/a.txt").Response.StatusCode(); got != 500 {
+		t.Errorf("status %d, want 500", got)
+	}
+	runtime.KeepAlive(app)
+}
