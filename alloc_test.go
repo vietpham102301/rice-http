@@ -703,3 +703,46 @@ func TestAllocBudgetContext(t *testing.T) {
 	ctx := context.Background()
 	budget(t, "Ctx.SetContext", 0, func() { c.SetContext(ctx) })
 }
+
+// staticFctx returns a request context for a static budget. Init gives it a
+// logger, which fasthttp.FS needs on its miss path.
+func staticFctx(uri string) *fasthttp.RequestCtx {
+	var req fasthttp.Request
+	req.Header.SetMethod("GET")
+	req.SetRequestURI(uri)
+	fctx := &fasthttp.RequestCtx{}
+	fctx.Init(&req, nil, discardLogger{})
+	return fctx
+}
+
+// TestAllocBudgetStaticFile pins a GET for a small file already in fasthttp's
+// handle cache. Static files are outside the zero-allocation claim; this is a
+// regression guard, not a target. Measured on darwin arm64, with and without
+// -race. The response is reset between calls, as fasthttp's server does.
+func TestAllocBudgetStaticFile(t *testing.T) {
+	app := New()
+	app.Static("/assets", staticFS())
+	app.Build()
+	fctx := staticFctx("/assets/a.txt")
+
+	const want float64 = 0
+	budget(t, "static file from the handle cache", want, func() {
+		fctx.Response.Reset()
+		app.handle(fctx)
+	})
+}
+
+// TestAllocBudgetStatic404 pins a missing file through a Static route, the path
+// a scanner exercises: fasthttp's failed open and its log line, then the funnel.
+func TestAllocBudgetStatic404(t *testing.T) {
+	app := New()
+	app.Static("/assets", staticFS())
+	app.Build()
+	fctx := staticFctx("/assets/missing")
+
+	const want float64 = 20
+	budget(t, "static 404", want, func() {
+		fctx.Response.Reset()
+		app.handle(fctx)
+	})
+}

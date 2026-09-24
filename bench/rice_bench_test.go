@@ -2,6 +2,7 @@ package bench
 
 import (
 	"testing"
+	"testing/fstest"
 
 	"github.com/valyala/fasthttp"
 	rice "github.com/vietpham102301/rice-http"
@@ -134,4 +135,27 @@ func BenchmarkDispatchParallel(b *testing.B) {
 			h(fctx)
 		}
 	})
+}
+
+// BenchmarkStaticSmallFile measures a GET for a 3-byte file through Static, with
+// the file already in fasthttp.FS's handle cache. Static files are outside the
+// zero-allocation claim; this records what they cost. The response is reset
+// each iteration, as fasthttp's server does between requests.
+func BenchmarkStaticSmallFile(b *testing.B) {
+	app := rice.New()
+	app.Static("/assets", fstest.MapFS{"a.txt": {Data: []byte("hi\n")}})
+
+	h := app.FasthttpHandler()
+	fctx := newRequestCtx("GET", "/assets/a.txt")
+	h(fctx) // warm: opens the file and fills the cache
+	if fctx.Response.StatusCode() != 200 {
+		b.Fatalf("warm-up status %d, want 200", fctx.Response.StatusCode())
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		fctx.Response.Reset()
+		h(fctx)
+	}
 }
