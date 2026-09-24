@@ -507,6 +507,9 @@ func TestAllocBudgetHTTPErrorReturn(t *testing.T) {
 // storeSink keeps Get's result reachable so the compiler cannot elide the call.
 var storeSink any
 
+// TestAllocBudgetKeySetPointer pins Set with a pointer T, which boxes
+// nothing. Measured at 0 on darwin arm64 (go1.25.6) and in a Linux arm64
+// container (golang:1.25.14), with and without -race.
 func TestAllocBudgetKeySetPointer(t *testing.T) {
 	c := New().newCtx()
 	k := NewKey[*struct{ n int }]("k")
@@ -518,6 +521,9 @@ func TestAllocBudgetKeySetPointer(t *testing.T) {
 	})
 }
 
+// TestAllocBudgetKeyGet pins Get with a pointer T. Measured at 0 on darwin
+// arm64 (go1.25.6) and in a Linux arm64 container (golang:1.25.14), with and
+// without -race.
 func TestAllocBudgetKeyGet(t *testing.T) {
 	c := New().newCtx()
 	k := NewKey[*struct{ n int }]("k")
@@ -530,10 +536,12 @@ func TestAllocBudgetKeyGet(t *testing.T) {
 
 // TestAllocBudgetKeySetString asserts exactly one allocation, and the
 // allocation is not rice's. Converting a non-constant string to the store's
-// any boxes it; Set itself allocates nothing, as TestAllocBudgetKeySetPointer
-// shows. The budget is exact rather than an upper bound so that a change to
-// Go's boxing rules shows up here instead of silently changing what the
-// documentation says.
+// any boxes it; Set itself allocates nothing, as
+// TestAllocBudgetKeySetPointer shows. The budget is exact rather than an
+// upper bound so that a change to Go's boxing rules shows up here instead of
+// silently changing what the documentation says. Measured at 1 on darwin
+// arm64 (go1.25.6) and in a Linux arm64 container (golang:1.25.14), with and
+// without -race.
 func TestAllocBudgetKeySetString(t *testing.T) {
 	c := New().newCtx()
 	k := NewKey[string]("k")
@@ -546,6 +554,24 @@ func TestAllocBudgetKeySetString(t *testing.T) {
 	if got != 1 {
 		t.Errorf("Key.Set with a non-constant string allocated %.1f objects per call, want exactly 1 (the caller's boxing)", got)
 	}
+}
+
+// stringSink keeps Get's string result reachable.
+var stringSink string
+
+// TestAllocBudgetKeyGetString pins that Get with a non-pointer T copies the
+// value out of the store's any without allocating: the assertion v.(T) reads
+// the boxed string's header, it does not build one. Measured at 0 on darwin
+// arm64 (go1.25.6) and in a Linux arm64 container (golang:1.25.14), with and
+// without -race.
+func TestAllocBudgetKeyGetString(t *testing.T) {
+	c := New().newCtx()
+	k := NewKey[string]("k")
+	k.Set(c, strconv.Itoa(123456))
+
+	budget(t, "Key.Get with a string value", 0, func() {
+		stringSink, _ = k.Get(c)
+	})
 }
 
 func TestAllocBudgetStatus(t *testing.T) {
