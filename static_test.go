@@ -379,3 +379,57 @@ func TestHasDotDotSegment(t *testing.T) {
 		}
 	}
 }
+
+func TestStaticRedirectsADirectoryWithoutItsSlash(t *testing.T) {
+	cases := []struct {
+		prefix, uri, location string
+	}{
+		{"/assets", "/assets/docs", "/assets/docs/"},
+		{"/assets", "/assets/docs?x=1&y=2", "/assets/docs/?x=1&y=2"},
+		{"/assets", "/assets/my%20docs", "/assets/my%20docs/"},
+		{"/assets", "/assets", "/assets/"},
+		{"/assets", "/assets?x=1", "/assets/?x=1"},
+		{"", "/docs", "/docs/"},
+	}
+	for _, tc := range cases {
+		app := New()
+		app.Static(tc.prefix, staticFS())
+		app.Build()
+
+		for _, method := range []string{"GET", "HEAD"} {
+			fctx := doStatic(app, method, tc.uri)
+			if got := fctx.Response.StatusCode(); got != 301 {
+				t.Errorf("%s %s: status %d, want 301", method, tc.uri, got)
+			}
+			if got := string(fctx.Response.Header.Peek("Location")); got != tc.location {
+				t.Errorf("%s %s: Location %q, want %q", method, tc.uri, got, tc.location)
+			}
+		}
+	}
+}
+
+func TestStaticRedirectNeverLeavesTheSite(t *testing.T) {
+	m := staticFS()
+	m["evil.example/index.html"] = &fstest.MapFile{Data: []byte("x"), ModTime: staticModTime}
+	app := New()
+	app.Static("", m)
+	app.Build()
+
+	fctx := doStatic(app, "GET", "//evil.example")
+	loc := string(fctx.Response.Header.Peek("Location"))
+	if strings.HasPrefix(loc, "//") {
+		t.Errorf("Location %q is protocol-relative: it leaves the site", loc)
+	}
+}
+
+func TestStaticRedirectFollowedServesTheIndex(t *testing.T) {
+	app := New()
+	app.Static("/assets", staticFS())
+	app.Build()
+
+	loc := string(doStatic(app, "GET", "/assets/docs").Response.Header.Peek("Location"))
+	fctx := doStatic(app, "GET", loc)
+	if got := string(fctx.Response.Body()); got != "docs" {
+		t.Errorf("following %q: body %q, want %q", loc, got, "docs")
+	}
+}

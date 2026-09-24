@@ -62,14 +62,19 @@ type staticEntry struct {
 	h fasthttp.RequestHandler
 }
 
-// static registers GET and HEAD for prefix+"/" and prefix+"/*filepath". A
-// wildcard captures at least one byte, so the fs root needs its own pattern.
+// static registers GET and HEAD for prefix, prefix+"/" and prefix+"/*filepath". A
+// wildcard captures at least one byte, so the fs root needs its own pattern, and the
+// bare prefix redirects to it.
 func (a *App) static(prefix string, fsys fs.FS, g *Group, mw []Middleware) {
 	if fsys == nil {
 		panic("rice: nil fs.FS for static prefix " + strconv.Quote(prefix))
 	}
 	e := &staticEntry{prefix: prefix, fsys: fsys}
 	for _, method := range [...]string{"GET", "HEAD"} {
+		if prefix != "" {
+			// The bare prefix is a directory without its slash.
+			a.register(method, prefix, redirectToDir, g, mw)
+		}
 		a.register(method, prefix+"/", e.serve, g, mw)
 		a.register(method, prefix+"/*filepath", e.serve, g, mw)
 	}
@@ -129,12 +134,50 @@ func (e *staticEntry) serve(c *Ctx) error {
 // status fails a test rather than a client.
 func staticResult(fctx *fasthttp.RequestCtx) error {
 	switch code := fctx.Response.StatusCode(); {
+	case code == fasthttp.StatusFound:
+		// fasthttp's only 302 is a directory without its slash, and its
+		// Location is built from the rewritten path, so it has lost the prefix.
+		writeDirRedirect(fctx)
+		return nil
 	case code == fasthttp.StatusNotFound, code == fasthttp.StatusForbidden:
 		return ErrNotFound
 	case code >= 400:
 		return NewHTTPError(code, "")
 	}
 	return nil
+}
+
+// redirectToDir answers the bare prefix, which is the fs root without its slash.
+func redirectToDir(c *Ctx) error {
+	writeDirRedirect(c.fctx)
+	return nil
+}
+
+// writeDirRedirect answers 301 to the request's own path with a slash appended
+// and the query string kept.
+//
+// Without the slash, every relative link in the directory's index.html resolves
+// against its parent. That is the resource's semantics, not the router's, so it
+// does not contradict ADR-0007; see ADR-0017.
+//
+// The path comes from URI.RequestURI, which percent-encodes the normalised path.
+// Normalisation has already collapsed "//", so the Location is never
+// protocol-relative. It is relative, so no Host header is trusted. 301 is safe
+// because Static registers only GET and HEAD.
+func writeDirRedirect(fctx *fasthttp.RequestCtx) {
+	uri := fctx.URI().RequestURI()
+	i := bytes.IndexByte(uri, '?')
+	if i < 0 {
+		i = len(uri)
+	}
+	loc := make([]byte, 0, len(uri)+1)
+	loc = append(loc, uri[:i]...)
+	loc = append(loc, '/')
+	loc = append(loc, uri[i:]...)
+
+	fctx.Response.ResetBody()
+	fctx.Response.Header.SetBytesV(fasthttp.HeaderLocation, loc)
+	fctx.SetStatusCode(fasthttp.StatusMovedPermanently)
 }
 
 // hasDotDotSegment reports whether p has a path segment that is exactly "..".
