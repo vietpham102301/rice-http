@@ -73,7 +73,7 @@ var defaultAllowMethods = []string{"GET", "HEAD", "POST", "PUT", "PATCH", "DELET
 //
 // A configuration that cannot work panics at construction: see CORSConfig.
 func CORS(cfg CORSConfig) rice.Middleware {
-	origins, real, _ := compileCORS(cfg)
+	origins, real, preflight := compileCORS(cfg)
 	return func(next rice.Handler) rice.Handler {
 		return func(c *rice.Ctx) error {
 			h := &c.RequestCtx().Response.Header
@@ -86,7 +86,22 @@ func CORS(cfg CORSConfig) rice.Middleware {
 			if len(origin) == 0 {
 				return next(c)
 			}
-			if allowed := matchOrigin(origins, origin); allowed != "" {
+			allowed := matchOrigin(origins, origin)
+
+			if isPreflight(c) {
+				if allowed != "" {
+					h.Set("Access-Control-Allow-Origin", allowed)
+					for _, p := range preflight {
+						h.Set(p.key, p.value)
+					}
+				}
+				// Matched or not: the absence of headers is the "no". The
+				// chain never sees a preflight, so a route's own OPTIONS
+				// handler answers only ordinary OPTIONS requests.
+				return c.NoContent(fasthttp.StatusNoContent)
+			}
+
+			if allowed != "" {
 				// The configured string, equal to the header's bytes: no
 				// []byte-to-string conversion and no allocation.
 				h.Set("Access-Control-Allow-Origin", allowed)
@@ -183,4 +198,10 @@ func joinList(field string, items []string) string {
 	return strings.Join(items, ", ")
 }
 
-var _ = fasthttp.StatusNoContent // used from Task 3 on
+// isPreflight reports whether this is a browser's preflight: OPTIONS with an
+// Access-Control-Request-Method. The caller has already checked Origin. The
+// header's value is not read; only its presence says what the request is.
+func isPreflight(c *rice.Ctx) bool {
+	return string(c.Method()) == fasthttp.MethodOptions &&
+		len(c.Header("Access-Control-Request-Method")) > 0
+}

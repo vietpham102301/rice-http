@@ -1,7 +1,10 @@
 package middleware_test
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -283,5 +286,187 @@ func TestCORSKeepsAHandlersOwnVary(t *testing.T) {
 	}
 	if len(got) != 2 || got[0] != "Origin" || got[1] != "Accept" {
 		t.Errorf("Vary = %q, want [Origin Accept]", got)
+	}
+}
+
+// preflight is what a browser sends before a cross-origin POST with a JSON
+// body and a bearer token. The -Headers value is deliberately not what the
+// configuration allows: the middleware must not read it.
+func preflight(origin string) map[string]string {
+	return map[string]string{
+		"Origin":                         origin,
+		"Access-Control-Request-Method":  "DELETE",
+		"Access-Control-Request-Headers": "authorization, content-type, x-not-allowed",
+	}
+}
+
+func TestCORSAnswersAPreflight(t *testing.T) {
+	for _, credentials := range []bool{false, true} {
+		t.Run(map[bool]string{false: "without credentials", true: "with credentials"}[credentials], func(t *testing.T) {
+			cfg := baseCORS()
+			cfg.AllowCredentials = credentials
+			var ran bool
+			fctx := serveCORS(t, corsApp(cfg, &ran), "OPTIONS", "/r", preflight(allowedOrigin))
+
+			if ran {
+				t.Error("the handler ran: a preflight is answered by CORS and never reaches the chain")
+			}
+			if got := fctx.Response.StatusCode(); got != 204 {
+				t.Errorf("status = %d, want 204", got)
+			}
+			if got := fctx.Response.Body(); len(got) != 0 {
+				t.Errorf("body = %q, want empty", got)
+			}
+			credWant := ""
+			if credentials {
+				credWant = "true"
+			}
+			for name, want := range map[string]string{
+				"Access-Control-Allow-Origin":      allowedOrigin,
+				"Access-Control-Allow-Methods":     "GET, HEAD, POST, PUT, PATCH, DELETE",
+				"Access-Control-Allow-Headers":     "Authorization, Content-Type",
+				"Access-Control-Max-Age":           "600",
+				"Access-Control-Allow-Credentials": credWant,
+				"Access-Control-Expose-Headers":    "", // a preflight has no body for a script to read from
+				"Vary":                             "Origin",
+			} {
+				if got := hdr(fctx, name); got != want {
+					t.Errorf("%s = %q, want %q", name, got, want)
+				}
+			}
+		})
+	}
+}
+
+// TestCORSStatesThePolicyRatherThanEchoingTheRequest is the design: the
+// browser compares what it asked for with what the server allows, so the
+// server never reads Access-Control-Request-Headers. A middleware that echoed
+// the request would send x-not-allowed here.
+func TestCORSStatesThePolicyRatherThanEchoingTheRequest(t *testing.T) {
+	var ran bool
+	fctx := serveCORS(t, corsApp(baseCORS(), &ran), "OPTIONS", "/r", preflight(allowedOrigin))
+
+	if got := hdr(fctx, "Access-Control-Allow-Headers"); strings.Contains(strings.ToLower(got), "x-not-allowed") {
+		t.Errorf("Access-Control-Allow-Headers = %q echoes the request; want the configured list only", got)
+	}
+}
+
+func TestCORSAnswersAPreflightFromAnUnknownOriginWithNoHeaders(t *testing.T) {
+	var ran bool
+	fctx := serveCORS(t, corsApp(baseCORS(), &ran), "OPTIONS", "/r", preflight("https://evil.example"))
+
+	if ran {
+		t.Error("the handler ran: a preflight never reaches the chain, allowed or not")
+	}
+	if got := fctx.Response.StatusCode(); got != 204 {
+		t.Errorf("status = %d, want 204: the absence of headers is the answer", got)
+	}
+	for _, name := range []string{"Access-Control-Allow-Origin", "Access-Control-Allow-Methods", "Access-Control-Allow-Headers", "Access-Control-Max-Age"} {
+		if got := hdr(fctx, name); got != "" {
+			t.Errorf("%s = %q for an origin not in the list, want absent", name, got)
+		}
+	}
+	if got := hdr(fctx, "Vary"); got != "Origin" {
+		t.Errorf("Vary = %q, want Origin", got)
+	}
+}
+
+func TestCORSAnswersAPreflightForAPathWithNoRoute(t *testing.T) {
+	var ran bool
+	fctx := serveCORS(t, corsApp(baseCORS(), &ran), "OPTIONS", "/nowhere", preflight(allowedOrigin))
+
+	if got := fctx.Response.StatusCode(); got != 204 {
+		t.Errorf("status = %d, want 204: the middleware cannot tell a miss from a route, and the real request will get its 404 with the headers on", got)
+	}
+	if got := hdr(fctx, "Access-Control-Allow-Origin"); got != allowedOrigin {
+		t.Errorf("Access-Control-Allow-Origin = %q, want %q", got, allowedOrigin)
+	}
+}
+
+// TestCORSPreflightNeedsAllThreeSignals pins what a preflight is: OPTIONS,
+// Origin, and Access-Control-Request-Method. Missing any one, the request is
+// a real request and reaches the chain.
+func TestCORSPreflightNeedsAllThreeSignals(t *testing.T) {
+	cases := []struct {
+		name    string
+		method  string
+		headers map[string]string
+	}{
+		{"OPTIONS without a request method", "OPTIONS", map[string]string{"Origin": allowedOrigin}},
+		{"OPTIONS with an empty request method", "OPTIONS", map[string]string{"Origin": allowedOrigin, "Access-Control-Request-Method": ""}},
+		{"request method on a POST", "POST", preflight(allowedOrigin)},
+		{"OPTIONS with a request method and no Origin", "OPTIONS", map[string]string{"Access-Control-Request-Method": "DELETE"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var ran bool
+			app := corsApp(baseCORS(), &ran)
+			app.OPTIONS("/r", func(c *rice.Ctx) error {
+				ran = true
+				return c.String(200, "an OPTIONS route of the application's own")
+			})
+
+			fctx := serveCORS(t, app, tc.method, "/r", tc.headers)
+
+			if !ran {
+				t.Error("the handler did not run: this is not a preflight")
+			}
+			if got := fctx.Response.StatusCode(); got != 200 {
+				t.Errorf("status = %d, want 200 from the handler", got)
+			}
+			if _, hasOrigin := tc.headers["Origin"]; hasOrigin {
+				if got := hdr(fctx, "Access-Control-Allow-Origin"); got != allowedOrigin {
+					t.Errorf("Access-Control-Allow-Origin = %q, want %q: a real request from an allowed origin is decorated", got, allowedOrigin)
+				}
+				if got := hdr(fctx, "Access-Control-Allow-Methods"); got != "" {
+					t.Errorf("Access-Control-Allow-Methods = %q on a real request, want absent", got)
+				}
+			}
+		})
+	}
+}
+
+// TestCORSPreflightOmitsWhatIsNotConfigured pins the empty-field rule: no
+// pair is built, so no header is sent. MaxAge below one second renders as 0.
+func TestCORSPreflightOmitsWhatIsNotConfigured(t *testing.T) {
+	var ran bool
+	fctx := serveCORS(t, corsApp(middleware.CORSConfig{Origins: []string{allowedOrigin}, AllowMethods: []string{"GET", "POST"}}, &ran), "OPTIONS", "/r", preflight(allowedOrigin))
+
+	for name, want := range map[string]string{
+		"Access-Control-Allow-Methods":     "GET, POST",
+		"Access-Control-Allow-Headers":     "",
+		"Access-Control-Max-Age":           "",
+		"Access-Control-Allow-Credentials": "",
+	} {
+		if got := hdr(fctx, name); got != want {
+			t.Errorf("%s = %q, want %q", name, got, want)
+		}
+	}
+
+	cfg := middleware.CORSConfig{Origins: []string{allowedOrigin}, MaxAge: 1500 * time.Millisecond}
+	fctx = serveCORS(t, corsApp(cfg, &ran), "OPTIONS", "/r", preflight(allowedOrigin))
+	if got := hdr(fctx, "Access-Control-Max-Age"); got != "1" {
+		t.Errorf("Access-Control-Max-Age = %q for 1.5s, want whole seconds: 1", got)
+	}
+}
+
+// TestCORSPreflightIsLoggedAs204 is why CORS goes inside Logger.
+func TestCORSPreflightIsLoggedAs204(t *testing.T) {
+	var buf bytes.Buffer
+	app := rice.New()
+	app.Use(middleware.Logger(slog.New(slog.NewJSONHandler(&buf, nil))), middleware.CORS(baseCORS()))
+	app.GET("/r", func(c *rice.Ctx) error { return c.String(200, "ok") })
+
+	serveCORS(t, app, "OPTIONS", "/r", preflight(allowedOrigin))
+
+	var line map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &line); err != nil {
+		t.Fatalf("log line is not one JSON object: %v: %s", err, buf.Bytes())
+	}
+	if got := line["status"]; got != float64(204) {
+		t.Errorf("logged status = %v, want 204", got)
+	}
+	if got := line["method"]; got != "OPTIONS" {
+		t.Errorf("logged method = %v, want OPTIONS", got)
 	}
 }
