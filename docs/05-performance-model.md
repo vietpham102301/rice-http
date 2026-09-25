@@ -25,6 +25,8 @@ The claim is narrow on purpose. It does **not** cover:
 - The opt-in packages, `binding/` and the allocating middleware in `middleware/`. They are rice's
   code, but a user who does not import them pays nothing for them, and each is pinned at its own
   figure under [Opt-in packages](#opt-in-packages).
+- Static files served by `Static`. They are fasthttp's file server behind rice's routing; their
+  figures are pinned under [Request path — dispatch](#request-path--dispatch).
 
 Stating the exclusions is more useful than the claim itself. A framework that says
 "zero allocations" without them is measuring a benchmark, not a system.
@@ -128,6 +130,9 @@ not move.
 | 404 through the funnel | 0 | MEASURED M6 | `TestAllocBudget404` |
 | 404 through a miss chain with one no-op application middleware | 0 | MEASURED after M8 | `TestAllocBudget404WithAppMiddleware` |
 | Handler returns a fresh HTTPError | 1 | MEASURED M6 | `TestAllocBudgetHTTPErrorReturn` |
+| `Static`, a small file from the handle cache | 0 | MEASURED after M8 | `TestAllocBudgetStaticFile` |
+| `Static`, a missing file | 20 | MEASURED after M8 | `TestAllocBudgetStatic404` |
+| `Static`, a missing file behind one header-setting middleware | 21 | MEASURED after M8 | `TestAllocBudgetStatic404WithHeaders` |
 | Panic recovered, stack captured | documented, not bounded | MEASURED M5 | `BenchmarkDispatchPanic` (a benchmark, not a budget) |
 | **End to end: single handler, unpooled Ctx (M1 baseline)** | 1 | MEASURED M1 | historical — `bench/results/M1-minimal-server.txt`; the pooled rows below replaced it |
 | **End to end: static route, no middleware, plaintext** | **0** | MEASURED M6 | `TestAllocBudgetHandleDispatch` |
@@ -168,6 +173,21 @@ string reads the boxed value's header and allocates nothing. These four rows rep
 arm64 (go1.25.6) and in a Linux arm64 container (golang:1.25.14), with and without `-race`, and is
 the same in all four. `NewKey` allocates its key's identity once and, like registration, is not
 budgeted.
+
+**`Static`'s handler allocates nothing on a cache hit; the miss path is where it allocates.** A GET
+for a small file already open in fasthttp's handle cache costs 0 allocations in the handler,
+without and with `-race` — the exclusion above lists `Static` because the zero-allocation claim is
+not made for it, not because every request pays something; a cache hit happens to measure zero.
+The budget and the benchmark measure the handler only: they exclude writing the file's bytes to
+the connection, which fasthttp does after the handler returns. A missing file costs fasthttp's
+failed open and the log line it writes for it, then the funnel's `ErrNotFound`: 17 without `-race`,
+20 with it, and `TestAllocBudgetStatic404` pins the ceiling, 20, the same figure covering both
+modes. When middleware has set a header, `serve` copies the response header into a pooled one
+before fasthttp resets it and copies it back after: `TestAllocBudgetStatic404WithHeaders` measures
+17 without `-race` and 21 with it, the extra one from `sync.Pool` dropping Puts under the race
+detector, and pins 21. `BenchmarkStaticSmallFile` reports a median of 147.0 ns/op, 0 B/op and 0
+allocs/op over ten runs, in `bench/results/post-M8-static-files.txt`. Unlike the rows above, these
+figures were measured on darwin arm64 (go1.25.6) only; no Linux container run exists for them.
 
 Measured values come from the results files in `bench/results/` and from the `AllocsPerRun`
 assertions in `alloc_test.go` and, for the `ConnState` row, `lifecycle_internal_test.go`. The

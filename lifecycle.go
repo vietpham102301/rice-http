@@ -71,11 +71,13 @@ func (a *App) runStart() error {
 
 // runShutdown runs the OnShutdown hooks in reverse order, once per App, and
 // returns every error they reported. It closes shutdownDone when they are done,
-// even if one panics.
+// even if one panics, or stopStatic does. It first stops the Static routes'
+// cache goroutines.
 func (a *App) runShutdown(ctx context.Context) []error {
 	var errs []error
 	a.shutdownOnce.Do(func() {
 		defer close(a.shutdownDone)
+		a.stopStatic()
 		close(a.hooksStarted)
 		for i := len(a.onShutdown) - 1; i >= 0; i-- {
 			if err := a.onShutdown[i](ctx); err != nil {

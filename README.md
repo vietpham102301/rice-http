@@ -83,6 +83,23 @@ Middleware added with `app.Use` also runs on a request that matches no route, ar
 that returns the 404; group and route middleware do not, since no group matched, and `c.Param`
 is empty there ([ADR-0012](docs/adr/0012-application-middleware-runs-on-route-misses.md)).
 
+`Static` serves an `fs.FS` under a prefix — a directory on disk or files compiled into the
+binary — with the same error, middleware and lifecycle rules as any other route:
+
+```go
+//go:embed web
+var web embed.FS
+
+sub, _ := fs.Sub(web, "web")
+app.Static("/assets", sub)                // embedded files
+app.Static("/uploads", os.DirFS("data"))  // a directory on disk
+```
+
+A directory is answered by its `index.html`, and requesting it without a trailing slash 301s to
+one that has it; nothing is ever listed. See
+[03-core-concepts.md](docs/03-core-concepts.md#serving-static-files) and
+[ADR-0017](docs/adr/0017-static-files-wrap-fasthttp-fs.md).
+
 ### The middleware rice ships
 
 `logging` above shows the shape. For an access log, a request deadline and calls from a browser

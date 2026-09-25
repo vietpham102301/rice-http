@@ -74,6 +74,8 @@ var defaultAllowMethods = []string{"GET", "HEAD", "POST", "PUT", "PATCH", "DELET
 // A custom ErrorHandler that resets the response drops them. So does a
 // handler that resets the response through c.RequestCtx() itself, for
 // example with NotModified, NotFound or Error: each calls Response.Reset.
+// Static's routes do exactly that inside fasthttp's file handler, and restore
+// the headers afterwards, so CORS headers survive them.
 //
 // Vary: Origin is added to every response, with or without an Origin header,
 // so a shared cache never serves one origin's response to another.
