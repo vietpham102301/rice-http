@@ -339,10 +339,13 @@ func TestStreamIsDeadOnceItsCallbackReturns(t *testing.T) {
 // the same signal Shutdown and the heartbeat use. WriteString buffers, so
 // Flush is what surfaces the failure.
 func TestStreamFailCancelsContextOnWriteError(t *testing.T) {
+	logs := captureStreamLog(t)
 	failed := make(chan error, 1)
+	handed := make(chan *rice.Stream, 1)
 	app := rice.New()
 	app.GET("/s", func(c *rice.Ctx) error {
 		return c.Stream(func(s *rice.Stream) error {
+			handed <- s
 			for {
 				_, _ = s.WriteString("x")
 				if err := s.Flush(); err != nil {
@@ -362,6 +365,17 @@ func TestStreamFailCancelsContextOnWriteError(t *testing.T) {
 
 	if err := within(t, 3*time.Second, "a write noticing the client left", failed); err == nil {
 		t.Fatal("Flush after the client left: got nil error, want one")
+	}
+
+	// rice retires the Stream after it has decided whether to log fn's error,
+	// so once Flush reports the Stream retired, the log is final.
+	s := within(t, time.Second, "fn handing off its Stream", handed)
+	waitFor(t, 2*time.Second, "the Stream being retired", func() bool {
+		err := s.Flush()
+		return err != nil && strings.Contains(err.Error(), "after its callback returned")
+	})
+	if strings.Contains(logs.String(), "rice: stream:") {
+		t.Errorf("a client leaving was logged as a stream error: %q", logs.String())
 	}
 }
 

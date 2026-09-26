@@ -49,6 +49,29 @@ func TestSSEWritesTheEventStreamFormat(t *testing.T) {
 	}
 }
 
+func TestSSEIgnoresARetryUnderOneMillisecond(t *testing.T) {
+	app := rice.New()
+	app.GET("/e", func(c *rice.Ctx) error {
+		return c.SSE(0, func(s *rice.SSE) error {
+			if err := s.Send(rice.Event{Data: "a", Retry: 500 * time.Microsecond}); err != nil {
+				return err
+			}
+			return s.Send(rice.Event{Event: "done"})
+		})
+	})
+	addr, _ := serve(t, app)
+	shutdownOnCleanup(t, app)
+
+	_, r := rawRequest(t, addr, "GET", "/e")
+	got := readUntil(t, r, "event: done", 2*time.Second)
+	if !strings.Contains(got, "\ndata: a\n\n") {
+		t.Errorf("the event is missing:\n%s", got)
+	}
+	if strings.Contains(got, "retry:") {
+		t.Errorf("a 500µs Retry wrote a retry line:\n%s", got)
+	}
+}
+
 func TestSSERejectsFramingCharacters(t *testing.T) {
 	results := make(chan []bool, 1)
 	app := rice.New()

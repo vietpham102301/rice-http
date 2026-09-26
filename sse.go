@@ -13,6 +13,8 @@ type SSE struct{ s *Stream }
 
 // Event is one server-sent event. Empty fields are left out, except Data: an
 // event always carries at least one data line, so a browser dispatches it.
+// Retry is sent in whole milliseconds, truncated; a Retry under one millisecond
+// is left out too.
 type Event struct {
 	ID    string
 	Event string
@@ -83,12 +85,12 @@ func (x *SSE) Send(ev Event) error {
 		w.WriteString(ev.Event)
 		w.WriteByte('\n')
 	}
-	if ev.Retry > 0 {
+	if ms := ev.Retry.Milliseconds(); ms > 0 {
 		var b [20]byte
 		w.WriteString("retry: ")
 		// WriteByte, not Write: Write can hand its slice to the underlying
 		// io.Writer, which would move b to the heap.
-		for _, d := range strconv.AppendInt(b[:0], ev.Retry.Milliseconds(), 10) {
+		for _, d := range strconv.AppendInt(b[:0], ms, 10) {
 			w.WriteByte(d)
 		}
 		w.WriteByte('\n')
