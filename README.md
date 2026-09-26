@@ -307,17 +307,22 @@ long-lived streams leaves it at zero or serves its streams from a separate App.
 
 The opt-in `otelrice` module traces and measures requests with OpenTelemetry, keyed by the matched
 route rather than the raw request path, so `/users/:id` is one span name and one metric series no
-matter how many ids it serves. It depends on the OpenTelemetry API only; with no SDK installed, the
-global providers are no-ops and `otelrice.Middleware()` costs a few allocations and records nothing.
+matter how many ids it serves. Its non-test code imports only the OpenTelemetry API and semconv;
+its `go.mod` also requires fasthttp directly and, for its own tests, the SDK. With no SDK installed,
+the global providers are no-ops and `otelrice.Middleware()` costs a few allocations and records
+nothing.
 
 **Not yet published.** `otelrice/go.mod` requires rice through `replace
 github.com/vietpham102301/rice-http => ../`, the same shape `bench/compare` uses, so it resolves only
 inside a checkout of this repository. It becomes installable with `go get` once a core release tags
 `Route` and `otelrice` is tagged in turn (`otelrice/vX.Y.Z`); until then, build against it from a clone
-of this repository rather than `go get`ting it.
+of this repository rather than `go get`ting it. Releasing it, in order: tag core with a version that
+carries `Route`; update `otelrice/go.mod` to require that version (the `replace` stays for development
+inside this repository; a published consumer ignores it); then tag `otelrice/vX.Y.Z`.
 
-Install an SDK tracer provider with an OTLP exporter and set it global, then put the middleware
-outermost so its span covers every other middleware:
+Install an SDK tracer provider and a meter provider, each with an OTLP exporter, and set both global,
+then put the middleware outermost so its span covers every other middleware. Shut both providers down
+after serving stops, not in a `defer` racing `log.Fatal`:
 
 ```go
 package main
@@ -326,10 +331,16 @@ import (
 	"context"
 	"log"
 	"log/slog"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/propagation"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
 	rice "github.com/vietpham102301/rice-http"
@@ -338,18 +349,27 @@ import (
 )
 
 func main() {
-	ctx := context.Background()
-	exp, err := otlptracegrpc.New(ctx)
+	setupCtx := context.Background()
+
+	traceExp, err := otlptracegrpc.New(setupCtx)
 	if err != nil {
 		log.Fatal(err)
 	}
-	tp := sdktrace.NewTracerProvider(sdktrace.WithBatcher(exp))
-	defer tp.Shutdown(ctx)
-
+	tp := sdktrace.NewTracerProvider(sdktrace.WithBatcher(traceExp))
 	otel.SetTracerProvider(tp)
 	otel.SetTextMapPropagator(propagation.TraceContext{})
 
+	metricExp, err := otlpmetricgrpc.New(setupCtx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExp)))
+	otel.SetMeterProvider(mp)
+
 	app := rice.New()
+	// slog's built-in handlers do not add the trace id from the context to a
+	// log line; correlate logs with traces through a trace-aware handler, such
+	// as the OpenTelemetry contrib otelslog bridge.
 	l := slog.Default()
 
 	app.Use(
@@ -363,7 +383,21 @@ func main() {
 		return c.String(200, "hello")
 	})
 
-	log.Fatal(app.Run(":8080"))
+	runCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if err := app.RunContext(runCtx, ":8080", 10*time.Second); err != nil {
+		log.Print(err)
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := tp.Shutdown(shutdownCtx); err != nil {
+		log.Print(err)
+	}
+	if err := mp.Shutdown(shutdownCtx); err != nil {
+		log.Print(err)
+	}
 }
 ```
 
@@ -560,6 +594,11 @@ than quietly succeeding. CI runs both.
 
 Benchmarks are recorded to a committed file rather than read off a terminal, so a claim in
 these docs can always be traced to the run that produced it.
+
+An editor that needs every module loaded at once — for cross-module navigation into
+`otelrice` or `bench/compare` — can run `go work init . ./otelrice ./bench/compare` locally.
+The resulting `go.work` is gitignored: CI and `make` build and test each module on its own,
+never through a workspace.
 
 ## License
 

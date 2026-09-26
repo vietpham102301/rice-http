@@ -23,9 +23,10 @@ pattern string}` instead of a bare `Handler`, `lookup`/`lookupEntry` return the 
 sets `c.route` from it — the pattern as registered and joined with its group's prefix, `""` on a
 miss, cleared by `reset`. `Route` calls `c.poison.check()` first and costs 0 allocations, pinned by
 `TestAllocBudgetCtxRoute`; every existing dispatch budget was re-measured and did not move. A
-separate Go module, `otelrice/`, requiring only the OpenTelemetry API
-(`go.opentelemetry.io/otel`, `/trace`, `/metric`) and semconv v1.40.0 — the SDK appears only in its
-own tests — with `Middleware(opts ...Option) rice.Middleware` and three options,
+separate Go module, `otelrice/`, whose non-test code imports only the OpenTelemetry API
+(`go.opentelemetry.io/otel`, `/trace`, `/metric`) and semconv v1.40.0 — its `go.mod` also requires
+fasthttp directly and, for its own tests, the SDK — with `Middleware(opts ...Option) rice.Middleware`
+and three options,
 `WithTracerProvider`, `WithMeterProvider` and `WithPropagators`, defaulting to OpenTelemetry's
 globals; a nil option panics with a `rice: otelrice:` message. One request: extract the caller's
 trace context through a carrier over `fasthttp.RequestHeader`; start a server span named

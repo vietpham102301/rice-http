@@ -23,10 +23,11 @@ at registration and lives as long as the `App`, so it is outside the borrow cont
 row besides `Context()` — and the doc comment says so. It is 0 allocations, pinned by
 `TestAllocBudgetCtxRoute`, and every existing dispatch budget was re-measured and did not move.
 
-**A separate module, `github.com/vietpham102301/rice-http/otelrice`.** It requires only
-`go.opentelemetry.io/otel`, `/trace` and `/metric` — the OpenTelemetry API — plus rice itself; the SDK
-(`sdk`, `sdk/metric`) appears only in `otelrice`'s own tests. Core's `go.mod` and `go.sum` do not
-change. Versions are OpenTelemetry Go v1.46.0 and semconv `go.opentelemetry.io/otel/semconv/v1.40.0`.
+**A separate module, `github.com/vietpham102301/rice-http/otelrice`.** Its non-test code imports only
+`go.opentelemetry.io/otel`, `/trace` and `/metric` — the OpenTelemetry API — and semconv; its `go.mod`
+also requires rice and fasthttp directly (`carrier.go` reads the request header through it), and, for
+its own tests, the SDK (`sdk`, `sdk/metric`). Core's `go.mod` and `go.sum` do not change. Versions are
+OpenTelemetry Go v1.46.0 and semconv `go.opentelemetry.io/otel/semconv/v1.40.0`.
 
 **One middleware, three options, defaulting to the globals.** `Middleware(opts ...Option)
 rice.Middleware`, with `WithTracerProvider`, `WithMeterProvider` and `WithPropagators`, each defaulting
@@ -106,6 +107,10 @@ path instance rather than per route — is the failure this design exists to avo
 - A multi-module repository, with separate release tags: `otelrice` can be tagged `otelrice/vX.Y.Z`
   only after a core tag that carries `Route`, since `otelrice/go.mod` will then require that core
   version instead of the development `replace`.
+- **Releasing otelrice**, in order: tag core with a version that carries `Route`; update
+  `otelrice/go.mod` to `require` that version — the `replace` line stays, for development inside this
+  repository, but a consumer of the published module ignores it and resolves the required version
+  instead; then tag `otelrice/vX.Y.Z`.
 - Measured, per request (darwin/arm64, Apple M2 Pro, go1.25.6): with no-op providers and no
   `traceparent`, 11 allocations (`TestAllocBudgetNoop`); with no-op providers and a `traceparent`, 13
   (`TestAllocBudgetNoopTraceparent`); with the SDK, an in-memory span recorder and a manual metric

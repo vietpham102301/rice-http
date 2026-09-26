@@ -296,8 +296,9 @@ Outside any milestone, because the API was already written down in
   metric series per user id. `otelrice.Middleware()` starts a server span and records
   `http.server.request.duration` for each request, named and attributed by the matched route rather
   than the path, following the OpenTelemetry HTTP semantic conventions. It lives in its own module,
-  `github.com/vietpham102301/rice-http/otelrice`, requiring only the OpenTelemetry API and semconv
-  v1.40.0 — the SDK appears only in its tests — so core's `go.mod` is untouched and a user who does not
-  import `otelrice` pays nothing for it. [ADR-0020](adr/0020-otel-in-its-own-module.md) records why a
-  separate module, why the route rather than the path, and the placement and stream limits that follow
-  from `middleware.Logger`'s own (ADR-0019 D8).
+  `github.com/vietpham102301/rice-http/otelrice`, whose non-test code imports only the OpenTelemetry
+  API and semconv v1.40.0 — its `go.mod` also requires fasthttp directly and, for its own tests, the
+  SDK — so core's `go.mod` is untouched and a user who does not import `otelrice` pays nothing for it.
+  [ADR-0020](adr/0020-otel-in-its-own-module.md) records why a separate module, why the route rather
+  than the path, and the placement and stream limits that follow from `middleware.Logger`'s own
+  (ADR-0019 D8).

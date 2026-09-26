@@ -1,8 +1,10 @@
 // Package otelrice traces and measures rice requests with OpenTelemetry.
 //
-// It depends on the OpenTelemetry API only. The application installs an SDK
-// and an exporter; without one, the global providers are no-ops and the
-// middleware costs a few allocations and records nothing. See ADR-0020.
+// Its non-test code imports only the OpenTelemetry API and semconv; its
+// go.mod also requires fasthttp directly and, for its own tests, the SDK. The
+// application installs an SDK and an exporter; without one, the global
+// providers are no-ops and the middleware costs a few allocations and records
+// nothing. See ADR-0020.
 package otelrice
 
 import (
