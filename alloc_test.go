@@ -763,3 +763,76 @@ func TestAllocBudgetStatic404WithHeaders(t *testing.T) {
 		app.handle(fctx)
 	})
 }
+
+// chromeAccept is Chrome's Accept header for a navigation, the header a browser
+// hitting a negotiating endpoint actually sends.
+const chromeAccept = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+
+// acceptSink keeps Accepts' result reachable so the call cannot be elided.
+var acceptSink string
+
+// acceptBudgetCtx returns a Ctx whose request carries accept, or no Accept
+// header when accept is empty.
+func acceptBudgetCtx(accept string) *Ctx {
+	fctx := &fasthttp.RequestCtx{}
+	if accept != "" {
+		fctx.Request.Header.Set(fasthttp.HeaderAccept, accept)
+	}
+	c := &Ctx{}
+	c.reset(nil, fctx)
+	return c
+}
+
+// TestAllocBudgetAccepts pins Accepts on Chrome's header with two offers,
+// including adding Vary: the Vary line is deleted each call so the add path is
+// what is measured, as it is on every live request.
+func TestAllocBudgetAccepts(t *testing.T) {
+	c := acceptBudgetCtx(chromeAccept)
+	budget(t, "Ctx.Accepts", 0, func() {
+		c.fctx.Response.Header.Del(fasthttp.HeaderVary)
+		acceptSink = c.Accepts(MIMEApplicationJSON, "text/html")
+	})
+}
+
+// TestAllocBudgetAcceptsNoHeader pins the path a client without Accept takes.
+func TestAllocBudgetAcceptsNoHeader(t *testing.T) {
+	c := acceptBudgetCtx("")
+	budget(t, "Ctx.Accepts without Accept", 0, func() {
+		c.fctx.Response.Header.Del(fasthttp.HeaderVary)
+		acceptSink = c.Accepts(MIMEApplicationJSON, "text/html")
+	})
+}
+
+// TestAllocBudgetAcceptsTwice pins two calls in one request: the second finds
+// Vary: Accept already there and adds nothing.
+func TestAllocBudgetAcceptsTwice(t *testing.T) {
+	c := acceptBudgetCtx(chromeAccept)
+	budget(t, "Ctx.Accepts twice", 0, func() {
+		c.fctx.Response.Header.Del(fasthttp.HeaderVary)
+		acceptSink = c.Accepts(MIMEApplicationJSON, "text/html")
+		acceptSink = c.Accepts("text/html")
+	})
+}
+
+// TestAllocBudgetNotAcceptable pins a handler that finds nothing acceptable and
+// returns ErrNotAcceptable through the funnel.
+func TestAllocBudgetNotAcceptable(t *testing.T) {
+	app := New()
+	app.GET("/u", func(c *Ctx) error {
+		if c.Accepts(MIMEApplicationJSON) == "" {
+			return ErrNotAcceptable
+		}
+		return nil
+	})
+	app.Build()
+
+	fctx := &fasthttp.RequestCtx{}
+	fctx.Request.Header.SetMethod("GET")
+	fctx.Request.SetRequestURI("/u")
+	fctx.Request.Header.Set(fasthttp.HeaderAccept, "text/html")
+
+	budget(t, "406 through the funnel", 0, func() {
+		fctx.Response.Header.Del(fasthttp.HeaderVary)
+		app.handle(fctx)
+	})
+}
