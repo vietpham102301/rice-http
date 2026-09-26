@@ -12,6 +12,12 @@ import (
 // and the offer is returned exactly as passed, so it can go straight to
 // SetContentType.
 //
+// It adds Vary: Accept to the response, once, whatever it returns and whether
+// or not the request sent Accept: the response depends on the header either
+// way, and a cache that is not told so serves one client's format to another.
+// This is a write from something that reads like an accessor, and it is
+// deliberate; see ADR-0018.
+//
 // Matching follows RFC 9110 §12.5.1. A request with no Accept header accepts
 // anything and gets the first offer. Otherwise each offer takes the quality of
 // the most specific range that matches it — text/html over text/* over */* —
@@ -25,7 +31,9 @@ import (
 // offer returns ErrNotAcceptable.
 func (c *Ctx) Accepts(offers ...string) string {
 	c.poison.check()
-	return negotiate(c.fctx.Request.Header.PeekAll(fasthttp.HeaderAccept), offers)
+	best := negotiate(c.fctx.Request.Header.PeekAll(fasthttp.HeaderAccept), offers)
+	c.addVaryAccept()
+	return best
 }
 
 // negotiate is Accepts' matching, over the Accept header's lines. Every offer is
@@ -240,4 +248,22 @@ func equalFoldASCII(b []byte, s string) bool {
 		}
 	}
 	return true
+}
+
+// addVaryAccept adds Vary: Accept unless a Vary line already lists Accept, in
+// any case, or *. It adds rather than sets, so a Vary: Origin written by CORS or
+// the handler survives.
+func (c *Ctx) addVaryAccept() {
+	h := &c.fctx.Response.Header
+	for _, line := range h.PeekAll(fasthttp.HeaderVary) {
+		for rest := line; len(rest) > 0; {
+			var tok []byte
+			tok, rest = nextItem(rest, ',')
+			tok = trimOWS(tok)
+			if isStar(tok) || equalFoldASCII(tok, fasthttp.HeaderAccept) {
+				return
+			}
+		}
+	}
+	h.Add(fasthttp.HeaderVary, fasthttp.HeaderAccept)
 }

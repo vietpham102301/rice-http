@@ -175,3 +175,84 @@ func FuzzAccepts(f *testing.F) {
 		}
 	})
 }
+
+// varyLines returns every Vary line on c's response.
+func varyLines(c *Ctx) []string {
+	var out []string
+	for _, v := range c.fctx.Response.Header.PeekAll(fasthttp.HeaderVary) {
+		out = append(out, string(v))
+	}
+	return out
+}
+
+func TestAcceptsAddsVaryAccept(t *testing.T) {
+	cases := []struct {
+		name     string
+		existing []string
+		calls    int
+		want     []string
+	}{
+		{"one call", nil, 1, []string{"Accept"}},
+		{"two calls add it once", nil, 2, []string{"Accept"}},
+		{"keeps Vary: Origin", []string{"Origin"}, 1, []string{"Origin", "Accept"}},
+		{"already listed, any case", []string{"accept"}, 1, []string{"accept"}},
+		{"already listed in a list", []string{"Origin, Accept"}, 1, []string{"Origin, Accept"}},
+		{"star covers it", []string{"*"}, 1, []string{"*"}},
+		{"a longer token is not Accept", []string{"Accept-Language"}, 1, []string{"Accept-Language", "Accept"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := acceptCtx("text/html")
+			for _, v := range tc.existing {
+				c.fctx.Response.Header.Add(fasthttp.HeaderVary, v)
+			}
+			for range tc.calls {
+				c.Accepts("text/html")
+			}
+			if got := varyLines(c); !slices.Equal(got, tc.want) {
+				t.Errorf("Vary lines %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAcceptsAddsVaryWithoutAnAcceptHeader(t *testing.T) {
+	c := acceptCtx()
+	c.Accepts("text/html")
+	if got := varyLines(c); !slices.Equal(got, []string{"Accept"}) {
+		t.Errorf("Vary lines %q, want [Accept]: the response varies by Accept even when the request sent none", got)
+	}
+}
+
+func TestAcceptsKeepsAVaryTheHandlerSet(t *testing.T) {
+	c := acceptCtx("text/html")
+	c.SetHeader(fasthttp.HeaderVary, "Origin")
+	c.Accepts("text/html")
+	if got := varyLines(c); !slices.Equal(got, []string{"Origin", "Accept"}) {
+		t.Errorf("Vary lines %q, want [Origin Accept]", got)
+	}
+}
+
+func TestA406KeepsVaryAccept(t *testing.T) {
+	app := New()
+	app.GET("/u", func(c *Ctx) error {
+		if c.Accepts(MIMEApplicationJSON) == "" {
+			return ErrNotAcceptable
+		}
+		return nil
+	})
+	app.Build()
+
+	fctx := &fasthttp.RequestCtx{}
+	fctx.Request.Header.SetMethod("GET")
+	fctx.Request.SetRequestURI("/u")
+	fctx.Request.Header.Set(fasthttp.HeaderAccept, "text/html")
+	app.handle(fctx)
+
+	if got := fctx.Response.StatusCode(); got != 406 {
+		t.Fatalf("status %d, want 406", got)
+	}
+	if got := string(fctx.Response.Header.Peek(fasthttp.HeaderVary)); got != "Accept" {
+		t.Errorf("Vary %q on the 406, want %q", got, "Accept")
+	}
+}
