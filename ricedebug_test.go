@@ -5,6 +5,7 @@ package rice
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/valyala/fasthttp"
 )
@@ -122,6 +123,31 @@ func TestARetainedCtxPanicsEvenAfterAnotherRequest(t *testing.T) {
 func TestTheDebugBuildNeverReusesAContext(t *testing.T) {
 	if poolReuse {
 		t.Error("poolReuse is true under ricedebug; a poisoned Ctx would be un-poisoned by its next acquire")
+	}
+}
+
+// TestAStreamCallbackTouchingItsCtxPanics pins spec D2: the callback starts
+// only after the Ctx is released and poisoned, so using c inside it panics
+// every time rather than racing the release.
+func TestAStreamCallbackTouchingItsCtxPanics(t *testing.T) {
+	recovered := make(chan any, 1)
+	app := New()
+	app.GET("/s", func(c *Ctx) error {
+		return c.Stream(func(s *Stream) error {
+			defer func() { recovered <- recover() }()
+			_ = c.Path()
+			return nil
+		})
+	})
+	dispatchCtx(app, "GET", "/s")
+
+	select {
+	case r := <-recovered:
+		if r != errUseAfterRelease {
+			t.Errorf("recovered %v, want the use-after-release panic", r)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the stream callback never ran")
 	}
 }
 

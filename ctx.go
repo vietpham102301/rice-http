@@ -3,6 +3,7 @@ package rice
 import (
 	"context"
 	"net"
+	"time"
 
 	"github.com/valyala/fasthttp"
 
@@ -40,6 +41,14 @@ type Ctx struct {
 	// settled is not answered a second time, and HandleError reads it so that
 	// an ErrorHandler calling HandleError does not run itself again.
 	handled bool
+
+	// streamFn is the callback Stream or SSE recorded, and streamHeartbeat
+	// its heartbeat. streamSet records that either was called, including on a
+	// HEAD request, where no callback is kept. handle starts the stream only
+	// after this Ctx is released; see startStream and ADR-0019.
+	streamFn        func(*Stream) error
+	streamHeartbeat time.Duration
+	streamSet       bool
 }
 
 // reset binds the context to a request, or unbinds it when app and fctx are nil.
@@ -52,6 +61,9 @@ func (c *Ctx) reset(app *App, fctx *fasthttp.RequestCtx) {
 	c.fctx = fctx
 	c.ctx = nil
 	c.handled = false
+	c.streamFn = nil
+	c.streamHeartbeat = 0
+	c.streamSet = false
 	c.params.Reset()
 	c.resetStore()
 }

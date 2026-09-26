@@ -234,6 +234,11 @@ func (a *App) Shutdown(ctx context.Context) error {
 	ln := a.ln
 	a.mu.Unlock()
 
+	// Open streams never end by themselves; tell them to stop now so the drain
+	// below can finish. Handlers keep ADR-0010's rule: their context is not
+	// cancelled until force-close. See ADR-0019.
+	a.cancelStreams()
+
 	// Take the turn. The first select prefers it: a first Shutdown whose ctx
 	// has already ended must still close the listener and run the hooks.
 	select {

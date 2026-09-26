@@ -268,6 +268,41 @@ deliberate, measured exception to the "no cost for unused features" rule, record
 [ADR-0008](docs/adr/0008-rice-recovers-panics-in-core.md). A panic reaches the same
 `ErrorHandler` as everything else, wrapped in a `*PanicError`, and always answers 500.
 
+## Streaming and server-sent events
+
+`c.Stream(fn)` sends a response body in pieces; `c.SSE(heartbeat, fn)` is server-sent events on
+top of it. Both record `fn` rather than run it: it starts on its own goroutine only after the
+handler has returned and the `Ctx` has been released, so it must not use `c` — read what it needs
+first.
+
+```go
+app.GET("/events", func(c *rice.Ctx) error {
+	last := string(c.Header("Last-Event-ID")) // copied before the stream starts
+	return c.SSE(15*time.Second, func(s *rice.SSE) error {
+		events := updatesSince(last) // subscribe once, not on every loop
+		for {
+			select {
+			case <-s.Context().Done():
+				return nil
+			case ev := <-events:
+				if err := s.Send(ev); err != nil {
+					return err
+				}
+			}
+		}
+	})
+})
+```
+
+`s.Context()` is the stream's own context, not `c.Context()`: it is cancelled when Shutdown
+begins, when the client goes away, and when `fn` returns, and it is the correct thing to select on
+inside `fn`. `SSE`'s heartbeat writes a comment line on that interval, which is how a client that
+silently disconnected is noticed — fasthttp reports a closed connection only on a write. See
+[ADR-0019](docs/adr/0019-streams-run-after-the-handler.md).
+
+`rice.WithWriteTimeout` limits a streamed response as a whole, not each write, so an App serving
+long-lived streams leaves it at zero or serves its streams from a separate App.
+
 ## Graceful shutdown
 
 `RunContext` serves until a context is done, then shuts down, giving in-flight requests a grace
@@ -309,7 +344,9 @@ drain polls every 100 ms, so a shutdown takes about that long even with nothing 
 
 Set all three timeouts in production. They default to zero, which means unlimited: without a
 read timeout, a client that sends half a request holds its connection for as long as it likes.
-The values above are an example, not a recommendation for any particular service.
+The values above are an example, not a recommendation for any particular service. The write
+timeout also ends streams: with the 10 seconds above, a `Stream` or `SSE` response is cut off 10
+seconds after its handler returns, so an App that serves long-lived streams leaves it at zero.
 
 ## Two phases
 

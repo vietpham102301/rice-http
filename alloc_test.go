@@ -3,10 +3,14 @@
 package rice
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"io"
 	"net"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/valyala/fasthttp"
 
@@ -834,5 +838,56 @@ func TestAllocBudgetNotAcceptable(t *testing.T) {
 	budget(t, "406 through the funnel", 0, func() {
 		fctx.Response.Header.Del(fasthttp.HeaderVary)
 		app.handle(fctx)
+	})
+}
+
+// TestAllocBudgetSSESend pins Send with every field set, on a warm writer, at
+// 0: it writes strings and single bytes into the bufio.Writer, and formats
+// Retry into a stack buffer written byte by byte.
+func TestAllocBudgetSSESend(t *testing.T) {
+	var out bytes.Buffer
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	x := &SSE{s: &Stream{w: bufio.NewWriterSize(&out, 4096), ctx: ctx, cancel: cancel}}
+	ev := Event{ID: "42", Event: "tick", Data: "first line\nsecond line", Retry: 1500 * time.Millisecond}
+
+	budget(t, "SSE.Send", 0, func() {
+		out.Reset()
+		_ = x.Send(ev)
+	})
+}
+
+// TestAllocBudgetStreamSetup pins what opening one stream costs through the
+// dispatch path: the recorded closure, the writer closure, fasthttp's pipe and
+// goroutine, the Stream and its context. Streams are outside the zero-allocation
+// claim; this is a regression guard. Measured on darwin arm64, with and without
+// -race. The response is reset each call, as fasthttp's server does, which closes
+// the previous stream.
+//
+// Each iteration drains the body stream to EOF before the next begins.
+// fasthttp's SetBodyStreamWriter runs the writer — which builds the Stream, its
+// context, and calls fn — on its own goroutine, asynchronous to handle's
+// return. AllocsPerRun counts allocations process-wide, so without waiting for
+// that goroutine to finish, its allocations can land in whichever iteration's
+// measurement window happens to be open, making about 1% of samples spike to
+// 15-116 allocs/op. Draining forces the writer to run and close the pipe before
+// handle is called again, so every iteration owns its own allocations.
+func TestAllocBudgetStreamSetup(t *testing.T) {
+	app := New()
+	app.GET("/s", func(c *Ctx) error {
+		return c.Stream(func(s *Stream) error { return nil })
+	})
+	app.Build()
+	fctx := &fasthttp.RequestCtx{}
+	fctx.Request.Header.SetMethod("GET")
+	fctx.Request.SetRequestURI("/s")
+
+	const want float64 = 12
+	budget(t, "opening a stream", want, func() {
+		fctx.Response.Reset()
+		app.handle(fctx)
+		if bs := fctx.Response.BodyStream(); bs != nil {
+			_, _ = io.Copy(io.Discard, bs)
+		}
 	})
 }

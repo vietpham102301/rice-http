@@ -1,8 +1,10 @@
 package bench
 
 import (
+	"io"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/valyala/fasthttp"
 	rice "github.com/vietpham102301/rice-http"
@@ -184,4 +186,45 @@ func BenchmarkCtxAccepts(b *testing.B) {
 		fctx.Response.Reset()
 		h(fctx)
 	}
+}
+
+// BenchmarkSSESend measures encoding and flushing one event with every field
+// set, through a real SSE stream to a discarding reader. It reports the cost
+// of Send, not of the network.
+func BenchmarkSSESend(b *testing.B) {
+	app := rice.New()
+	ready := make(chan *rice.SSE, 1)
+	done := make(chan struct{})
+	app.GET("/e", func(c *rice.Ctx) error {
+		return c.SSE(0, func(s *rice.SSE) error {
+			ready <- s
+			<-done
+			return nil
+		})
+	})
+	h := app.FasthttpHandler()
+	fctx := newRequestCtx("GET", "/e")
+	h(fctx)
+	readerDone := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(io.Discard, fctx.Response.BodyStream())
+		close(readerDone)
+	}()
+	s := <-ready
+	ev := rice.Event{ID: "42", Event: "tick", Data: "first line\nsecond line", Retry: 1500 * time.Millisecond}
+
+	if err := s.Send(ev); err != nil { // warm
+		b.Fatal(err)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := s.Send(ev); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+	close(done)
+	<-readerDone
 }
