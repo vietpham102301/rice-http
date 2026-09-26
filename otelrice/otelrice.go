@@ -89,16 +89,36 @@ var durationBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5,
 //
 // It settles an error the chain returns with c.HandleError and returns nil, so
 // the status it records is the one the client receives. A status of 500 or
-// more marks the span as an error, sets error.type to the status code, and
-// (when the chain returned one) records that error on the span; 4xx does
-// neither. The query string is never recorded.
+// more marks the span as an error and sets error.type to the status code; 4xx
+// does neither.
+//
+// It records that error on the span itself only when the chain returns it to
+// this middleware directly — never true in the placement above, since
+// middleware.Logger installed inside settles the error with its own
+// c.HandleError and returns nil, so otelrice never sees it. To get the error's
+// text onto the span in that recommended placement, record it explicitly, in
+// a custom ErrorHandler:
+//
+//	rice.WithErrorHandler(func(c *rice.Ctx, err error) {
+//		trace.SpanFromContext(c.Context()).RecordError(err)
+//		rice.DefaultErrorHandler(c, err)
+//	})
+//
+// c.Context() there is still the span's context: otelrice restores the
+// previous one only after the whole chain returns, and an ErrorHandler called
+// through HandleError runs mid-chain, before that.
+//
+// The query string is never recorded.
 //
 // For c.Stream and c.SSE the span ends when the handler returns, not when the
 // stream does, and the stream's context is not the span's: a callback that
-// wants the request's trace must carry it explicitly.
+// wants the request's trace must carry it explicitly. The callback runs on its
+// own goroutine after the handler has returned and the Ctx has been released
+// (ADR-0019 in core), so it must not touch c itself — capture the span context
+// in the handler, before calling Stream, and close over that instead:
 //
+//	sc := trace.SpanContextFromContext(c.Context())
 //	return c.Stream(func(s *rice.Stream) error {
-//		sc := trace.SpanContextFromContext(c.Context())
 //		ctx := trace.ContextWithSpanContext(s.Context(), sc)
 //		_, span := tracer.Start(ctx, "stream.chunk")
 //		defer span.End()

@@ -52,13 +52,30 @@ and `user_agent.original` when present — and the attributes known only after t
 `http.response.status_code` and `client.address` (from `c.ClientIP()`, read after the chain so
 `middleware.RealIP` inside it still counts), never the query string in either group; marks the span
 Error and sets `error.type` to the status code as a string, on the span and on the metric point, for a
-status of 500 or above, and calls `span.RecordError(err)` when the chain returned an error and the
-status is 500 or above; records `http.server.request.duration` with `http.request.method`,
-`http.route` (when known), `http.response.status_code`, `url.scheme` and `error.type` (for 500 and
-above); and ends the span in a deferred call, so a panic reaching this frame — no `Recover` inside it —
-still restores the previous context, sets the same attributes with status 500 and `error.type` `"500"`,
-records the panic with `span.RecordError` and a stack trace rather than a custom event, records the
-duration, and ends the span exactly as a normal response does, before the panic continues unwinding.
+status of 500 or above, and calls `span.RecordError(err)` when the chain returned that error to this
+middleware directly and the status is 500 or above; records `http.server.request.duration` with
+`http.request.method`, `http.route` (when known), `http.response.status_code`, `url.scheme` and
+`error.type` (for 500 and above); and ends the span in a deferred call, so a panic reaching this frame —
+no `Recover` inside it — still restores the previous context, sets the same attributes with status 500
+and `error.type` `"500"`, records the panic with `span.RecordError` and a stack trace rather than a
+custom event, records the duration, and ends the span exactly as a normal response does, before the
+panic continues unwinding.
+
+**`RecordError` needs help under the recommended placement.** With `middleware.Logger` installed inside
+otelrice, as D4 and the placement below both do, `Logger` settles the chain's error with its own
+`c.HandleError` and returns `nil`; otelrice's `next(c)` call above therefore returns `nil` too, so the
+`span.RecordError(err)` in the previous paragraph never fires — the span still gets `error.type` for a
+500, but no exception event, unless the application records the error itself. The recipe is a custom
+`ErrorHandler`:
+
+	rice.WithErrorHandler(func(c *rice.Ctx, err error) {
+		trace.SpanFromContext(c.Context()).RecordError(err)
+		rice.DefaultErrorHandler(c, err)
+	})
+
+`c.Context()` there is still the span's context: `HandleError` calls the `ErrorHandler` mid-chain, and
+otelrice restores the previous context only after the whole chain — including `Logger`'s own
+`HandleError` call — has returned.
 
 **Placement: outermost.** `app.Use(otelrice.Middleware(), middleware.Logger(l), middleware.Recover(),
 middleware.RealIP(1), middleware.RequestID())`, so its span covers every other middleware and

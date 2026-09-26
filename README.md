@@ -368,7 +368,19 @@ func main() {
 ```
 
 The span is named `"{method} {route}"`, or the method alone on a route miss, and never carries the
-query string, in a span attribute or a metric. See
+query string, in a span attribute or a metric. With `middleware.Logger` installed inside otelrice, as
+above, `Logger` settles the chain's error itself and otelrice never sees it, so the error's text
+reaches the span only if the application records it. The recipe is a custom `ErrorHandler`:
+
+```go
+rice.WithErrorHandler(func(c *rice.Ctx, err error) {
+	trace.SpanFromContext(c.Context()).RecordError(err)
+	rice.DefaultErrorHandler(c, err)
+})
+```
+
+`c.Context()` there is still the span's context, since `HandleError` calls the `ErrorHandler` mid-chain
+and otelrice restores the previous context only once the whole chain has returned. See
 [ADR-0020](docs/adr/0020-otel-in-its-own-module.md).
 
 ## Graceful shutdown

@@ -2,12 +2,15 @@ package otelrice
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/valyala/fasthttp"
 	rice "github.com/vietpham102301/rice-http"
+	"github.com/vietpham102301/rice-http/middleware"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
@@ -393,6 +396,71 @@ func TestNilOptionsPanic(t *testing.T) {
 			}()
 			f()
 		}()
+	}
+}
+
+// TestStreamCallbackSeesTheRequestSpanWhenCapturedBeforeStreaming runs the
+// package doc's Stream recipe — trace.SpanContextFromContext(c.Context())
+// captured in the handler, before c.Stream is called, then carried into the
+// callback via trace.ContextWithSpanContext(s.Context(), sc) — over a real
+// stream, and checks the span context the callback actually sees is the
+// request span's. The callback runs on its own goroutine after the Ctx is
+// released (ADR-0019 in core); capturing it there instead, inside the
+// callback, is a use-after-release the package doc used to show. Draining the
+// response via fctx.Response.BodyStream() blocks until that goroutine's
+// SetBodyStreamWriter callback has returned, which is also what starts it:
+// fasthttp begins running it as soon as the request is dispatched, not when
+// this test reads it.
+func TestStreamCallbackSeesTheRequestSpanWhenCapturedBeforeStreaming(t *testing.T) {
+	h := newHarness()
+	var seenInCallback trace.SpanContext
+	h.app.GET("/x", func(c *rice.Ctx) error {
+		sc := trace.SpanContextFromContext(c.Context())
+		return c.Stream(func(s *rice.Stream) error {
+			ctx := trace.ContextWithSpanContext(s.Context(), sc)
+			seenInCallback = trace.SpanContextFromContext(ctx)
+			return nil
+		})
+	})
+	fctx := h.do("GET", "/x")
+	if _, err := io.ReadAll(fctx.Response.BodyStream()); err != nil {
+		t.Fatalf("drain stream: %v", err)
+	}
+
+	s := h.onlySpan(t)
+	if !seenInCallback.IsValid() {
+		t.Fatal("the callback saw no span context at all")
+	}
+	if seenInCallback.TraceID() != s.SpanContext().TraceID() || seenInCallback.SpanID() != s.SpanContext().SpanID() {
+		t.Errorf("callback saw span %s/%s, want the request span %s/%s",
+			seenInCallback.TraceID(), seenInCallback.SpanID(),
+			s.SpanContext().TraceID(), s.SpanContext().SpanID())
+	}
+}
+
+// TestRecordErrorInACustomErrorHandlerAddsAnExceptionEvent runs the recommended
+// placement — middleware.Logger installed inside otelrice — with a custom
+// ErrorHandler that follows the package doc's recipe:
+// trace.SpanFromContext(c.Context()).RecordError(err). Logger settles the
+// chain's error with its own c.HandleError and returns nil, so otelrice's own
+// span.RecordError(handlerErr) call never fires in this placement; without the
+// recipe the span would carry error.type but no exception event.
+func TestRecordErrorInACustomErrorHandlerAddsAnExceptionEvent(t *testing.T) {
+	eh := func(c *rice.Ctx, err error) {
+		trace.SpanFromContext(c.Context()).RecordError(err)
+		rice.DefaultErrorHandler(c, err)
+	}
+	h := newHarness(rice.WithErrorHandler(eh))
+	h.app.Use(middleware.Logger(slog.New(slog.NewTextHandler(io.Discard, nil))))
+	h.app.GET("/x", func(c *rice.Ctx) error { return rice.NewHTTPError(500, "boom") })
+	h.do("GET", "/x")
+
+	s := h.onlySpan(t)
+	if v, ok := attr(s.Attributes(), "error.type"); !ok || v.String() != "500" {
+		t.Errorf("error.type %q (present %v), want 500", v.String(), ok)
+	}
+	if !hasExceptionEvent(s) {
+		t.Error("no exception event recorded through the ErrorHandler recipe")
 	}
 }
 
