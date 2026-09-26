@@ -159,3 +159,29 @@ func BenchmarkStaticSmallFile(b *testing.B) {
 		h(fctx)
 	}
 }
+
+// BenchmarkCtxAccepts measures a handler negotiating between JSON and HTML for
+// Chrome's Accept header, including Vary: Accept. The response is reset each
+// iteration, as fasthttp's server does between requests, so Vary is added
+// every time.
+func BenchmarkCtxAccepts(b *testing.B) {
+	app := rice.New()
+	app.GET("/u", func(c *rice.Ctx) error {
+		if c.Accepts(rice.MIMEApplicationJSON, "text/html") == "" {
+			return rice.ErrNotAcceptable
+		}
+		return nil
+	})
+
+	h := app.FasthttpHandler()
+	fctx := newRequestCtx("GET", "/u")
+	fctx.Request.Header.Set(fasthttp.HeaderAccept, "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
+	h(fctx) // warm
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		fctx.Response.Reset()
+		h(fctx)
+	}
+}

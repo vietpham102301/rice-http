@@ -48,3 +48,4 @@ Date: YYYY-MM-DD
 | [0015](0015-cors-states-a-policy.md) | CORS states a policy; the browser enforces it | Accepted |
 | [0016](0016-typed-store-keys.md) | Typed store keys replace Set and Get | Accepted |
 | [0017](0017-static-files-wrap-fasthttp-fs.md) | Static files wrap fasthttp.FS behind the error funnel | Accepted |
+| [0018](0018-accepts-negotiates-by-q-and-adds-vary.md) | Accepts picks by the client's q, breaks ties by the server's order, and adds Vary | Accepted |
