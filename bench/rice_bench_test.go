@@ -205,9 +205,17 @@ func BenchmarkSSESend(b *testing.B) {
 	h := app.FasthttpHandler()
 	fctx := newRequestCtx("GET", "/e")
 	h(fctx)
-	go func() { _, _ = io.Copy(io.Discard, fctx.Response.BodyStream()) }()
+	readerDone := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(io.Discard, fctx.Response.BodyStream())
+		close(readerDone)
+	}()
 	s := <-ready
 	ev := rice.Event{ID: "42", Event: "tick", Data: "first line\nsecond line", Retry: 1500 * time.Millisecond}
+
+	if err := s.Send(ev); err != nil { // warm
+		b.Fatal(err)
+	}
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -218,4 +226,5 @@ func BenchmarkSSESend(b *testing.B) {
 	}
 	b.StopTimer()
 	close(done)
+	<-readerDone
 }

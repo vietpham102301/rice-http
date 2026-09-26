@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"io"
 	"net"
 	"strconv"
 	"testing"
@@ -862,6 +863,15 @@ func TestAllocBudgetSSESend(t *testing.T) {
 // claim; this is a regression guard. Measured on darwin arm64, with and without
 // -race. The response is reset each call, as fasthttp's server does, which closes
 // the previous stream.
+//
+// Each iteration drains the body stream to EOF before the next begins.
+// fasthttp's SetBodyStreamWriter runs the writer — which builds the Stream, its
+// context, and calls fn — on its own goroutine, asynchronous to handle's
+// return. AllocsPerRun counts allocations process-wide, so without waiting for
+// that goroutine to finish, its allocations can land in whichever iteration's
+// measurement window happens to be open, making about 1% of samples spike to
+// 15-91 allocs/op. Draining forces the writer to run and close the pipe before
+// handle is called again, so every iteration owns its own allocations.
 func TestAllocBudgetStreamSetup(t *testing.T) {
 	app := New()
 	app.GET("/s", func(c *Ctx) error {
@@ -872,9 +882,12 @@ func TestAllocBudgetStreamSetup(t *testing.T) {
 	fctx.Request.Header.SetMethod("GET")
 	fctx.Request.SetRequestURI("/s")
 
-	const want float64 = 11
+	const want float64 = 12
 	budget(t, "opening a stream", want, func() {
 		fctx.Response.Reset()
 		app.handle(fctx)
+		if bs := fctx.Response.BodyStream(); bs != nil {
+			_, _ = io.Copy(io.Discard, bs)
+		}
 	})
 }
