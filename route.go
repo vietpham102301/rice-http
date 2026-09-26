@@ -172,12 +172,9 @@ func (a *App) treeFor(method string) *router.Tree[routeEntry] {
 // lookup finds the handler for a request, filling params with whatever the
 // matched route captured.
 //
-// This is the hot path. On the common-verb branch, method and path stay
-// borrowed byte slices and are never converted to strings; params is storage
-// the caller already owns rather than something lookup allocates. That is what
-// makes zero-allocation parameter capture possible, and alloc_test.go's
-// parameter-capture budgets (TestAllocBudgetLookupOneParameter and its
-// siblings) verify it.
+// It is the handler-only form kept for the tests and budgets that predate
+// Ctx.Route and do not need the matched pattern; handle calls lookupEntry
+// instead.
 func (a *App) lookup(method, path []byte, params *router.Params) (Handler, bool) {
 	e, ok := a.lookupEntry(method, path, params)
 	return e.h, ok
@@ -190,9 +187,16 @@ type routeEntry struct {
 	pattern string
 }
 
-// lookupEntry is lookup returning the whole entry. handle uses it to record
-// the matched pattern for Ctx.Route; lookup keeps the handler-only shape the
-// tests and budgets use.
+// lookupEntry finds the matched route's entry for a request, filling params
+// with whatever it captured. handle uses it to record the matched pattern for
+// Ctx.Route.
+//
+// This is the hot path. On the common-verb branch, method and path stay
+// borrowed byte slices and are never converted to strings; params is storage
+// the caller already owns rather than something lookupEntry allocates. That is
+// what makes zero-allocation parameter capture possible, and alloc_test.go's
+// parameter-capture budgets (TestAllocBudgetLookupOneParameter and its
+// siblings) verify it.
 func (a *App) lookupEntry(method, path []byte, params *router.Params) (routeEntry, bool) {
 	if i, ok := methodIndex(method); ok {
 		return a.trees[i].Lookup(path, params)

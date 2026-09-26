@@ -63,3 +63,54 @@ func TestRouteIsClearedByReset(t *testing.T) {
 		t.Errorf("Route() after reset = %q, want empty", got)
 	}
 }
+
+// TestRouteIsClearedOnThePooledCtxBetweenRequests dispatches a hit and then a
+// miss through the same App and the same handle path a server uses, and
+// checks that the second request does not still report the first request's
+// pattern. Unlike TestRouteIsClearedByReset, which calls reset directly on a
+// Ctx built by hand, this goes through acquire and release exactly as the
+// server does, so a regression in that wiring — not just in reset itself —
+// would fail it.
+//
+// Whether the two requests actually shared one *Ctx is logged, not asserted:
+// sync.Pool gives up its local objects across a GC, so reuse is likely in a
+// release build (poolReuse true) but not guaranteed run to run, and ricedebug
+// disables it by design (poolReuse false) so a released Ctx never goes back
+// to the pool at all. Either way Route() being cleared on the miss is what
+// this test checks, and it holds regardless of whether reuse happened.
+func TestRouteIsClearedOnThePooledCtxBetweenRequests(t *testing.T) {
+	app := New()
+	app.GET("/users/:id", func(c *Ctx) error { return nil })
+
+	var ptrs [2]*Ctx
+	var routes [2]string
+	i := 0
+	app.Use(func(next Handler) Handler {
+		return func(c *Ctx) error {
+			err := next(c)
+			ptrs[i], routes[i] = c, c.Route()
+			i++
+			return err
+		}
+	})
+
+	app.Build()
+
+	hit := &fasthttp.RequestCtx{}
+	hit.Request.Header.SetMethod("GET")
+	hit.Request.SetRequestURI("/users/42")
+	app.handle(hit)
+
+	miss := &fasthttp.RequestCtx{}
+	miss.Request.Header.SetMethod("GET")
+	miss.Request.SetRequestURI("/nowhere")
+	app.handle(miss)
+
+	if routes[0] != "/users/:id" {
+		t.Fatalf("first request Route() = %q, want /users/:id", routes[0])
+	}
+	t.Logf("second request reused the first's Ctx: %v (%p vs %p)", ptrs[1] == ptrs[0], ptrs[1], ptrs[0])
+	if routes[1] != "" {
+		t.Errorf("Route() on the miss, from the Ctx the earlier hit used = %q, want empty", routes[1])
+	}
+}

@@ -110,6 +110,11 @@ var durationBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5,
 //
 // The query string is never recorded.
 //
+// A panic reaching this middleware — with no Recover installed beneath it —
+// ends the span with status 500 before the panic reaches the App's
+// ErrorHandler, so a custom ErrorHandler that answers a *rice.PanicError with
+// a different status still gets 500 recorded here.
+//
 // For c.Stream and c.SSE the span ends when the handler returns, not when the
 // stream does, and the stream's context is not the span's: a callback that
 // wants the request's trace must carry it explicitly. The callback runs on its
@@ -198,10 +203,14 @@ func Middleware(opts ...Option) rice.Middleware {
 
 			// A panic that reaches this frame — no Recover inside — still
 			// restores the previous context and finishes the span exactly as a
-			// normal response does (through finish), with status 500, since
-			// rice's own recovery answers every panic with one. The panic itself
-			// is recorded as an exception, with a stack trace, before the span
-			// ends and the panic keeps unwinding.
+			// normal response does (through finish), with status 500 and
+			// error.type "500", before the panic keeps unwinding to the App's
+			// own recovery and its ErrorHandler. This middleware has already
+			// ended the span by then and cannot see what that ErrorHandler
+			// answers: a custom one that maps a *rice.PanicError to a status
+			// other than 500 still gets 500 recorded here, disagreeing with
+			// what the client actually receives. The panic itself is recorded
+			// as an exception, with a stack trace, before the span ends.
 			defer func() {
 				if r := recover(); r != nil {
 					c.SetContext(prev)
