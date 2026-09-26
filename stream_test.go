@@ -138,6 +138,27 @@ func TestStreamSendsChunksBeforeTheCallbackReturns(t *testing.T) {
 	readUntil(t, r, "0\r\n", 2*time.Second) // the chunked body ends
 }
 
+func TestStreamSendsHeadersBeforeTheFirstWrite(t *testing.T) {
+	release := make(chan struct{})
+	app := rice.New()
+	app.GET("/s", func(c *rice.Ctx) error {
+		c.SetHeader("X-Before", "yes")
+		return c.Stream(func(s *rice.Stream) error {
+			<-release
+			return nil
+		})
+	})
+	addr, _ := serve(t, app)
+	shutdownOnCleanup(t, app)
+	defer close(release)
+
+	_, r := rawRequest(t, addr, "GET", "/s")
+	got := readUntil(t, r, "\r\n\r\n", 2*time.Second)
+	if !strings.Contains(got, "200 OK") || !strings.Contains(got, "X-Before: yes") {
+		t.Errorf("status line or header missing from the header block: %q", got)
+	}
+}
+
 func TestStreamNeverStartsWhenTheHandlerReturnsAnError(t *testing.T) {
 	ran := make(chan struct{}, 1)
 	app := rice.New()

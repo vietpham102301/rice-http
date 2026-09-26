@@ -140,6 +140,8 @@ func (c *Ctx) registerStream(heartbeat time.Duration, fn func(*Stream) error) {
 // releasing the Ctx, so fn can never run beside the handler.
 func (a *App) startStream(fctx *fasthttp.RequestCtx, fn func(s *Stream) error, heartbeat time.Duration) {
 	parent := a.streamCtx
+	// Otherwise fasthttp holds the headers back until fn's first flush.
+	fctx.Response.ImmediateHeaderFlush = true
 	fctx.SetBodyStreamWriter(func(w *bufio.Writer) {
 		ctx, cancel := context.WithCancel(parent)
 		s := &Stream{w: w, ctx: ctx, cancel: cancel}
