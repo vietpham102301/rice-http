@@ -1,6 +1,6 @@
 # OpenTelemetry tracing and metrics — Design
 
-**Status:** approved, not yet implemented
+**Status:** approved, not yet implemented; D4 aligned with the HTTP semantic conventions in review
 **Date:** 2026-09-26
 **Milestone:** none. Work after the roadmap; the first of the observability middleware discussed after
 it emptied
@@ -123,24 +123,35 @@ to an option panics with a `rice: otelrice:` message. The tracer and meter are n
    `fasthttp.RequestHeader` (`Get` peeks and copies; `Set` sets; `Keys` lists the header names).
 2. Start a span of kind Server, named `"{method} {route}"`, or just `"{method}"` when `c.Route()` is ""
    so a raw path never becomes a span name. A method outside GET, HEAD, POST, PUT, PATCH, DELETE,
-   OPTIONS, CONNECT and TRACE is named and recorded as `_OTHER`.
+   OPTIONS, CONNECT, TRACE and QUERY is recorded as `_OTHER` in `http.request.method` and named `HTTP`
+   in the span in place of the method; the span (never the metric) also carries the real verb in
+   `http.request.method_original`. The known list is fixed — no option extends it, per the
+   conventions' guidance that such instrumentation say so.
 3. Install the span's context with `c.SetContext`, derived from `c.Context()` (ADR-0010), so the
    handler's own instrumented calls become children.
 4. Run the chain. An error is settled with `c.HandleError` and the middleware returns nil, as Logger
    does, so the status recorded is the one the client receives, including from a custom ErrorHandler.
 5. Restore the previous context.
-6. Set attributes (semconv v1.40.0 keys): `http.request.method`, `http.route` (when not ""),
-   `http.response.status_code`, `url.path`, `url.scheme`, `client.address` (from `c.ClientIP()`, read
-   after the chain so RealIP inside counts), `user_agent.original` (when present). Never the query
-   string.
+6. Set attributes (semconv v1.40.0 keys). At span start, before the chain runs — sampler-relevant and
+   already known: `http.request.method`, `http.request.method_original` (for an unknown method),
+   `http.route` (when `c.Route()` is not "", known from dispatch), `url.path`, `url.scheme`, and
+   `user_agent.original` (when present). After the chain — known only once it has run:
+   `http.response.status_code`, `client.address` (from `c.ClientIP()`, read after the chain so RealIP
+   inside counts). No attribute is set twice. Never the query string.
 7. Span status Error for a status of 500 or above; 4xx is a client error and leaves the status unset,
-   as the conventions require for server spans.
+   as the conventions require for server spans. A status of 500 or above also sets `error.type` to the
+   status code as a string, on the span and on the metric point; when the chain returned an error,
+   `span.RecordError(err)` records it too.
 8. Record `http.server.request.duration` (unit `s`, the conventions' explicit bucket boundaries as an
-   advisory) with `http.request.method`, `http.route` (when not ""), `http.response.status_code` and
-   `url.scheme`. The raw path is never a metric attribute.
+   advisory) with `http.request.method`, `http.route` (when not ""), `http.response.status_code`,
+   `url.scheme`, and `error.type` (for a status of 500 or above). The raw path is never a metric
+   attribute.
 9. End the span. It ends in a deferred call, so a panic that reaches this middleware (no Recover
-   inside it) ends the span with status Error and the panic value recorded as an event, then continues
-   unwinding.
+   inside it) still finishes it exactly as a normal response does — through the same helper: the
+   previous context is restored, the same D4 attributes are set with status 500 (rice's own recovery
+   answers every panic with one) and `error.type` "500", the duration is recorded, and the panic is
+   recorded with `span.RecordError` (with a stack trace) rather than a custom event — then the panic
+   continues unwinding.
 
 ### D5 — placement
 
@@ -198,8 +209,10 @@ leak one request's route into the next.
 
 otelrice, with `tracetest.SpanRecorder` and `sdkmetric.NewManualReader`:
 
-- **Spans:** name `GET /users/:id` for a parameterised route; `GET` on a miss; `_OTHER` for an unknown
-  method; kind Server; every D4 attribute with the right value; no attribute contains the query string.
+- **Spans:** name `GET /users/:id` for a parameterised route; `GET` on a miss; `HTTP` (or `HTTP {route}`)
+  for an unknown method, whose real verb lands in `http.request.method_original` and whose
+  `http.request.method` reads `_OTHER`; kind Server; every D4 attribute with the right value; no
+  attribute contains the query string.
 - **Propagation:** a request with `traceparent` gives a span in that trace with that parent; without
   one, a new root span.
 - **Status:** 500 and 503 → Error; 404 and 418 → unset; a custom ErrorHandler answering 502 → Error;
