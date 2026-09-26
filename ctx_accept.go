@@ -122,7 +122,8 @@ func offerQuality(accepts [][]byte, typ, sub string) int {
 
 // matchRange reports whether one Accept element matches typ/sub, how specific
 // the match is (3 type/subtype, 2 type/*, 1 */*), and its quality. An element
-// whose range is malformed or whose q is not a qvalue matches nothing.
+// whose range is malformed or whose q is not a qvalue matches nothing. When q
+// appears more than once, the last one counts.
 func matchRange(elem []byte, typ, sub string) (q, spec int, ok bool) {
 	r, params := nextItem(elem, ';')
 	r = trimOWS(r)
@@ -212,6 +213,8 @@ func parseFraction(d []byte) (int, bool) {
 
 // nextItem splits s at the first sep outside a quoted string, honouring
 // backslash escapes inside quotes, and returns the part before it and the rest.
+// A quote that is never closed runs to the end of s, so it swallows the rest of
+// its Accept line but not the next line.
 func nextItem(s []byte, sep byte) (item, rest []byte) {
 	quoted := false
 	for i := 0; i < len(s); i++ {

@@ -79,6 +79,13 @@ func TestAcceptsMatchesByRFC9110(t *testing.T) {
 		{"long header, last element matters", []string{long.String()}, []string{H, J}, J},
 		{"java default, leading-dot q", []string{javaAccept}, []string{J}, J},
 		{"java default, html wins", []string{javaAccept}, []string{J, H}, H},
+		{"first of equally specific ranges wins", []string{"text/html;q=0.2, text/html;q=0.9, application/json;q=0.5"}, []string{H, J}, J},
+		{"first of equally specific ranges wins across lines", []string{"text/html;q=0.2", "text/html;q=0.9, application/json;q=0.5"}, []string{H, J}, J},
+		{"parameter without a value is skipped", []string{"text/html;level;q=0.5, application/json;q=0.4"}, []string{J, H}, H},
+		{"offer with whitespace before its parameters", []string{"text/html"}, []string{J, "text/html ; charset=utf-8"}, "text/html ; charset=utf-8"},
+		{"unterminated quote swallows the rest of its line", []string{`text/plain;x="unterminated, application/json`}, []string{J}, ""},
+		{"an unterminated quote does not reach the next line", []string{`text/plain;x="unterminated`, "application/json"}, []string{J}, J},
+		{"duplicate q, last wins", []string{"text/html;q=0.1;q=0.9, application/json;q=0.5"}, []string{J, H}, H},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
