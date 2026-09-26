@@ -19,6 +19,9 @@ caching is left to the framework.
 - **Ties are the server's.** Among offers of equal quality the earlier one wins. A browser sends
   `*/*;q=0.8` after its preferred types; with `*/*` alone, as curl sends, every offer ties and the
   handler's first choice is served.
+- **A leading-dot qvalue is accepted.** `q=.2` is not an RFC 9110 `qvalue`, but Java's
+  `HttpURLConnection` sends it by default, so `.` followed by one to three digits is read as `0.`
+  and those digits. A bare `*` range stays invalid.
 - **`Accepts` adds `Vary: Accept`, once.** Every call adds it, whatever it returns and whether or
   not the request sent `Accept`, unless a `Vary` line already lists `Accept` or `*`. It adds rather
   than sets, so CORS's `Vary: Origin` survives.
@@ -52,7 +55,12 @@ response. Calling it on a path that then serves something unrelated still adds `
 is harmless to correctness and costs a cache some hit rate.
 
 **Parameters are not matched.** `text/html;level=1` matches `text/html`; `application/vnd.app+json`
-does not match `application/json`. Versioning by media-type parameters is out of scope.
+does not match `application/json`. Versioning by media-type parameters is out of scope. A
+parameterised range such as `text/html;level=1;q=0` is therefore treated as `text/html;q=0`.
+
+**Offers are validated as tokens.** An offer's type and subtype must each be an RFC 9110 token
+without `*`; `text /html`, `text/html/x` and `application/*+json` panic like `json` does. Its
+parameters are not validated.
 
 **The ricedebug walker changed.** `TestEveryCtxMethodPanicsAfterRelease` calls variadic methods with
 `CallSlice`; `reflect.Call` would panic inside reflect first and hide the use-after-release panic.

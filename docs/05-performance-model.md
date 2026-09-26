@@ -68,7 +68,7 @@ Every exported method of `Ctx`, one row each.
 | `c.Context` | 0 | MEASURED after M8 | `TestAllocBudgetContext` |
 | `c.SetContext` | 0 | MEASURED after M8 | `TestAllocBudgetContext` |
 | `c.HandleError` (`ErrNotFound`, default funnel) | 0 | MEASURED after M8 | `TestAllocBudgetHandleError` |
-| `c.Accepts` | 0 | MEASURED post-M8 | `TestAllocBudgetAccepts`, `TestAllocBudgetAcceptsNoHeader`, `TestAllocBudgetAcceptsTwice` |
+| `c.Accepts` | 0 | MEASURED after M8 | `TestAllocBudgetAccepts`, `TestAllocBudgetAcceptsNoHeader`, `TestAllocBudgetAcceptsTwice` |
 
 The four M8 rows are new tests, not new code: `Status`, `SetHeader` and `SetContentType` write
 into fasthttp's reused response header, and `RequestCtx` returns a field. Each was broken once on
@@ -130,7 +130,7 @@ not move.
 | `ConnState` hook, per request (`StateActive` + `StateIdle`) | 0 | MEASURED M7 | `TestConnStateActiveAndIdleAreFree` |
 | 404 through the funnel | 0 | MEASURED M6 | `TestAllocBudget404` |
 | 404 through a miss chain with one no-op application middleware | 0 | MEASURED after M8 | `TestAllocBudget404WithAppMiddleware` |
-| 406 through the funnel (`Accepts` finds nothing acceptable) | 0 | MEASURED post-M8 | `TestAllocBudgetNotAcceptable` |
+| 406 through the funnel (`Accepts` finds nothing acceptable) | 0 | MEASURED after M8 | `TestAllocBudgetNotAcceptable` |
 | Handler returns a fresh HTTPError | 1 | MEASURED M6 | `TestAllocBudgetHTTPErrorReturn` |
 | `Static`, a small file from the handle cache | 0 | MEASURED after M8 | `TestAllocBudgetStaticFile` |
 | `Static`, a missing file | 20 | MEASURED after M8 | `TestAllocBudgetStatic404` |
@@ -195,13 +195,14 @@ figures were measured on darwin arm64 (go1.25.6) only; no Linux container run ex
 `TestAllocBudgetAcceptsNoHeader` and `TestAllocBudgetAcceptsTwice` each pin 0, with and without
 `-race`; each offer scans the `Accept` header's bytes once, and nothing is stored on `Ctx`
 ([ADR-0018](adr/0018-accepts-negotiates-by-q-and-adds-vary.md)). `TestAllocBudgetNotAcceptable`
-pins the 406 a handler returns when nothing is acceptable at 0 too, the same funnel path as a 404.
-`BenchmarkCtxAccepts` — a full dispatch negotiating two offers against Chrome's six-element `Accept`
-header, adding `Vary` — reports a median of 592.9 ns/op, 0 B/op and 0 allocs/op over ten runs, on
-darwin/arm64 (Apple M2 Pro, go1.25.6); the result file was not committed, so this figure is cited
-here in prose rather than from `bench/results/`. A CPU profile showed the `Accept` scanning
-(`nextItem`, `matchRange`) at about 79% of that time and dispatch plus fasthttp's header plumbing
-at about 15%. Measured on darwin arm64 only; no Linux container run was taken for this feature.
+pins the 406 a handler returns when nothing is acceptable at 0 too, with and without `-race`, the
+same funnel path as a 404. `BenchmarkCtxAccepts` — a full dispatch negotiating two offers against
+Chrome's real eight-element navigation `Accept` header, adding `Vary` — reports a median of 520.9
+ns/op, 0 B/op and 0 allocs/op over ten runs, on darwin/arm64 (Apple M2 Pro, go1.25.6); the result
+file was not committed, so this figure is cited here in prose rather than from `bench/results/`. A
+CPU profile showed the `Accept` scanning (`offerQuality`, through `nextItem` and `matchRange`) at
+about 73% of that time, and adding `Vary: Accept` at about 9%. Measured on darwin arm64 only; no
+Linux container run was taken for this feature.
 
 Measured values come from the results files in `bench/results/` and from the `AllocsPerRun`
 assertions in `alloc_test.go` and, for the `ConnState` row, `lifecycle_internal_test.go`. The

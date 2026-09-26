@@ -108,6 +108,8 @@ the server must name what it produces, and a wildcard offer is a programming err
 - Optional whitespace (space and tab) is allowed around `,`, `;` and `=`.
 - `q` follows RFC 9110's `qvalue`: `0`, `0.` followed by up to three digits, `1`, or `1.` followed by
   up to three zeros. Anything else — `q=1.5`, `q=0.1234`, `q=abc`, `q=` — makes that element invalid.
+  A leading-dot qvalue, `.` followed by one to three digits, is also accepted and read as `0.` and
+  those digits, for Java's HttpURLConnection, which sends `q=.2`.
 - An invalid element is skipped: a range that is not `type/subtype` (`text`, `/html`, `*/html`) or a
   bad `q`. The rest of the header still counts.
 - Parameters other than `q` are skipped, including quoted-string values, so a `,` or `;` inside quotes
