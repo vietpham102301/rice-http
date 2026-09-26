@@ -57,6 +57,9 @@ func negotiate(accepts [][]byte, offers []string) string {
 			}
 			continue
 		}
+		if bestQ == 1000 {
+			continue // nothing beats 1000 under the strict > below
+		}
 		// Strictly greater: an offer with the same quality as an earlier one
 		// never displaces it, which is the server's tie-break (ADR-0018).
 		if q := offerQuality(accepts, typ, sub); q > bestQ {
@@ -113,6 +116,9 @@ func offerQuality(accepts [][]byte, typ, sub string) int {
 			var elem []byte
 			elem, rest = nextItem(rest, ',')
 			if eq, es, ok := matchRange(elem, typ, sub); ok && es > spec {
+				if es == 3 {
+					return eq // nothing is more specific, and this is the first such range
+				}
 				q, spec = eq, es
 			}
 		}
