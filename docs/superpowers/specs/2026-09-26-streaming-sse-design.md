@@ -195,8 +195,9 @@ writer; `SSE` sets its own `Content-Type`, so HEAD on it carries one.
 
 Per the WHATWG HTML specification's event-stream format:
 
-- `ID` non-empty → `id: <ID>\n`; `Event` non-empty → `event: <Event>\n`; `Retry` > 0 →
-  `retry: <milliseconds>\n`.
+- `ID` non-empty → `id: <ID>\n`; `Event` non-empty → `event: <Event>\n`; `Retry` of at least
+  one millisecond → `retry: <milliseconds>\n`, in whole milliseconds, truncated. A `Retry` under one
+  millisecond is left out: written as `retry: 0` it would make the browser reconnect at once.
 - `Data` is split on `\n`, and each line is written as `data: <line>\n`; an empty `Data` writes one
   `data: \n`, so every event dispatches. A `\r\n` or lone `\r` in `Data` is treated as a line break.
 - The event ends with `\n`, and `Send` flushes.
