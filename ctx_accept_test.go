@@ -75,7 +75,7 @@ func TestAcceptsMatchesByRFC9110(t *testing.T) {
 		{"empty elements", []string{",,text/html,,"}, []string{J, H}, H},
 		{"only commas", []string{",,,"}, []string{J, H}, ""},
 		{"no offers", []string{"*/*"}, nil, ""},
-		{"chrome", []string{"text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"}, []string{J, H}, H},
+		{"chrome", []string{"text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"}, []string{J, H}, H},
 		{"long header, last element matters", []string{long.String()}, []string{H, J}, J},
 		{"java default, leading-dot q", []string{javaAccept}, []string{J}, J},
 		{"java default, html wins", []string{javaAccept}, []string{J, H}, H},

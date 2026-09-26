@@ -766,7 +766,7 @@ func TestAllocBudgetStatic404WithHeaders(t *testing.T) {
 
 // chromeAccept is Chrome's Accept header for a navigation, the header a browser
 // hitting a negotiating endpoint actually sends.
-const chromeAccept = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+const chromeAccept = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
 
 // acceptSink keeps Accepts' result reachable so the call cannot be elided.
 var acceptSink string

@@ -175,7 +175,7 @@ func BenchmarkCtxAccepts(b *testing.B) {
 
 	h := app.FasthttpHandler()
 	fctx := newRequestCtx("GET", "/u")
-	fctx.Request.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
+	fctx.Request.Header.Set(fasthttp.HeaderAccept, "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
 	h(fctx) // warm
 
 	b.ReportAllocs()
