@@ -28,6 +28,11 @@ import (
 // request didn't already carry.
 var ErrNotFound = &HTTPError{Code: fasthttp.StatusNotFound, Message: "Not Found"}
 
+// ErrNotAcceptable is the error a handler returns when Accepts found none of its
+// offers acceptable. It is shared like ErrNotFound, so returning it costs
+// nothing, and it must never be mutated for the same reason.
+var ErrNotAcceptable = &HTTPError{Code: fasthttp.StatusNotAcceptable, Message: "Not Acceptable"}
+
 // ErrorHandler turns an error into a response. It returns nothing: it is the
 // end of the line, and there is nowhere left to report a failure to.
 //

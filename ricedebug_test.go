@@ -53,6 +53,13 @@ func TestEveryCtxMethodPanicsAfterRelease(t *testing.T) {
 					t.Errorf("%s on a released Ctx: recovered %v, want the use-after-release panic", m.Name, r)
 				}
 			}()
+			// A variadic method's last parameter is a slice; Call would try
+			// to pass that zero slice as one element and panic inside reflect
+			// before the method runs, hiding the use-after-release panic.
+			if m.Type.IsVariadic() {
+				v.Method(i).CallSlice(args)
+				return
+			}
 			v.Method(i).Call(args)
 		})
 	}
