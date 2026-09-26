@@ -214,6 +214,12 @@ type App struct {
 	// store with a different lifetime would be one too many.
 	baseCtx    context.Context
 	cancelBase context.CancelFunc
+
+	// streamCtx is the parent of every stream's context. Shutdown cancels it
+	// when it begins, so open streams stop and the drain can finish; it is a
+	// child of baseCtx, so force-close cancels it too. See ADR-0019.
+	streamCtx     context.Context
+	cancelStreams context.CancelFunc
 }
 
 // route is one registration, recorded for Build to compile.
@@ -235,6 +241,7 @@ func New(opts ...Option) *App {
 		hooksStarted: make(chan struct{}),
 	}
 	a.baseCtx, a.cancelBase = context.WithCancel(context.Background())
+	a.streamCtx, a.cancelStreams = context.WithCancel(a.baseCtx)
 	a.pool.New = func() any { return a.newCtx() }
 	a.srv = &fasthttp.Server{
 		Handler:      a.handle,
@@ -302,7 +309,8 @@ func (a *App) handle(fctx *fasthttp.RequestCtx) {
 	// recovery's measured cost remains the only defer cost on the path. It runs
 	// after the ErrorHandler, which may still use c, and it runs whether the
 	// handler returned, errored or panicked — the property that makes the pool
-	// safe.
+	// safe. A stream the handler recorded starts after release, and only when
+	// the funnel did not answer the request.
 	//
 	// One hole is accepted. If respond panicked inside callErrorHandler's
 	// last-resort recover, nothing would catch it and release would not run.
@@ -318,7 +326,16 @@ func (a *App) handle(fctx *fasthttp.RequestCtx) {
 			c.handled = true
 			a.callErrorHandler(c, &PanicError{Value: r, Stack: debug.Stack()})
 		}
+		// A stream is started only now, after release: fasthttp starts the
+		// writer goroutine the moment SetBodyStreamWriter is called, and the
+		// callback must not run beside the handler, the middleware or the
+		// funnel, nor before the Ctx is poisoned. A request the funnel answered
+		// keeps its error response. See ADR-0019.
+		fn, hb, answered := c.streamFn, c.streamHeartbeat, c.handled
 		a.release(c)
+		if fn != nil && !answered {
+			a.startStream(fctx, fn, hb)
+		}
 	}()
 
 	h, ok := a.lookup(fctx.Method(), fctx.Path(), &c.params)
