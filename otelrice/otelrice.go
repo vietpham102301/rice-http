@@ -6,7 +6,10 @@
 package otelrice
 
 import (
+	"context"
 	"fmt"
+	"net"
+	"strconv"
 	"time"
 
 	rice "github.com/vietpham102301/rice-http"
@@ -65,11 +68,19 @@ var durationBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5,
 // Middleware starts a server span for each request and records its duration,
 // following OpenTelemetry's HTTP semantic conventions.
 //
-// The span is named after the matched route — "GET /users/:id" — or the method
-// alone when no route matched, so a raw path never becomes a span name or a
-// metric attribute. The caller's trace context is read from the request
-// headers, and the span's context is installed with c.SetContext for the rest
-// of the chain, then the previous context is restored.
+// The span is named after the matched route — "GET /users/:id" — or the
+// method alone when no route matched, so a raw path never becomes a span
+// name or a metric attribute. A method outside the known list (see
+// methodName) is recorded as _OTHER in http.request.method, named "HTTP" in
+// the span in place of the method, and carries the real verb in
+// http.request.method_original on the span only — never on the metric. The
+// caller's trace context is read from the request headers, and the span's
+// context is installed with c.SetContext for the rest of the chain, then the
+// previous context is restored.
+//
+// url.scheme comes from the connection (fctx.IsTLS()); behind a
+// TLS-terminating proxy the middleware still reports "http", since fasthttp
+// never sees the original scheme.
 //
 // Install it outermost, so its span covers every other middleware and Logger
 // logs inside it:
@@ -78,11 +89,23 @@ var durationBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5,
 //
 // It settles an error the chain returns with c.HandleError and returns nil, so
 // the status it records is the one the client receives. A status of 500 or
-// more marks the span as an error; 4xx does not. The query string is never
-// recorded.
+// more marks the span as an error, sets error.type to the status code, and
+// (when the chain returned one) records that error on the span; 4xx does
+// neither. The query string is never recorded.
 //
 // For c.Stream and c.SSE the span ends when the handler returns, not when the
-// stream does, and the stream's context is not the span's. See ADR-0020.
+// stream does, and the stream's context is not the span's: a callback that
+// wants the request's trace must carry it explicitly.
+//
+//	return c.Stream(func(s *rice.Stream) error {
+//		sc := trace.SpanContextFromContext(c.Context())
+//		ctx := trace.ContextWithSpanContext(s.Context(), sc)
+//		_, span := tracer.Start(ctx, "stream.chunk")
+//		defer span.End()
+//		// ...
+//	})
+//
+// See ADR-0020.
 func Middleware(opts ...Option) rice.Middleware {
 	cfg := config{
 		tp:   otel.GetTracerProvider(),
@@ -108,73 +131,124 @@ func Middleware(opts ...Option) rice.Middleware {
 		return func(c *rice.Ctx) error {
 			start := time.Now()
 			fctx := c.RequestCtx()
-			method := methodName(fctx.Method())
+			verb := fctx.Method()
+			method := methodName(verb)
+			unknown := method == "_OTHER"
 			route := c.Route()
 
 			prev := c.Context()
 			ctx := prop.Extract(prev, carrier{&fctx.Request.Header})
-			name := method
+
+			nameMethod := method
+			if unknown {
+				nameMethod = "HTTP"
+			}
+			name := nameMethod
 			if route != "" {
-				name = method + " " + route
+				name = nameMethod + " " + route
 			}
-			ctx, span := tracer.Start(ctx, name, trace.WithSpanKind(trace.SpanKindServer))
 
-			// A panic that reaches this frame — no Recover inside — still ends
-			// the span, marked as an error, and keeps unwinding.
-			defer func() {
-				if r := recover(); r != nil {
-					span.SetStatus(codes.Error, "panic")
-					span.AddEvent("panic", trace.WithAttributes(attribute.String("panic.value", fmt.Sprint(r))))
-					span.End()
-					panic(r)
-				}
-			}()
-
-			c.SetContext(ctx)
-			if err := next(c); err != nil {
-				c.HandleError(err)
-			}
-			c.SetContext(prev)
-
-			status := fctx.Response.StatusCode()
 			scheme := "http"
 			if fctx.IsTLS() {
 				scheme = "https"
 			}
 
-			attrs := make([]attribute.KeyValue, 0, 8)
-			attrs = append(attrs,
+			// Everything known before the chain runs — sampler-relevant, and set
+			// exactly once, at start.
+			startAttrs := make([]attribute.KeyValue, 0, 6)
+			startAttrs = append(startAttrs,
 				semconv.HTTPRequestMethodKey.String(method),
-				semconv.HTTPResponseStatusCodeKey.Int(status),
+				semconv.URLPathKey.String(string(c.Path())),
 				semconv.URLSchemeKey.String(scheme),
 			)
 			if route != "" {
-				attrs = append(attrs, semconv.HTTPRouteKey.String(route))
+				startAttrs = append(startAttrs, semconv.HTTPRouteKey.String(route))
 			}
-			duration.Record(ctx, time.Since(start).Seconds(), metric.WithAttributes(attrs...))
+			if unknown {
+				startAttrs = append(startAttrs, semconv.HTTPRequestMethodOriginalKey.String(string(verb)))
+			}
+			if ua := fctx.Request.Header.UserAgent(); len(ua) > 0 {
+				startAttrs = append(startAttrs, semconv.UserAgentOriginalKey.String(string(ua)))
+			}
 
-			if span.IsRecording() {
-				span.SetAttributes(attrs...)
-				span.SetAttributes(semconv.URLPathKey.String(string(c.Path())))
-				if ip := c.ClientIP(); ip != nil {
-					span.SetAttributes(semconv.ClientAddressKey.String(ip.String()))
+			ctx, span := tracer.Start(ctx, name,
+				trace.WithSpanKind(trace.SpanKindServer),
+				trace.WithAttributes(startAttrs...),
+			)
+
+			// A panic that reaches this frame — no Recover inside — still
+			// restores the previous context and finishes the span exactly as a
+			// normal response does (through finish), with status 500, since
+			// rice's own recovery answers every panic with one. The panic itself
+			// is recorded as an exception, with a stack trace, before the span
+			// ends and the panic keeps unwinding.
+			defer func() {
+				if r := recover(); r != nil {
+					c.SetContext(prev)
+					span.RecordError(fmt.Errorf("panic: %v", r), trace.WithStackTrace(true))
+					finish(ctx, span, duration, time.Since(start), method, route, scheme, 500, c.ClientIP())
+					panic(r)
 				}
-				if ua := fctx.Request.Header.UserAgent(); len(ua) > 0 {
-					span.SetAttributes(semconv.UserAgentOriginalKey.String(string(ua)))
-				}
+			}()
+
+			c.SetContext(ctx)
+			handlerErr := next(c)
+			if handlerErr != nil {
+				c.HandleError(handlerErr)
 			}
-			if status >= 500 {
-				span.SetStatus(codes.Error, "")
+			c.SetContext(prev)
+
+			status := fctx.Response.StatusCode()
+			if status >= 500 && handlerErr != nil {
+				span.RecordError(handlerErr)
 			}
-			span.End()
+			finish(ctx, span, duration, time.Since(start), method, route, scheme, status, c.ClientIP())
 			return nil
 		}
 	}
 }
 
+// finish records this request's duration, sets the attributes known only
+// after the chain has run, marks the span's status, and ends it. The normal
+// path and the panic path both call it, so the two cannot drift: a panic
+// finishes its span exactly the way a normal 500 response does.
+func finish(ctx context.Context, span trace.Span, duration metric.Float64Histogram, elapsed time.Duration, method, route, scheme string, status int, ip net.IP) {
+	isError := status >= 500
+
+	metricAttrs := make([]attribute.KeyValue, 0, 5)
+	metricAttrs = append(metricAttrs,
+		semconv.HTTPRequestMethodKey.String(method),
+		semconv.HTTPResponseStatusCodeKey.Int(status),
+		semconv.URLSchemeKey.String(scheme),
+	)
+	if route != "" {
+		metricAttrs = append(metricAttrs, semconv.HTTPRouteKey.String(route))
+	}
+	if isError {
+		metricAttrs = append(metricAttrs, semconv.ErrorTypeKey.String(strconv.Itoa(status)))
+	}
+	duration.Record(ctx, elapsed.Seconds(), metric.WithAttributes(metricAttrs...))
+
+	if span.IsRecording() {
+		span.SetAttributes(semconv.HTTPResponseStatusCodeKey.Int(status))
+		if ip != nil {
+			span.SetAttributes(semconv.ClientAddressKey.String(ip.String()))
+		}
+		if isError {
+			span.SetAttributes(semconv.ErrorTypeKey.String(strconv.Itoa(status)))
+		}
+	}
+	if isError {
+		span.SetStatus(codes.Error, "")
+	}
+	span.End()
+}
+
 // methodName returns the method as the conventions name it: one of the known
 // methods, or _OTHER, so an arbitrary verb never becomes a span name or a
-// metric attribute.
+// metric attribute. The list is fixed: the HTTP semantic conventions ask
+// instrumentation that maps an unlisted method to _OTHER to say so, rather
+// than let a caller extend it, so there is no option for that here.
 func methodName(m []byte) string {
 	switch string(m) {
 	case "GET":
@@ -195,6 +269,8 @@ func methodName(m []byte) string {
 		return "CONNECT"
 	case "TRACE":
 		return "TRACE"
+	case "QUERY":
+		return "QUERY"
 	}
 	return "_OTHER"
 }

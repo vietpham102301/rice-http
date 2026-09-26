@@ -2,6 +2,7 @@ package otelrice
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -61,6 +62,25 @@ func (h *harness) onlySpan(t *testing.T) sdktrace.ReadOnlySpan {
 	return ended[0]
 }
 
+// duration collects the reader and returns the http.server.request.duration
+// histogram, or nil when it was never recorded.
+func (h *harness) duration(t *testing.T) *metricdata.Histogram[float64] {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	if err := h.reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatal(err)
+	}
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name == "http.server.request.duration" {
+				d := m.Data.(metricdata.Histogram[float64])
+				return &d
+			}
+		}
+	}
+	return nil
+}
+
 func attr(kvs []attribute.KeyValue, key string) (attribute.Value, bool) {
 	for _, kv := range kvs {
 		if string(kv.Key) == key {
@@ -71,18 +91,70 @@ func attr(kvs []attribute.KeyValue, key string) (attribute.Value, bool) {
 }
 
 func TestSpanIsNamedAfterTheRoute(t *testing.T) {
-	cases := []struct{ method, uri, want string }{
-		{"GET", "/users/42", "GET /users/:id"},
-		{"GET", "/nowhere", "GET"},
-		{"BREW", "/users/42", "_OTHER"},
+	cases := []struct {
+		method, uri  string
+		wantName     string
+		wantMethod   string
+		wantOriginal string // "" means http.request.method_original must be absent
+	}{
+		{"GET", "/users/42", "GET /users/:id", "GET", ""},
+		{"GET", "/nowhere", "GET", "GET", ""},
+		{"BREW", "/users/42", "HTTP", "_OTHER", "BREW"},
 	}
 	for _, tc := range cases {
 		h := newHarness()
 		h.app.GET("/users/:id", func(c *rice.Ctx) error { return nil })
 		h.do(tc.method, tc.uri)
-		if got := h.onlySpan(t).Name(); got != tc.want {
-			t.Errorf("%s %s: span name %q, want %q", tc.method, tc.uri, got, tc.want)
+		s := h.onlySpan(t)
+		if got := s.Name(); got != tc.wantName {
+			t.Errorf("%s %s: span name %q, want %q", tc.method, tc.uri, got, tc.wantName)
 		}
+		if got, _ := attr(s.Attributes(), "http.request.method"); got.Emit() != tc.wantMethod {
+			t.Errorf("%s %s: http.request.method %q, want %q", tc.method, tc.uri, got.Emit(), tc.wantMethod)
+		}
+		got, ok := attr(s.Attributes(), "http.request.method_original")
+		wantOK := tc.wantOriginal != ""
+		if ok != wantOK {
+			t.Errorf("%s %s: method_original present %v, want %v", tc.method, tc.uri, ok, wantOK)
+		}
+		if wantOK && got.Emit() != tc.wantOriginal {
+			t.Errorf("%s %s: method_original %q, want %q", tc.method, tc.uri, got.Emit(), tc.wantOriginal)
+		}
+	}
+}
+
+func TestSpanIsNamedHTTPWhenAnUnknownMethodMatchesARoute(t *testing.T) {
+	h := newHarness()
+	h.app.Handle("BREW", "/coffee/:kind", func(c *rice.Ctx) error { return nil })
+	h.do("BREW", "/coffee/latte")
+	s := h.onlySpan(t)
+	if got := s.Name(); got != "HTTP /coffee/:kind" {
+		t.Errorf("span name %q, want %q", got, "HTTP /coffee/:kind")
+	}
+	if got, _ := attr(s.Attributes(), "http.request.method"); got.Emit() != "_OTHER" {
+		t.Errorf("http.request.method %q, want _OTHER", got.Emit())
+	}
+	if got, ok := attr(s.Attributes(), "http.request.method_original"); !ok || got.Emit() != "BREW" {
+		t.Errorf("method_original %q (present %v), want BREW", got.Emit(), ok)
+	}
+	if got, ok := attr(s.Attributes(), "http.route"); !ok || got.Emit() != "/coffee/:kind" {
+		t.Errorf("http.route %q (present %v), want /coffee/:kind", got.Emit(), ok)
+	}
+}
+
+func TestQUERYIsAKnownMethod(t *testing.T) {
+	h := newHarness()
+	h.app.Handle("QUERY", "/x", func(c *rice.Ctx) error { return nil })
+	h.do("QUERY", "/x")
+	s := h.onlySpan(t)
+	if got := s.Name(); got != "QUERY /x" {
+		t.Errorf("span name %q, want QUERY /x", got)
+	}
+	if got, _ := attr(s.Attributes(), "http.request.method"); got.Emit() != "QUERY" {
+		t.Errorf("http.request.method %q, want QUERY", got.Emit())
+	}
+	if _, ok := attr(s.Attributes(), "http.request.method_original"); ok {
+		t.Error("method_original set for a known method")
 	}
 }
 
@@ -101,15 +173,15 @@ func TestSpanAttributes(t *testing.T) {
 		"url.path":                  "/users/42",
 		"url.scheme":                "http",
 		"user_agent.original":       "probe/1",
+		// The test harness dispatches through a bare fasthttp.RequestCtx, whose
+		// RemoteAddr defaults to 0.0.0.0:0; c.ClientIP() reports its IP.
+		"client.address": "0.0.0.0",
 	}
 	for k, v := range want {
 		got, ok := attr(s.Attributes(), k)
 		if !ok || got.Emit() != v {
 			t.Errorf("%s = %q (present %v), want %q", k, got.Emit(), ok, v)
 		}
-	}
-	if _, ok := attr(s.Attributes(), "client.address"); !ok {
-		t.Error("client.address missing")
 	}
 	for _, kv := range s.Attributes() {
 		if strings.Contains(kv.Value.Emit(), "secret") {
@@ -170,7 +242,40 @@ func TestACustomErrorHandlersStatusIsRecorded(t *testing.T) {
 	}
 }
 
-func TestTheHandlerSeesTheSpanAndThePreviousContextIsRestored(t *testing.T) {
+func TestAnErrorThatProducesA500RecordsAnExceptionEvent(t *testing.T) {
+	h := newHarness()
+	h.app.GET("/x", func(c *rice.Ctx) error { return rice.NewHTTPError(500, "boom") })
+	h.do("GET", "/x")
+	s := h.onlySpan(t)
+	if v, ok := attr(s.Attributes(), "error.type"); !ok || v.Emit() != "500" {
+		t.Errorf("error.type %q (present %v), want 500", v.Emit(), ok)
+	}
+	if !hasExceptionEvent(s) {
+		t.Error("no exception event recorded for a 500")
+	}
+
+	h2 := newHarness()
+	h2.app.GET("/x", func(c *rice.Ctx) error { return rice.NewHTTPError(404, "missing") })
+	h2.do("GET", "/x")
+	s2 := h2.onlySpan(t)
+	if _, ok := attr(s2.Attributes(), "error.type"); ok {
+		t.Error("error.type set for a 404")
+	}
+	if hasExceptionEvent(s2) {
+		t.Error("exception event recorded for a 404")
+	}
+}
+
+func hasExceptionEvent(s sdktrace.ReadOnlySpan) bool {
+	for _, e := range s.Events() {
+		if e.Name == "exception" {
+			return true
+		}
+	}
+	return false
+}
+
+func TestTheHandlerAndInnerMiddlewareSeeTheSpan(t *testing.T) {
 	var inHandler trace.SpanContext
 	var afterChain trace.SpanContext
 	h := newHarness()
@@ -200,22 +305,7 @@ func TestDurationIsRecordedPerRoute(t *testing.T) {
 	h.app.GET("/users/:id", func(c *rice.Ctx) error { return nil })
 	h.do("GET", "/users/1")
 	h.do("GET", "/users/2")
-	var rm metricdata.ResourceMetrics
-	if err := h.reader.Collect(context.Background(), &rm); err != nil {
-		t.Fatal(err)
-	}
-	var hist *metricdata.Histogram[float64]
-	for _, sm := range rm.ScopeMetrics {
-		for _, m := range sm.Metrics {
-			if m.Name == "http.server.request.duration" {
-				d := m.Data.(metricdata.Histogram[float64])
-				hist = &d
-				if m.Unit != "s" {
-					t.Errorf("unit %q, want s", m.Unit)
-				}
-			}
-		}
-	}
+	hist := h.duration(t)
 	if hist == nil {
 		t.Fatal("no http.server.request.duration")
 	}
@@ -229,8 +319,20 @@ func TestDurationIsRecordedPerRoute(t *testing.T) {
 	if v, ok := dp.Attributes.Value("http.route"); !ok || v.AsString() != "/users/:id" {
 		t.Errorf("http.route %v, want /users/:id", v.Emit())
 	}
+	if v, ok := dp.Attributes.Value("http.request.method"); !ok || v.AsString() != "GET" {
+		t.Errorf("http.request.method %v, want GET", v.Emit())
+	}
+	if v, ok := dp.Attributes.Value("http.response.status_code"); !ok || v.AsInt64() != 200 {
+		t.Errorf("http.response.status_code %v, want 200", v.Emit())
+	}
+	if v, ok := dp.Attributes.Value("url.scheme"); !ok || v.AsString() != "http" {
+		t.Errorf("url.scheme %v, want http", v.Emit())
+	}
 	if _, ok := dp.Attributes.Value("url.path"); ok {
 		t.Error("url.path is a metric attribute; it is unbounded")
+	}
+	if !slices.Equal(dp.Bounds, durationBuckets) {
+		t.Errorf("bounds %v, want %v", dp.Bounds, durationBuckets)
 	}
 }
 
@@ -244,6 +346,36 @@ func TestAPanicEndsTheSpanAsAnError(t *testing.T) {
 	s := h.onlySpan(t)
 	if s.Status().Code != codes.Error {
 		t.Error("the span of a panicking request is not an error")
+	}
+	want := map[string]string{
+		"http.request.method":       "GET",
+		"http.route":                "/x",
+		"http.response.status_code": "500",
+		"error.type":                "500",
+	}
+	for k, v := range want {
+		got, ok := attr(s.Attributes(), k)
+		if !ok || got.Emit() != v {
+			t.Errorf("panic span %s = %q (present %v), want %q", k, got.Emit(), ok, v)
+		}
+	}
+	if !hasExceptionEvent(s) {
+		t.Error("no exception event recorded for the panic")
+	}
+
+	hist := h.duration(t)
+	if hist == nil {
+		t.Fatal("no http.server.request.duration recorded for the panicking request")
+	}
+	if len(hist.DataPoints) != 1 {
+		t.Fatalf("%d series, want 1", len(hist.DataPoints))
+	}
+	dp := hist.DataPoints[0]
+	if dp.Count != 1 {
+		t.Errorf("count %d, want 1", dp.Count)
+	}
+	if v, ok := dp.Attributes.Value("http.response.status_code"); !ok || v.AsInt64() != 500 {
+		t.Errorf("metric http.response.status_code %v, want 500", v.Emit())
 	}
 }
 
