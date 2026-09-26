@@ -1,6 +1,6 @@
 # Streaming and server-sent events — Design
 
-**Status:** approved, not yet implemented
+**Status:** approved, not yet implemented; D2 corrected after prototyping (finding 5)
 **Date:** 2026-09-26
 **Milestone:** none. Work after the roadmap — see [04-roadmap.md](../../04-roadmap.md), *Explicitly deferred*
 **Decision record:** ADR-0019 (new), "Streams run after the handler, on their own context, and stop when Shutdown begins"
@@ -60,6 +60,12 @@ Throwaway programs against fasthttp v1.73.0 over a real loopback connection:
 4. **A drain waits for a stream that ends.** With a stream open, `ShutdownWithContext` returned nil
    about 100 ms after the writer returned. A stream told to stop lets Shutdown finish cleanly; one
    that does not stop holds it to its deadline.
+5. **The writer goroutine starts when `SetBodyStreamWriter` is called, not when the handler returns.**
+   `Response.SetBodyStreamWriter` calls `NewStreamReader` at once (http.go:309), and that starts the
+   goroutine. Called from inside a handler, `fn` would run concurrently with the rest of the handler,
+   with the middleware unwinding, and with the error funnel — and before the `Ctx` is released, so the
+   ricedebug check could not be relied on to catch `fn` touching `c`. Found while prototyping this
+   design, after it was first approved; D2 is the correction.
 
 ## Non-goals
 
@@ -117,7 +123,7 @@ app.GET("/events", func(c *rice.Ctx) error {
 })
 ```
 
-Both call `c.poison.check()` first, register the writer and return nil, so `return c.SSE(...)` is
+Both call `c.poison.check()` first, record the callback on the `Ctx` and return nil, so `return c.SSE(...)` is
 the idiom. Status and headers set before the call are sent; with no status set it is 200. `SSE` also
 sets `Content-Type: text/event-stream` and `Cache-Control: no-cache`. A second `Stream` or `SSE` in
 one request panics with a `rice: ` message. A nil `fn` panics. `SSE` with a negative heartbeat
@@ -126,18 +132,27 @@ panics; zero disables the heartbeat.
 `Write` and `WriteString` buffer; `Flush` sends what is buffered. `Send` writes one event and
 flushes. After the client is gone, each of them returns an error.
 
-### D2 — the callback runs after the handler and must not touch `c`
+### D2 — the callback starts after the Ctx is released, and only if the request was not answered
 
-`fn` runs on the writer goroutine after the handler has returned and the `Ctx` has been released.
-It must not call any method of `c` — the borrow contract, unchanged — and under `ricedebug` doing so
-panics exactly as it does today. Anything `fn` needs from the request is read and copied in the
+`Stream` and `SSE` only record `fn` (and the heartbeat) in three fields on `Ctx`, which `reset`
+clears. `handle` reads them before it releases the `Ctx`, releases it, and only then calls
+`SetBodyStreamWriter` (finding 5). So `fn` starts strictly after the handler, every middleware and the
+error funnel have finished, and after the `Ctx` is back in the pool.
+
+If the request was answered through the funnel — the chain returned an error, a middleware called
+`HandleError`, or the handler panicked — the stream never starts: the error response is the response.
+A HEAD request records nothing (D5).
+
+`fn` runs on the writer goroutine. It must not call any method of `c` — the borrow contract,
+unchanged — and under `ricedebug` doing so panics, deterministically, because the `Ctx` was poisoned
+before `fn` started. Anything `fn` needs from the request is read and copied in the
 handler, before the call. `Stream` and `SSE` are separate objects, not views of `Ctx`, so nothing
 they hold is pooled.
 
 ### D3 — each stream has its own context, derived from a stream context on the App
 
 `New` creates `streamCtx, cancelStreams := context.WithCancel(baseCtx)`. Each stream gets
-`context.WithCancel(streamCtx)`. It is cancelled when:
+`context.WithCancel(streamCtx)`, created on the writer goroutine when the stream starts. It is cancelled when:
 
 - **Shutdown begins** — `Shutdown` calls `cancelStreams()` before it drains (the owner's choice);
 - **Shutdown force-closes** — `baseCtx` is cancelled by `closeConns`, which cancels `streamCtx`;
@@ -185,6 +200,9 @@ Per the WHATWG HTML specification's event-stream format:
 - An `ID` or `Event` containing `\r`, `\n`, or (for `ID`) NUL makes `Send` return an error and write
   nothing: it would change the stream's framing. It does not panic, because these values may come
   from users.
+- `Retry` is formatted with `strconv.AppendInt` into a stack buffer and written byte by byte:
+  `bufio.Writer.Write` may pass its slice to the underlying writer, which moves the buffer to the heap
+  (measured: one allocation per `Send` with `Write`, none with `WriteByte`).
 - The heartbeat is the comment line `:\n\n`, written every `heartbeat` while the stream is idle or
   not, and flushed.
 
@@ -192,7 +210,9 @@ Per the WHATWG HTML specification's event-stream format:
 
 `Send`, `Write`, `WriteString`, `Flush` and the heartbeat all write through one `bufio.Writer` under
 one mutex, so a heartbeat can never land inside an event. The heartbeat goroutine exits when the
-stream's context is cancelled, which includes `fn` returning.
+stream's context is cancelled, which includes `fn` returning, and the writer waits for it to exit before returning: fasthttp
+returns the `bufio.Writer` to a pool when the writer returns, and a heartbeat still writing then would
+write into another response.
 
 ### D8 — what middleware sees
 
@@ -216,7 +236,8 @@ Documented in the doc comments and ADR-0019, not changed:
 |---|---|
 | `stream.go` | `Stream`, `Ctx.Stream`, the writer wrapper (recover, logging, context, flush), the HEAD rule |
 | `sse.go` | `SSE`, `Event`, `Ctx.SSE`, the event encoder, the heartbeat |
-| `app.go` | `streamCtx`, `cancelStreams` |
+| `app.go` | `streamCtx`, `cancelStreams`; `handle` starts a recorded stream after release |
+| `ctx.go` | the three stream fields, cleared by `reset` |
 | `server.go` | `Shutdown` cancels streams before draining |
 | `stream_test.go`, `sse_test.go` | behaviour over a real loopback server |
 | `alloc_test.go` | the budgets |
@@ -250,7 +271,8 @@ Over a real loopback server (the lifecycle tests' `serve` helper), reading the r
   `ErrShutdownTimeout`; a stream opened after Shutdown began sees `Done()` at once.
 - **Errors and panics:** a panic in `fn` does not crash the test process and is logged with a stack;
   an error from `fn` is logged; the write error after a disconnect is not logged (use `captureLog`).
-- **Rules:** a second `Stream`/`SSE` panics; a nil `fn` panics; HEAD returns the headers and `fn`
+- **Rules:** a handler that records a stream and then returns an error answers the error and `fn`
+  never runs; a second `Stream`/`SSE` panics; a nil `fn` panics; HEAD returns the headers and `fn`
   never runs; under `ricedebug`, calling a method of `c` inside `fn` panics with the use-after-release
   panic.
 - **Leaks:** after the stream ends, no heartbeat goroutine remains (count by stack frame, as the
