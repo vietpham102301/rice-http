@@ -321,6 +321,9 @@ outermost so its span covers every other middleware:
 
 ```go
 import (
+	"context"
+	"log"
+
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/propagation"
@@ -329,6 +332,7 @@ import (
 	"github.com/vietpham102301/rice-http/otelrice"
 )
 
+ctx := context.Background()
 exp, err := otlptracegrpc.New(ctx)
 if err != nil {
 	log.Fatal(err)
@@ -516,7 +520,7 @@ and cannot compare, and the reason for each result are in the performance model'
 ```
 make test        # go test ./... -race
 make test-debug  # the same suite under -tags ricedebug
-make cover       # coverage, currently 99.2%
+make cover       # coverage, currently 99.6%
 make lint        # gofmt and go vet
 make bench       # runs the suite and records to bench/results/
 make compare     # the comparison against Gin, Echo and Fiber: equivalence gate and smoke run
