@@ -5,10 +5,12 @@ GO ?= go
 ## test: run all tests with the race detector, no cache
 test:
 	$(GO) test ./... -race -count=1
+	cd otelrice && $(GO) test ./... -race -count=1
 
 ## test-debug: run all tests under the ricedebug build, which panics on use-after-release
 test-debug:
 	$(GO) test ./... -race -count=1 -tags ricedebug
+	cd otelrice && $(GO) test ./... -race -count=1 -tags ricedebug
 
 ## bench: quick benchmark run, one iteration, for CI smoke testing
 bench:
@@ -37,7 +39,9 @@ cover:
 lint:
 	@test -z "$$(gofmt -l . | tee /dev/stderr)" || (echo "gofmt found unformatted files"; exit 1)
 	$(GO) vet ./...
+	cd otelrice && $(GO) vet ./...
 
 ## tidy: sync go.mod and go.sum
 tidy:
 	$(GO) mod tidy
+	cd otelrice && $(GO) mod tidy

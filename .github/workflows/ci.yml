@@ -18,8 +18,15 @@ jobs:
           cache-dependency-path: |
             go.sum
             bench/compare/go.sum
+            otelrice/go.sum
 
       - name: Verify go.mod is tidy
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+      - name: Verify otelrice go.mod is tidy
+        working-directory: otelrice
         run: |
           go mod tidy
           git diff --exit-code go.mod go.sum

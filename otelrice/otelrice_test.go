@@ -109,16 +109,16 @@ func TestSpanIsNamedAfterTheRoute(t *testing.T) {
 		if got := s.Name(); got != tc.wantName {
 			t.Errorf("%s %s: span name %q, want %q", tc.method, tc.uri, got, tc.wantName)
 		}
-		if got, _ := attr(s.Attributes(), "http.request.method"); got.Emit() != tc.wantMethod {
-			t.Errorf("%s %s: http.request.method %q, want %q", tc.method, tc.uri, got.Emit(), tc.wantMethod)
+		if got, _ := attr(s.Attributes(), "http.request.method"); got.String() != tc.wantMethod {
+			t.Errorf("%s %s: http.request.method %q, want %q", tc.method, tc.uri, got.String(), tc.wantMethod)
 		}
 		got, ok := attr(s.Attributes(), "http.request.method_original")
 		wantOK := tc.wantOriginal != ""
 		if ok != wantOK {
 			t.Errorf("%s %s: method_original present %v, want %v", tc.method, tc.uri, ok, wantOK)
 		}
-		if wantOK && got.Emit() != tc.wantOriginal {
-			t.Errorf("%s %s: method_original %q, want %q", tc.method, tc.uri, got.Emit(), tc.wantOriginal)
+		if wantOK && got.String() != tc.wantOriginal {
+			t.Errorf("%s %s: method_original %q, want %q", tc.method, tc.uri, got.String(), tc.wantOriginal)
 		}
 	}
 }
@@ -131,14 +131,14 @@ func TestSpanIsNamedHTTPWhenAnUnknownMethodMatchesARoute(t *testing.T) {
 	if got := s.Name(); got != "HTTP /coffee/:kind" {
 		t.Errorf("span name %q, want %q", got, "HTTP /coffee/:kind")
 	}
-	if got, _ := attr(s.Attributes(), "http.request.method"); got.Emit() != "_OTHER" {
-		t.Errorf("http.request.method %q, want _OTHER", got.Emit())
+	if got, _ := attr(s.Attributes(), "http.request.method"); got.String() != "_OTHER" {
+		t.Errorf("http.request.method %q, want _OTHER", got.String())
 	}
-	if got, ok := attr(s.Attributes(), "http.request.method_original"); !ok || got.Emit() != "BREW" {
-		t.Errorf("method_original %q (present %v), want BREW", got.Emit(), ok)
+	if got, ok := attr(s.Attributes(), "http.request.method_original"); !ok || got.String() != "BREW" {
+		t.Errorf("method_original %q (present %v), want BREW", got.String(), ok)
 	}
-	if got, ok := attr(s.Attributes(), "http.route"); !ok || got.Emit() != "/coffee/:kind" {
-		t.Errorf("http.route %q (present %v), want /coffee/:kind", got.Emit(), ok)
+	if got, ok := attr(s.Attributes(), "http.route"); !ok || got.String() != "/coffee/:kind" {
+		t.Errorf("http.route %q (present %v), want /coffee/:kind", got.String(), ok)
 	}
 }
 
@@ -150,8 +150,8 @@ func TestQUERYIsAKnownMethod(t *testing.T) {
 	if got := s.Name(); got != "QUERY /x" {
 		t.Errorf("span name %q, want QUERY /x", got)
 	}
-	if got, _ := attr(s.Attributes(), "http.request.method"); got.Emit() != "QUERY" {
-		t.Errorf("http.request.method %q, want QUERY", got.Emit())
+	if got, _ := attr(s.Attributes(), "http.request.method"); got.String() != "QUERY" {
+		t.Errorf("http.request.method %q, want QUERY", got.String())
 	}
 	if _, ok := attr(s.Attributes(), "http.request.method_original"); ok {
 		t.Error("method_original set for a known method")
@@ -179,13 +179,13 @@ func TestSpanAttributes(t *testing.T) {
 	}
 	for k, v := range want {
 		got, ok := attr(s.Attributes(), k)
-		if !ok || got.Emit() != v {
-			t.Errorf("%s = %q (present %v), want %q", k, got.Emit(), ok, v)
+		if !ok || got.String() != v {
+			t.Errorf("%s = %q (present %v), want %q", k, got.String(), ok, v)
 		}
 	}
 	for _, kv := range s.Attributes() {
-		if strings.Contains(kv.Value.Emit(), "secret") {
-			t.Errorf("attribute %s carries the query string: %q", kv.Key, kv.Value.Emit())
+		if strings.Contains(kv.Value.String(), "secret") {
+			t.Errorf("attribute %s carries the query string: %q", kv.Key, kv.Value.String())
 		}
 	}
 }
@@ -235,7 +235,7 @@ func TestACustomErrorHandlersStatusIsRecorded(t *testing.T) {
 	h.do("GET", "/x")
 	s := h.onlySpan(t)
 	if v, _ := attr(s.Attributes(), "http.response.status_code"); v.AsInt64() != 502 {
-		t.Errorf("status attribute %v, want 502", v.Emit())
+		t.Errorf("status attribute %v, want 502", v.String())
 	}
 	if s.Status().Code != codes.Error {
 		t.Error("a 502 did not mark the span as an error")
@@ -247,8 +247,8 @@ func TestAnErrorThatProducesA500RecordsAnExceptionEvent(t *testing.T) {
 	h.app.GET("/x", func(c *rice.Ctx) error { return rice.NewHTTPError(500, "boom") })
 	h.do("GET", "/x")
 	s := h.onlySpan(t)
-	if v, ok := attr(s.Attributes(), "error.type"); !ok || v.Emit() != "500" {
-		t.Errorf("error.type %q (present %v), want 500", v.Emit(), ok)
+	if v, ok := attr(s.Attributes(), "error.type"); !ok || v.String() != "500" {
+		t.Errorf("error.type %q (present %v), want 500", v.String(), ok)
 	}
 	if !hasExceptionEvent(s) {
 		t.Error("no exception event recorded for a 500")
@@ -317,16 +317,16 @@ func TestDurationIsRecordedPerRoute(t *testing.T) {
 		t.Errorf("count %d, want 2", dp.Count)
 	}
 	if v, ok := dp.Attributes.Value("http.route"); !ok || v.AsString() != "/users/:id" {
-		t.Errorf("http.route %v, want /users/:id", v.Emit())
+		t.Errorf("http.route %v, want /users/:id", v.String())
 	}
 	if v, ok := dp.Attributes.Value("http.request.method"); !ok || v.AsString() != "GET" {
-		t.Errorf("http.request.method %v, want GET", v.Emit())
+		t.Errorf("http.request.method %v, want GET", v.String())
 	}
 	if v, ok := dp.Attributes.Value("http.response.status_code"); !ok || v.AsInt64() != 200 {
-		t.Errorf("http.response.status_code %v, want 200", v.Emit())
+		t.Errorf("http.response.status_code %v, want 200", v.String())
 	}
 	if v, ok := dp.Attributes.Value("url.scheme"); !ok || v.AsString() != "http" {
-		t.Errorf("url.scheme %v, want http", v.Emit())
+		t.Errorf("url.scheme %v, want http", v.String())
 	}
 	if _, ok := dp.Attributes.Value("url.path"); ok {
 		t.Error("url.path is a metric attribute; it is unbounded")
@@ -355,8 +355,8 @@ func TestAPanicEndsTheSpanAsAnError(t *testing.T) {
 	}
 	for k, v := range want {
 		got, ok := attr(s.Attributes(), k)
-		if !ok || got.Emit() != v {
-			t.Errorf("panic span %s = %q (present %v), want %q", k, got.Emit(), ok, v)
+		if !ok || got.String() != v {
+			t.Errorf("panic span %s = %q (present %v), want %q", k, got.String(), ok, v)
 		}
 	}
 	if !hasExceptionEvent(s) {
@@ -375,7 +375,7 @@ func TestAPanicEndsTheSpanAsAnError(t *testing.T) {
 		t.Errorf("count %d, want 1", dp.Count)
 	}
 	if v, ok := dp.Attributes.Value("http.response.status_code"); !ok || v.AsInt64() != 500 {
-		t.Errorf("metric http.response.status_code %v, want 500", v.Emit())
+		t.Errorf("metric http.response.status_code %v, want 500", v.String())
 	}
 }
 
