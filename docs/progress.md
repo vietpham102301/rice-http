@@ -51,7 +51,8 @@ under the zero-allocation exclusions and pins `TestAllocBudgetStreamSetup`,
 `TestAllocBudgetSSESend` and `BenchmarkSSESend`; `04-roadmap.md` empties *Explicitly deferred* and
 gets the *Done after M8* entry; the README gets a short SSE example; the ADR index gets a row.
 
-**Learned:** Four things about fasthttp, found while prototyping, plus one about `bufio.Writer`.
+**Learned:** Four things about fasthttp, found while prototyping, plus one about `bufio.Writer` and
+one about the `Stream` and `SSE` types themselves.
 
 1. fasthttp starts the writer goroutine the moment `SetBodyStreamWriter` is called, not when the
    handler returns. Found while prototyping after the design was already approved: calling it from
@@ -70,6 +71,10 @@ gets the *Done after M8* entry; the README gets a short SSE example; the ADR ind
    the heap; `WriteByte` never does. `SSE.Send` formats `Retry` with `strconv.AppendInt` into a
    stack buffer and writes it out byte by byte for exactly this reason — the first version used
    `Write` and cost one allocation per call with `Retry` set.
+5. A `Stream` (and the `SSE` built on it) is valid only while `fn` runs, because fasthttp puts the
+   `bufio.Writer` back in a pool the moment the writer returns, and a later write could then land in
+   another response. After the final flush, rice marks the stream done, and `Write`, `WriteString`,
+   `Flush` and `Send` each return `errStreamClosed` rather than touch it.
 
 **Measured:** `TestAllocBudgetSSESend`: 0, with and without `-race`. `TestAllocBudgetStreamSetup`:
 11 without `-race`, 12 with it, each with zero spread over 200 samples of `AllocsPerRun(1000)`,

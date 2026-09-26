@@ -870,7 +870,7 @@ func TestAllocBudgetSSESend(t *testing.T) {
 // return. AllocsPerRun counts allocations process-wide, so without waiting for
 // that goroutine to finish, its allocations can land in whichever iteration's
 // measurement window happens to be open, making about 1% of samples spike to
-// 15-91 allocs/op. Draining forces the writer to run and close the pipe before
+// 15-116 allocs/op. Draining forces the writer to run and close the pipe before
 // handle is called again, so every iteration owns its own allocations.
 func TestAllocBudgetStreamSetup(t *testing.T) {
 	app := New()
