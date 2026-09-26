@@ -1,6 +1,6 @@
 # Streaming and server-sent events — Design
 
-**Status:** approved, not yet implemented; D2 corrected after prototyping (finding 5)
+**Status:** approved, not yet implemented; D2 corrected after prototyping (finding 5); D5 clarified in the final review
 **Date:** 2026-09-26
 **Milestone:** none. Work after the roadmap — see [04-roadmap.md](../../04-roadmap.md), *Explicitly deferred*
 **Decision record:** ADR-0019 (new), "Streams run after the handler, on their own context, and stop when Shutdown begins"
@@ -186,7 +186,10 @@ the chunked response ends normally.
 ### D5 — HEAD sends headers and never runs `fn`
 
 For a HEAD request, `Stream` and `SSE` set the headers and return without registering a writer
-(finding 3). The response carries the same headers a GET would.
+(finding 3). The response carries the same headers a GET would, with one exception found in the
+final review: for a bare `Stream` with no `Content-Type` set, HEAD carries no `Content-Type` and no
+`Transfer-Encoding`, unlike the same GET, because fasthttp adds those only when it starts the body
+writer; `SSE` sets its own `Content-Type`, so HEAD on it carries one.
 
 ### D6 — the SSE wire format
 
