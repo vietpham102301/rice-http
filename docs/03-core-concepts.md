@@ -269,11 +269,12 @@ result from the handler:
 app.GET("/events", func(c *rice.Ctx) error {
     last := string(c.Header("Last-Event-ID")) // copied before the stream starts
     return c.SSE(15*time.Second, func(s *rice.SSE) error {
+        events := updatesSince(last) // subscribe once, not on every loop
         for {
             select {
             case <-s.Context().Done():
                 return nil
-            case ev := <-updatesSince(last):
+            case ev := <-events:
                 if err := s.Send(ev); err != nil {
                     return err
                 }
@@ -308,6 +309,17 @@ already cancelled. Headers set by middleware before `next` are sent with the str
 A `Stream` (and the `SSE` built on it) is valid only while `fn` runs. Once `fn` returns, `Write`,
 `WriteString`, `Flush` and `Send` each return an error without touching the underlying writer,
 because fasthttp may by then have put it back in a pool serving another response.
+
+**Limits the transport sets.** `WithWriteTimeout` covers the whole streamed response, not each write:
+fasthttp sets the connection's write deadline once, before writing the response, so a stream still
+running when it passes is cut off; an App serving long-lived streams leaves it at zero, or serves
+streams from a separate App. A client that stops reading without closing the connection can hold
+`fn` inside a `Send` or `Flush`, where it cannot see `Done()`; such a stream lasts until Shutdown's
+deadline force-closes the connection, which unblocks the write. Behind nginx, disable proxy buffering
+for event streams — set `X-Accel-Buffering: no` before calling `c.SSE`, or configure
+`proxy_buffering off` — or nginx may hold events back. An HTTP/1.0 request without
+`Connection: keep-alive` receives the stream with `Transfer-Encoding: chunked` and
+`Connection: close`; that is fasthttp's behaviour, not rice's.
 
 ---
 

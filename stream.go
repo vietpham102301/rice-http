@@ -111,6 +111,8 @@ func (s *Stream) fail(err error) error {
 // duration ends there, Timeout's deadline does not cover the stream, and
 // middleware.Recover does not cover fn. See ADR-0019.
 //
+// WithWriteTimeout, when set, limits the whole stream, not each write.
+//
 // A nil fn, or a second Stream or SSE in the same request, panics.
 func (c *Ctx) Stream(fn func(s *Stream) error) error {
 	c.poison.check()

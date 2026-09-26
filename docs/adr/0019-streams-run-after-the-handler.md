@@ -74,6 +74,22 @@ are sent.
 
 **A stream opened during Shutdown starts cancelled**, and `fn` sees `Done()` at once.
 
+**The write timeout covers the whole stream.** fasthttp sets the connection's write deadline once,
+before writing the response, after the handler has returned, so rice cannot lift it for a stream:
+with `WithWriteTimeout(d)`, a stream still running d after its handler returned is cut off. An App
+serving long-lived streams leaves the write timeout at zero, or serves its streams from a separate App.
+
+**A client that stops reading without closing can pin `fn`.** Once the connection's buffers fill,
+`fn` blocks inside a `Send` or `Flush` and cannot see `Done()`; such a stream reaches Shutdown's
+deadline and is force-closed, which unblocks the write.
+
+**Proxies may buffer event streams.** Behind nginx, disable proxy buffering for them: set
+`X-Accel-Buffering: no` before calling `c.SSE`, or configure `proxy_buffering off`.
+
+**An HTTP/1.0 client gets chunked encoding.** An HTTP/1.0 request without `Connection: keep-alive`
+receives the stream with `Transfer-Encoding: chunked` and `Connection: close`; that is fasthttp's
+behaviour.
+
 **An App mounted with `FasthttpHandler()` and never shut down stops a stream only when its client
 leaves.**
 

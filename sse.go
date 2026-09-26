@@ -36,6 +36,10 @@ var errInvalidEvent = errors.New("rice: SSE event ID or name contains a line bre
 // how a client that left is noticed: fasthttp reports a closed connection only
 // to a write. Zero disables it; a negative heartbeat panics.
 //
+// WithWriteTimeout, when set, limits the whole stream, not each write. Behind
+// nginx, disable proxy buffering for event streams: set X-Accel-Buffering: no
+// before calling SSE, or configure proxy_buffering off.
+//
 // Read Last-Event-ID, and anything else fn needs, before calling SSE:
 //
 //	last := string(c.Header("Last-Event-ID"))

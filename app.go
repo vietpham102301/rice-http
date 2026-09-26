@@ -44,6 +44,12 @@ func WithReadTimeout(d time.Duration) Option {
 
 // WithWriteTimeout limits how long the server spends writing a response. The
 // clock starts after the handler returns. Zero, the default, means no limit.
+//
+// The limit covers the whole of a streamed response: fasthttp sets the
+// connection's write deadline once, before writing the response, so a Stream
+// or SSE body still being written when it passes is cut off. An App serving
+// long-lived streams leaves the write timeout at 0, or serves its streams from
+// a separate App.
 func WithWriteTimeout(d time.Duration) Option {
 	if d < 0 {
 		panic("rice: WithWriteTimeout: duration is negative")

@@ -279,11 +279,12 @@ first.
 app.GET("/events", func(c *rice.Ctx) error {
 	last := string(c.Header("Last-Event-ID")) // copied before the stream starts
 	return c.SSE(15*time.Second, func(s *rice.SSE) error {
+		events := updatesSince(last) // subscribe once, not on every loop
 		for {
 			select {
 			case <-s.Context().Done():
 				return nil
-			case ev := <-updatesSince(last):
+			case ev := <-events:
 				if err := s.Send(ev); err != nil {
 					return err
 				}
@@ -298,6 +299,9 @@ begins, when the client goes away, and when `fn` returns, and it is the correct 
 inside `fn`. `SSE`'s heartbeat writes a comment line on that interval, which is how a client that
 silently disconnected is noticed — fasthttp reports a closed connection only on a write. See
 [ADR-0019](docs/adr/0019-streams-run-after-the-handler.md).
+
+`rice.WithWriteTimeout` limits a streamed response as a whole, not each write, so an App serving
+long-lived streams leaves it at zero or serves its streams from a separate App.
 
 ## Graceful shutdown
 
@@ -340,7 +344,9 @@ drain polls every 100 ms, so a shutdown takes about that long even with nothing 
 
 Set all three timeouts in production. They default to zero, which means unlimited: without a
 read timeout, a client that sends half a request holds its connection for as long as it likes.
-The values above are an example, not a recommendation for any particular service.
+The values above are an example, not a recommendation for any particular service. The write
+timeout also ends streams: with the 10 seconds above, a `Stream` or `SSE` response is cut off 10
+seconds after its handler returns, so an App that serves long-lived streams leaves it at zero.
 
 ## Two phases
 

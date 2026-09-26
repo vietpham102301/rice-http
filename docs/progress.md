@@ -52,7 +52,8 @@ under the zero-allocation exclusions and pins `TestAllocBudgetStreamSetup`,
 gets the *Done after M8* entry; the README gets a short SSE example; the ADR index gets a row.
 
 **Learned:** Four things about fasthttp, found while prototyping, plus one about `bufio.Writer` and
-one about the `Stream` and `SSE` types themselves.
+one about the `Stream` and `SSE` types themselves; and two more about fasthttp that the final
+whole-branch review found.
 
 1. fasthttp starts the writer goroutine the moment `SetBodyStreamWriter` is called, not when the
    handler returns. Found while prototyping after the design was already approved: calling it from
@@ -75,6 +76,16 @@ one about the `Stream` and `SSE` types themselves.
    `bufio.Writer` back in a pool the moment the writer returns, and a later write could then land in
    another response. After the final flush, rice marks the stream done, and `Write`, `WriteString`,
    `Flush` and `Send` each return `errStreamClosed` rather than touch it.
+6. The write timeout covers the whole stream. fasthttp sets the connection's write deadline once
+   per response, after the handler returns and before writing it, so with `WithWriteTimeout(d)`
+   every streamed body must finish within d — a probe saw an SSE stream cut off at about 1.1 s under
+   a 1 s write timeout. rice cannot lift the deadline for a stream, so the fix is documentation:
+   `WithWriteTimeout`, `Stream`, `SSE`, the README, `03-core-concepts.md` and ADR-0019 say an App
+   serving long-lived streams leaves it at zero or serves them from a separate App.
+7. fasthttp holds a streamed response's status line and headers in the connection's buffer until
+   the first chunk arrives from the pipe, unless `Response.ImmediateHeaderFlush` is set; an idle
+   stream sent the client nothing at all. `startStream` now sets it, pinned by
+   `TestStreamSendsHeadersBeforeTheFirstWrite`.
 
 **Measured:** `TestAllocBudgetSSESend`: 0, with and without `-race`. `TestAllocBudgetStreamSetup`:
 11 without `-race`, 12 with it, each with zero spread over 200 samples of `AllocsPerRun(1000)`,
@@ -89,6 +100,8 @@ and `fail`'s cancel on a write error had no direct test, closed by
 `TestStreamFailCancelsContextOnWriteError` and a `Write` call added to
 `TestStreamIsDeadOnceItsCallbackReturns`; `SSE`'s own nil-callback panic (before it ever calls
 `registerStream`) was closed by an `"SSE nil callback"` case added to `TestStreamPanicsOnMisuse`.
+After the final review's fixes every figure above is unchanged: setup still 11 and 12, `Send`
+still 0, root package still 99.6%.
 
 **Next:** the roadmap's *Explicitly deferred* list is empty; the next work needs a new brainstorm.
 
