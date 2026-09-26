@@ -104,7 +104,7 @@ func (a *App) register(method, path string, h Handler, g *Group, mw []Middleware
 	// panics from the call that wrote it. Build discards this tree and rebuilds
 	// with the compiled chain.
 	t := a.treeFor(method)
-	if err := t.Insert(path, h); err != nil {
+	if err := t.Insert(path, routeEntry{h: h, pattern: path}); err != nil {
 		if errors.Is(err, router.ErrDuplicate) {
 			// ErrDuplicate carries no path or method of its own (see its doc
 			// comment), so the message is built here, in the same "route path
@@ -153,17 +153,17 @@ func hasLowercaseByte(s string) bool {
 // conversion" for the conversion below. The request path through lookup
 // never even performs the conversion — method arrives there already as a
 // []byte, straight from fctx.Method().
-func (a *App) treeFor(method string) *router.Tree[Handler] {
+func (a *App) treeFor(method string) *router.Tree[routeEntry] {
 	if i, ok := methodIndex([]byte(method)); ok {
 		return &a.trees[i]
 	}
 
 	if a.rare == nil {
-		a.rare = make(map[string]*router.Tree[Handler])
+		a.rare = make(map[string]*router.Tree[routeEntry])
 	}
 	t, ok := a.rare[method]
 	if !ok {
-		t = &router.Tree[Handler]{}
+		t = &router.Tree[routeEntry]{}
 		a.rare[method] = t
 	}
 	return t
@@ -179,16 +179,31 @@ func (a *App) treeFor(method string) *router.Tree[Handler] {
 // parameter-capture budgets (TestAllocBudgetLookupOneParameter and its
 // siblings) verify it.
 func (a *App) lookup(method, path []byte, params *router.Params) (Handler, bool) {
+	e, ok := a.lookupEntry(method, path, params)
+	return e.h, ok
+}
+
+// routeEntry is what each route tree holds: the compiled handler and the
+// pattern it was registered under, so a match can report which route it was.
+type routeEntry struct {
+	h       Handler
+	pattern string
+}
+
+// lookupEntry is lookup returning the whole entry. handle uses it to record
+// the matched pattern for Ctx.Route; lookup keeps the handler-only shape the
+// tests and budgets use.
+func (a *App) lookupEntry(method, path []byte, params *router.Params) (routeEntry, bool) {
 	if i, ok := methodIndex(method); ok {
 		return a.trees[i].Lookup(path, params)
 	}
 
 	if a.rare == nil {
-		return nil, false
+		return routeEntry{}, false
 	}
 	t, ok := a.rare[string(method)]
 	if !ok {
-		return nil, false
+		return routeEntry{}, false
 	}
 	return t.Lookup(path, params)
 }
