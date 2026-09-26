@@ -25,6 +25,9 @@ func TestAcceptsMatchesByRFC9110(t *testing.T) {
 		J = "application/json"
 		H = "text/html"
 		P = "text/plain; charset=utf-8"
+		// javaAccept is the default of Java's HttpURLConnection, whose q=.2 is
+		// not an RFC 9110 qvalue but is accepted.
+		javaAccept = "text/html, image/gif, image/jpeg, *; q=.2, */*; q=.2"
 	)
 	var long strings.Builder
 	for i := range 50 {
@@ -74,6 +77,8 @@ func TestAcceptsMatchesByRFC9110(t *testing.T) {
 		{"no offers", []string{"*/*"}, nil, ""},
 		{"chrome", []string{"text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"}, []string{J, H}, H},
 		{"long header, last element matters", []string{long.String()}, []string{H, J}, J},
+		{"java default, leading-dot q", []string{javaAccept}, []string{J}, J},
+		{"java default, html wins", []string{javaAccept}, []string{J, H}, H},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -88,13 +93,14 @@ func TestParseQ(t *testing.T) {
 	good := map[string]int{
 		"0": 0, "0.": 0, "0.5": 500, "0.25": 250, "0.123": 123,
 		"1": 1000, "1.": 1000, "1.0": 1000, "1.000": 1000,
+		".2": 200, ".25": 250, ".123": 123,
 	}
 	for in, want := range good {
 		if q, ok := parseQ([]byte(in)); !ok || q != want {
 			t.Errorf("parseQ(%q) = %d, %v; want %d, true", in, q, ok, want)
 		}
 	}
-	for _, in := range []string{"", "2", "1.5", "0.1234", "abc", ".5", "01", "1.0000", "0.a", "-0"} {
+	for _, in := range []string{"", "2", "1.5", "0.1234", "abc", "01", "1.0000", "0.a", "-0", ".", ".1234", ".a"} {
 		if _, ok := parseQ([]byte(in)); ok {
 			t.Errorf("parseQ(%q) accepted an invalid qvalue", in)
 		}
@@ -103,14 +109,19 @@ func TestParseQ(t *testing.T) {
 
 func TestAcceptsPanicsOnABadOffer(t *testing.T) {
 	cases := map[string]string{
-		"":       "is not a media type",
-		"json":   "is not a media type",
-		"/json":  "is not a media type",
-		"text/":  "is not a media type",
-		" ; q=1": "is not a media type",
-		"*/*":    "is a wildcard",
-		"text/*": "is a wildcard",
-		"*/html": "is a wildcard",
+		"":                            "is not a media type",
+		"json":                        "is not a media type",
+		"/json":                       "is not a media type",
+		"text/":                       "is not a media type",
+		" ; q=1":                      "is not a media type",
+		"text/html, application/json": "is not a media type",
+		"text /html":                  "is not a media type",
+		"text/html/x":                 "is not a media type",
+		"text/html\x00":               "is not a media type",
+		"application/*+json":          "is not a media type",
+		"*/*":                         "is a wildcard",
+		"text/*":                      "is a wildcard",
+		"*/html":                      "is a wildcard",
 	}
 	for offer, want := range cases {
 		t.Run(offer, func(t *testing.T) {

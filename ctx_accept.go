@@ -24,8 +24,8 @@ import (
 // q=0 means not acceptable, the highest quality wins, and a tie goes to the
 // earlier offer. Every Accept line counts. A malformed element is skipped.
 //
-// An offer that is not type/subtype, or whose type or subtype is *, panics: the
-// server must name what it produces.
+// An offer that is not type/subtype, whose type or subtype is not a token, or
+// whose type or subtype is *, panics: the server must name what it produces.
 //
 // It allocates nothing. It does not write a status; a handler with nothing to
 // offer returns ErrNotAcceptable.
@@ -67,22 +67,40 @@ func negotiate(accepts [][]byte, offers []string) string {
 }
 
 // splitOffer returns an offer's type and subtype, panicking on an offer that is
-// not a concrete media type.
+// not a concrete media type: type and subtype must each be an RFC 9110 token
+// with no *. Parameters are not validated.
 func splitOffer(offer string) (typ, sub string) {
 	mt := offer
 	if i := indexByteString(mt, ';'); i >= 0 {
 		mt = mt[:i]
 	}
 	mt = trimOWSString(mt)
-	i := indexByteString(mt, '/')
-	if i <= 0 || i == len(mt)-1 {
-		panic("rice: Accepts offer " + `"` + offer + `"` + " is not a media type of the form type/subtype")
+	if i := indexByteString(mt, '/'); i >= 0 {
+		typ, sub = mt[:i], mt[i+1:]
 	}
-	typ, sub = mt[:i], mt[i+1:]
 	if typ == "*" || sub == "*" {
 		panic("rice: Accepts offer " + `"` + offer + `"` + " is a wildcard; offer the media types the handler produces")
 	}
+	if !isMediaToken(typ) || !isMediaToken(sub) {
+		panic("rice: Accepts offer " + `"` + offer + `"` + " is not a media type of the form type/subtype")
+	}
 	return typ, sub
+}
+
+// isMediaToken reports whether s is a non-empty RFC 9110 token without *.
+func isMediaToken(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z', '0' <= c && c <= '9':
+		case indexByteString("!#$%&'+-.^_`|~", c) >= 0:
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // offerQuality returns the quality, in thousandths, that the Accept lines give
@@ -148,25 +166,25 @@ func matchRange(elem []byte, typ, sub string) (q, spec int, ok bool) {
 }
 
 // parseQ parses an RFC 9110 qvalue into thousandths: "0" or "0." followed by up
-// to three digits, or "1" or "1." followed by up to three zeros.
+// to three digits, or "1" or "1." followed by up to three zeros. It also takes
+// "." followed by one to three digits, read as "0." and those digits, because
+// Java's HttpURLConnection sends q=.2.
 func parseQ(b []byte) (int, bool) {
 	if len(b) == 0 || len(b) > 5 {
 		return 0, false
+	}
+	if b[0] == '.' {
+		if len(b) == 1 || len(b) > 4 {
+			return 0, false
+		}
+		return parseFraction(b[1:])
 	}
 	if len(b) > 1 && b[1] != '.' {
 		return 0, false
 	}
 	switch b[0] {
 	case '0':
-		q, mul := 0, 100
-		for _, c := range b[min(2, len(b)):] {
-			if c < '0' || c > '9' {
-				return 0, false
-			}
-			q += int(c-'0') * mul
-			mul /= 10
-		}
-		return q, true
+		return parseFraction(b[min(2, len(b)):])
 	case '1':
 		for _, c := range b[min(2, len(b)):] {
 			if c != '0' {
@@ -176,6 +194,20 @@ func parseQ(b []byte) (int, bool) {
 		return 1000, true
 	}
 	return 0, false
+}
+
+// parseFraction reads the digits after a qvalue's decimal point, at most three,
+// as thousandths.
+func parseFraction(d []byte) (int, bool) {
+	q, mul := 0, 100
+	for _, c := range d {
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+		q += int(c-'0') * mul
+		mul /= 10
+	}
+	return q, true
 }
 
 // nextItem splits s at the first sep outside a quoted string, honouring
