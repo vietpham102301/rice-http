@@ -320,35 +320,51 @@ Install an SDK tracer provider with an OTLP exporter and set it global, then put
 outermost so its span covers every other middleware:
 
 ```go
+package main
+
 import (
 	"context"
 	"log"
+	"log/slog"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
+	rice "github.com/vietpham102301/rice-http"
+	"github.com/vietpham102301/rice-http/middleware"
 	"github.com/vietpham102301/rice-http/otelrice"
 )
 
-ctx := context.Background()
-exp, err := otlptracegrpc.New(ctx)
-if err != nil {
-	log.Fatal(err)
+func main() {
+	ctx := context.Background()
+	exp, err := otlptracegrpc.New(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	tp := sdktrace.NewTracerProvider(sdktrace.WithBatcher(exp))
+	defer tp.Shutdown(ctx)
+
+	otel.SetTracerProvider(tp)
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+
+	app := rice.New()
+	l := slog.Default()
+
+	app.Use(
+		otelrice.Middleware(),
+		middleware.Logger(l),
+		middleware.Recover(),
+		middleware.RealIP(1),
+	)
+
+	app.GET("/hello", func(c *rice.Ctx) error {
+		return c.String(200, "hello")
+	})
+
+	log.Fatal(app.Run(":8080"))
 }
-tp := sdktrace.NewTracerProvider(sdktrace.WithBatcher(exp))
-defer tp.Shutdown(ctx)
-
-otel.SetTracerProvider(tp)
-otel.SetTextMapPropagator(propagation.TraceContext{})
-
-app.Use(
-	otelrice.Middleware(),
-	middleware.Logger(l),
-	middleware.Recover(),
-	middleware.RealIP(1),
-)
 ```
 
 The span is named `"{method} {route}"`, or the method alone on a route miss, and never carries the
