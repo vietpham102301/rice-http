@@ -160,6 +160,63 @@ func TestStreamNeverStartsWhenTheHandlerReturnsAnError(t *testing.T) {
 	}
 }
 
+// TestStreamNeverStartsWhenTheHandlerPanics is Review Focus item 3's sibling
+// never-start path: a stream recorded and then abandoned by a panic must not
+// run, and the panic's 500 must be the response, not the stream's body.
+func TestStreamNeverStartsWhenTheHandlerPanics(t *testing.T) {
+	ran := make(chan struct{}, 1)
+	app := rice.New()
+	app.GET("/boom", func(c *rice.Ctx) error {
+		_ = c.Stream(func(s *rice.Stream) error { ran <- struct{}{}; return nil })
+		panic("handler exploded")
+	})
+	addr, _ := serve(t, app)
+	shutdownOnCleanup(t, app)
+
+	_, r := rawRequest(t, addr, "GET", "/boom")
+	got := readUntil(t, r, "Internal Server Error", 2*time.Second)
+	if !strings.Contains(got, "500") {
+		t.Errorf("response %q, want 500", got)
+	}
+	select {
+	case <-ran:
+		t.Error("the stream ran although the handler panicked")
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// TestStreamNeverStartsWhenMiddlewareSettlesTheRequest covers D2's other
+// never-start path: a middleware settles the request with HandleError after
+// next returns, on a handler that recorded a stream and returned nil. The
+// funnel's answer is the response the client gets; the stream must not run.
+func TestStreamNeverStartsWhenMiddlewareSettlesTheRequest(t *testing.T) {
+	ran := make(chan struct{}, 1)
+	app := rice.New()
+	app.Use(func(next rice.Handler) rice.Handler {
+		return func(c *rice.Ctx) error {
+			err := next(c)
+			c.HandleError(rice.NewHTTPError(418, ""))
+			return err
+		}
+	})
+	app.GET("/s", func(c *rice.Ctx) error {
+		return c.Stream(func(s *rice.Stream) error { ran <- struct{}{}; return nil })
+	})
+	addr, _ := serve(t, app)
+	shutdownOnCleanup(t, app)
+
+	_, r := rawRequest(t, addr, "GET", "/s")
+	got := readUntil(t, r, "I'm a teapot", 2*time.Second)
+	if !strings.Contains(got, "418") {
+		t.Errorf("response %q, want the 418 the middleware settled with", got)
+	}
+	select {
+	case <-ran:
+		t.Error("the stream ran although a middleware settled the request")
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
 func TestStreamNeverStartsForHEAD(t *testing.T) {
 	ran := make(chan struct{}, 1)
 	app := rice.New()
@@ -222,6 +279,37 @@ func TestStreamErrorIsLogged(t *testing.T) {
 	})
 }
 
+// TestStreamIsDeadOnceItsCallbackReturns pins that a Stream retained past fn's
+// return, and used from another goroutine, cannot write into the bufio.Writer
+// fasthttp has by then put back in its pool: rice retires the Stream before
+// the writer function returns, so a later Write, WriteString or Flush is a
+// no-op that reports an error rather than touching w.
+func TestStreamIsDeadOnceItsCallbackReturns(t *testing.T) {
+	handed := make(chan *rice.Stream, 1)
+	app := rice.New()
+	app.GET("/s", func(c *rice.Ctx) error {
+		return c.Stream(func(s *rice.Stream) error {
+			_, _ = s.WriteString("done\n")
+			_ = s.Flush()
+			handed <- s
+			return nil
+		})
+	})
+	addr, _ := serve(t, app)
+	shutdownOnCleanup(t, app)
+
+	_, r := rawRequest(t, addr, "GET", "/s")
+	readUntil(t, r, "0\r\n", 2*time.Second) // the chunked body has fully ended
+
+	s := within(t, 2*time.Second, "fn handing off its Stream", handed)
+	if _, err := s.WriteString("late\n"); err == nil {
+		t.Error("WriteString after fn returned: got nil error, want one")
+	}
+	if err := s.Flush(); err == nil {
+		t.Error("Flush after fn returned: got nil error, want one")
+	}
+}
+
 func TestShutdownStopsAStreamThatHonoursItsContext(t *testing.T) {
 	logs := captureStreamLog(t)
 	app := rice.New()
@@ -276,6 +364,15 @@ func TestShutdownForceClosesAStreamThatIgnoresItsContext(t *testing.T) {
 	}
 }
 
+// TestAStreamOpenedDuringShutdownStartsCancelled pins that a stream opened
+// after Shutdown has begun gets an already cancelled context, not one merely
+// cancelled soon after: fn reports whether it is cancelled on entry, with no
+// timed select that a stream cancelled only somewhat later could also pass.
+// The sync point is a real one, not a sleep: Shutdown calls a.cancelStreams()
+// (server.go) before a.srv.ShutdownWithContext, and fasthttp's
+// ShutdownWithContext "works by first closing all open listeners" before it
+// waits on anything else — so a refused dial on the same goroutine's Shutdown
+// call is proof cancelStreams has already run.
 func TestAStreamOpenedDuringShutdownStartsCancelled(t *testing.T) {
 	inHandler := make(chan struct{})
 	proceed := make(chan struct{})
@@ -285,12 +382,7 @@ func TestAStreamOpenedDuringShutdownStartsCancelled(t *testing.T) {
 		close(inHandler)
 		<-proceed
 		return c.Stream(func(s *rice.Stream) error {
-			select {
-			case <-s.Context().Done():
-				sawDone <- true
-			case <-time.After(time.Second):
-				sawDone <- false
-			}
+			sawDone <- s.Context().Err() != nil
 			return nil
 		})
 	})
@@ -305,7 +397,13 @@ func TestAStreamOpenedDuringShutdownStartsCancelled(t *testing.T) {
 		defer cancel()
 		shutdownErr <- app.Shutdown(ctx)
 	}()
-	time.Sleep(50 * time.Millisecond) // let Shutdown begin and cancel the streams
+	waitFor(t, 2*time.Second, "Shutdown closing the listener", func() bool {
+		c, err := net.Dial("tcp", addr)
+		if err == nil {
+			c.Close()
+		}
+		return err != nil
+	})
 	close(proceed)
 
 	if !within(t, 2*time.Second, "the stream running", sawDone) {
