@@ -302,11 +302,45 @@ func TestStreamIsDeadOnceItsCallbackReturns(t *testing.T) {
 	readUntil(t, r, "0\r\n", 2*time.Second) // the chunked body has fully ended
 
 	s := within(t, 2*time.Second, "fn handing off its Stream", handed)
+	if _, err := s.Write([]byte("late\n")); err == nil {
+		t.Error("Write after fn returned: got nil error, want one")
+	}
 	if _, err := s.WriteString("late\n"); err == nil {
 		t.Error("WriteString after fn returned: got nil error, want one")
 	}
 	if err := s.Flush(); err == nil {
 		t.Error("Flush after fn returned: got nil error, want one")
+	}
+}
+
+// TestStreamFailCancelsContextOnWriteError covers fail's other branch: a
+// write that fails because the client has gone cancels the stream's context,
+// the same signal Shutdown and the heartbeat use. WriteString buffers, so
+// Flush is what surfaces the failure.
+func TestStreamFailCancelsContextOnWriteError(t *testing.T) {
+	failed := make(chan error, 1)
+	app := rice.New()
+	app.GET("/s", func(c *rice.Ctx) error {
+		return c.Stream(func(s *rice.Stream) error {
+			for {
+				_, _ = s.WriteString("x")
+				if err := s.Flush(); err != nil {
+					failed <- err
+					return err
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+		})
+	})
+	addr, _ := serve(t, app)
+	shutdownOnCleanup(t, app)
+
+	conn, r := rawRequest(t, addr, "GET", "/s")
+	readUntil(t, r, "x", 2*time.Second)
+	conn.Close()
+
+	if err := within(t, 3*time.Second, "a write noticing the client left", failed); err == nil {
+		t.Fatal("Flush after the client left: got nil error, want one")
 	}
 }
 
@@ -416,7 +450,8 @@ func TestAStreamOpenedDuringShutdownStartsCancelled(t *testing.T) {
 
 func TestStreamPanicsOnMisuse(t *testing.T) {
 	cases := map[string]func(c *rice.Ctx){
-		"nil callback": func(c *rice.Ctx) { _ = c.Stream(nil) },
+		"nil callback":     func(c *rice.Ctx) { _ = c.Stream(nil) },
+		"SSE nil callback": func(c *rice.Ctx) { _ = c.SSE(0, nil) },
 		"called twice": func(c *rice.Ctx) {
 			_ = c.Stream(func(*rice.Stream) error { return nil })
 			_ = c.Stream(func(*rice.Stream) error { return nil })

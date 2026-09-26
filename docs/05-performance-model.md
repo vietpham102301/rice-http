@@ -27,6 +27,10 @@ The claim is narrow on purpose. It does **not** cover:
   figure under [Opt-in packages](#opt-in-packages).
 - Static files served by `Static`. They are fasthttp's file server behind rice's routing; their
   figures are pinned under [Request path — dispatch](#request-path--dispatch).
+- Opening a stream. `c.Stream` and `c.SSE` allocate through the dispatch path — the `Stream`/`SSE`
+  object, the stream context, the closure, and fasthttp's own pipe and goroutine — pinned at 12,
+  the figure `TestAllocBudgetStreamSetup` measures. `SSE.Send` is not excluded: it is inside the
+  zero-allocation claim, pinned in the table below.
 
 Stating the exclusions is more useful than the claim itself. A framework that says
 "zero allocations" without them is measuring a benchmark, not a system.
@@ -69,6 +73,8 @@ Every exported method of `Ctx`, one row each.
 | `c.SetContext` | 0 | MEASURED after M8 | `TestAllocBudgetContext` |
 | `c.HandleError` (`ErrNotFound`, default funnel) | 0 | MEASURED after M8 | `TestAllocBudgetHandleError` |
 | `c.Accepts` | 0 | MEASURED after M8 | `TestAllocBudgetAccepts`, `TestAllocBudgetAcceptsNoHeader`, `TestAllocBudgetAcceptsTwice` |
+| `c.Stream` / `c.SSE` (opening a stream, through the dispatch path) | 12 | MEASURED after M8 | `TestAllocBudgetStreamSetup` |
+| `SSE.Send` | 0 | MEASURED after M8 | `TestAllocBudgetSSESend` |
 
 The four M8 rows are new tests, not new code: `Status`, `SetHeader` and `SetContentType` write
 into fasthttp's reused response header, and `RequestCtx` returns a field. Each was broken once on
@@ -417,6 +423,26 @@ buffer, no buffer the race build moves to the heap — so the race slack is 0 an
 exactly under `-race` too. A budget of 0 cannot be broken downwards; broken upwards it failed as
 expected: `CORS (preflight) allocated 0.0 objects per call, want exactly 1`, and the same for
 `CORS (no Origin)`. No benchmark was recorded for `CORS`.
+
+**Streaming is outside the zero-allocation claim; `SSE.Send` is inside it.** Opening a stream —
+`c.Stream` or `c.SSE`, through the dispatch path up to the handler's return — allocates: the
+`Stream`/`SSE` object, its context, the closure, and fasthttp's own pipe and goroutine, pinned at a
+ceiling of 12 by `TestAllocBudgetStreamSetup`, measured at 11 without `-race` and 12 with it, each
+with zero spread over 200 samples of `AllocsPerRun(1000)`. That figure only holds when each
+iteration drains the response's body stream before the next begins: fasthttp runs the writer that
+builds the `Stream` and its context on its own goroutine, asynchronous to `handle`'s return, and
+`AllocsPerRun` counts allocations process-wide, so without draining, about 1% of samples spiked to
+15–116 as the writer's allocations landed in whichever iteration's measurement window happened to be
+open. `SSE.Send`, with `ID`, `Event`, a two-line `Data` and `Retry` all set, allocates nothing on a
+warm writer — `TestAllocBudgetSSESend` pins 0, with and without `-race` — because it writes strings
+and single bytes into the `bufio.Writer` and formats `Retry` with `strconv.AppendInt` into a stack
+buffer, written out byte by byte rather than with `Write`, which would let `bufio.Writer` hand the
+buffer to the underlying writer and move it to the heap. `BenchmarkSSESend` — encoding and flushing
+one such event through a real SSE stream to a discarding reader — reports a median of 271.2 ns/op, 0
+B/op and 0 allocs/op over ten runs, on darwin/arm64 (Apple M2 Pro, go1.25.6). No results file was
+committed for it; the figure is cited here in prose instead. Measured on darwin arm64 only; no Linux
+container run was taken for this feature. See
+[ADR-0019](adr/0019-streams-run-after-the-handler.md).
 
 ## The techniques, and what each one costs
 

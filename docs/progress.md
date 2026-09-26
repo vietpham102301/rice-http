@@ -16,6 +16,79 @@ Each entry uses this shape:
 
 ---
 
+## 2026-09-26 — post-M8 — Streaming and server-sent events
+
+**Did:** `(*Ctx).Stream(fn func(s *rice.Stream) error) error` and
+`(*Ctx).SSE(heartbeat time.Duration, fn func(s *rice.SSE) error) error` in `stream.go` and
+`sse.go`, plus `Stream` (`Write`, `WriteString`, `Flush`, `Context`), `SSE` (`Send`, `Context`) and
+`Event` (`ID`, `Event`, `Data`, `Retry`). Both call `c.poison.check()` first and only *record* `fn`
+— and, for `SSE`, the heartbeat — on three new `Ctx` fields (`streamFn`, `streamHeartbeat`,
+`streamSet`), cleared by `reset`; a nil `fn`, a second `Stream`/`SSE` in one request, or a negative
+`SSE` heartbeat panics with the `rice: ` prefix. `App` gained `streamCtx`/`cancelStreams`,
+`context.WithCancel(a.baseCtx)`, created in `New`. `handle`'s deferred recovery reads the recorded
+`fn`, releases the `Ctx`, and only then — and only when the funnel did not already answer the
+request — calls `a.startStream`, which hands fasthttp's `SetBodyStreamWriter` a wrapper that builds
+a fresh `context.WithCancel(a.streamCtx)`, starts a heartbeat goroutine for `SSE`, recovers a panic
+in `fn` and logs it with its stack, logs an error `fn` returns unless the stream's context was
+already cancelled, and, after waiting for the heartbeat to exit, flushes what is buffered and marks
+the `Stream` done — so a `Write`, `WriteString`, `Flush` or `Send` called after `fn` has returned
+gets `errStreamClosed` rather than touching a `bufio.Writer` fasthttp may have handed to another
+response. HEAD records nothing: no writer ever runs. `Shutdown` calls `a.cancelStreams()` before it
+drains, so an honouring stream lets the drain finish and an ignoring one is force-closed at the
+deadline as before. `SSE.Send` writes the WHATWG event-stream format and refuses an `ID`
+containing `\r`, `\n` or NUL or an `Event` containing `\r` or `\n` without writing anything;
+`Retry` is formatted with `strconv.AppendInt` into a stack buffer and written out byte by byte to
+keep it off the heap. `stream_test.go` and `sse_test.go` cover the lifecycle over a real loopback
+server: chunks arriving before `fn` returns; status and headers set before the call being sent; the
+never-start paths (a returned error, a panic after `c.Stream`, a middleware settling with
+`HandleError`, HEAD); a disconnected client detected by the heartbeat and, for a bare `Stream`, by a
+failing `Flush`; `Shutdown` finishing cleanly against a context-honouring stream and force-closing
+one that ignores it; a stream opened after `Shutdown` began seeing `Done()` at once; no heartbeat
+goroutine left once a stream ends; and, under `ricedebug`, a callback that touches `c` panicking.
+[ADR-0019](adr/0019-streams-run-after-the-handler.md) records the decision; `03-core-concepts.md`
+gets a Streaming subsection at the end of §2; `05-performance-model.md` lists opening a stream
+under the zero-allocation exclusions and pins `TestAllocBudgetStreamSetup`,
+`TestAllocBudgetSSESend` and `BenchmarkSSESend`; `04-roadmap.md` empties *Explicitly deferred* and
+gets the *Done after M8* entry; the README gets a short SSE example; the ADR index gets a row.
+
+**Learned:** Four things about fasthttp, found while prototyping, plus one about `bufio.Writer`.
+
+1. fasthttp starts the writer goroutine the moment `SetBodyStreamWriter` is called, not when the
+   handler returns. Found while prototyping after the design was already approved: calling it from
+   inside `Stream` itself would have let `fn` run beside the handler's remaining code, the
+   middleware and the funnel, and before the `Ctx` is poisoned. The correction — record `fn` on
+   `Ctx` and start it from `handle`, after release — is D2 in the design and the first bullet of
+   ADR-0019's Decision.
+2. A disconnect is seen only by a later write: a client that closes its socket is not noticed until
+   the write after the close, because the first write after a close can still fit in the kernel's
+   buffers. An idle stream never learns the client left on its own; `SSE`'s heartbeat exists to
+   force that write.
+3. A panic in the stream writer ends the process. fasthttp's only `recover()` on the streaming path
+   guards the reading side (`Response.writeBodyStream`), not the bare goroutine `sw` runs on, so
+   rice's own recovery around `fn` is load-bearing, not a convenience.
+4. `bufio.Writer.Write` can hand its argument slice to the underlying `io.Writer`, which moves it to
+   the heap; `WriteByte` never does. `SSE.Send` formats `Retry` with `strconv.AppendInt` into a
+   stack buffer and writes it out byte by byte for exactly this reason — the first version used
+   `Write` and cost one allocation per call with `Retry` set.
+
+**Measured:** `TestAllocBudgetSSESend`: 0, with and without `-race`. `TestAllocBudgetStreamSetup`:
+11 without `-race`, 12 with it, each with zero spread over 200 samples of `AllocsPerRun(1000)`,
+pinned at a ceiling of 12 — the budget drains the response body stream each iteration so the
+writer goroutine's allocations land in their own iteration; without the drain, about 1% of samples
+spiked to 15–116, since `AllocsPerRun` counts allocations process-wide and the writer runs
+asynchronously to `handle`'s return. `BenchmarkSSESend`: median 271.2 ns/op, 0 B/op, 0 allocs/op
+over ten runs (plain build), on darwin/arm64 (Apple M2 Pro, go1.25.6); no results file was
+committed for it. All figures measured on darwin arm64 only. `make cover`: root package 99.6%
+(99.6% total across modules) — two branches needed a nudge: `Write`'s check for a retired stream
+and `fail`'s cancel on a write error had no direct test, closed by
+`TestStreamFailCancelsContextOnWriteError` and a `Write` call added to
+`TestStreamIsDeadOnceItsCallbackReturns`; `SSE`'s own nil-callback panic (before it ever calls
+`registerStream`) was closed by an `"SSE nil callback"` case added to `TestStreamPanicsOnMisuse`.
+
+**Next:** the roadmap's *Explicitly deferred* list is empty; the next work needs a new brainstorm.
+
+---
+
 ## 2026-09-26 — post-M8 — Accepts negotiates the response format
 
 **Did:** `(*Ctx).Accepts(offers ...string) string` and `ErrNotAcceptable`, a shared `*HTTPError`

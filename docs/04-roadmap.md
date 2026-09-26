@@ -154,7 +154,7 @@ design decisions recorded in the ADRs?
 
 Not scheduled, not promised. Each would need its own brainstorm.
 
-- Streaming and server-sent events
+None. Every item deferred at M8 has been built; see *Done after M8*.
 
 ## Done after M8
 
@@ -272,3 +272,18 @@ Outside any milestone, because the API was already written down in
   ricedebug walker could not call a variadic method; the matching reads every line, and the walker
   uses `CallSlice`. Zero allocations, and nothing stored on `Ctx`
   ([ADR-0018](adr/0018-accepts-negotiates-by-q-and-adds-vary.md)).
+- `c.Stream(fn)` and `c.SSE(heartbeat, fn)`, the last item on the deferred list above: a raw
+  response body written in pieces, and server-sent events on top of it. Probing fasthttp's
+  `SetBodyStreamWriter` found five things: a departed client is seen only by a later write, a panic
+  in the writer goroutine kills the process, a HEAD request still runs the writer with nobody
+  reading, a drain waits cleanly for a stream that ends, and the writer goroutine starts the moment
+  `SetBodyStreamWriter` is called rather than when the handler returns. `fn` is only recorded by
+  `Stream`/`SSE` and started by `handle` after the `Ctx` is released, so it never runs beside the
+  handler, the middleware or the error funnel, and never runs at all when the funnel already
+  answered the request or the request is HEAD. Each stream gets its own `context.Context`, a child
+  of the App's own `streamCtx`, cancelled when Shutdown begins — before the drain, so an open stream
+  does not hold it to its deadline — at force-close, on a failed write, and when `fn` returns;
+  handlers keep ADR-0010's rule unchanged. rice recovers a panic in `fn` and logs an error `fn`
+  returns unless the stream's context was already cancelled. `SSE.Send` costs zero allocations.
+  [ADR-0019](adr/0019-streams-run-after-the-handler.md) records the decision and the alternatives
+  that lost.

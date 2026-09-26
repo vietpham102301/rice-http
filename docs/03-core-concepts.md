@@ -232,6 +232,83 @@ the example above, `go audit(c.Param("id"))` reads a reused buffer and the debug
 silent, because that slice points into fasthttp's memory rather than into anything rice can
 poison. See [ADR-0005](adr/0005-context-pooling-and-borrow-contract.md).
 
+### Streaming
+
+```go
+func (c *Ctx) Stream(fn func(s *Stream) error) error
+
+type Stream struct{ /* unexported */ }
+
+func (s *Stream) Write(p []byte) (int, error)
+func (s *Stream) WriteString(v string) (int, error)
+func (s *Stream) Flush() error
+func (s *Stream) Context() context.Context
+
+func (c *Ctx) SSE(heartbeat time.Duration, fn func(s *SSE) error) error
+
+type SSE struct{ /* unexported */ }
+
+type Event struct {
+    ID    string
+    Event string
+    Data  string
+    Retry time.Duration
+}
+
+func (x *SSE) Send(ev Event) error
+func (x *SSE) Context() context.Context
+```
+
+`Stream` sends a response body in pieces; `SSE` is server-sent events built on it, setting
+`Content-Type: text/event-stream` and `Cache-Control: no-cache` before recording its callback. Both
+call `c.poison.check()` first and record `fn` — and, for `SSE`, the heartbeat — rather than run it.
+Set the status and headers before calling either; with no status set it is 200. Return the call's
+result from the handler:
+
+```go
+app.GET("/events", func(c *rice.Ctx) error {
+    last := string(c.Header("Last-Event-ID")) // copied before the stream starts
+    return c.SSE(15*time.Second, func(s *rice.SSE) error {
+        for {
+            select {
+            case <-s.Context().Done():
+                return nil
+            case ev := <-updatesSince(last):
+                if err := s.Send(ev); err != nil {
+                    return err
+                }
+            }
+        }
+    })
+})
+```
+
+**When `fn` runs.** `fn` runs on its own goroutine, and only after this `Ctx` has been released, so
+it must not call any method of `c` — under `-tags ricedebug` it panics if it does, the same
+use-after-release panic any other late call gets. Anything `fn` needs from the request must be read
+and copied in the handler first, as `Last-Event-ID` is above. `fn` never runs at all when the
+handler returns an error, a middleware settles the request with `HandleError`, the handler panics, or
+the request is HEAD: the funnel already answered, or the headers are the whole answer. A nil `fn`,
+or a second `Stream`/`SSE` call in the same request, panics; `SSE` with a negative heartbeat panics,
+and a zero heartbeat disables it.
+
+**The stream's context.** `Stream.Context` and `SSE.Context` (the same context, through `SSE`)
+return a context that is cancelled when Shutdown begins, when Shutdown force-closes the connections,
+when a write fails because the client has gone, and when `fn` returns. It is not `c.Context()`: that
+may be a middleware's, cancelled as soon as the handler returns — before the stream even starts — so
+a deadline or a value a middleware put there never reaches `fn`. See
+[ADR-0019](adr/0019-streams-run-after-the-handler.md).
+
+**What middleware sees.** The handler returns, and every middleware and the error funnel finish,
+before the stream is written: `middleware.Logger`'s duration ends there, `middleware.Timeout`'s
+deadline does not cover the stream, and `middleware.Recover` does not cover `fn` — rice's own
+recovery does instead, logging a panic with its stack, and an error unless the stream's context was
+already cancelled. Headers set by middleware before `next` are sent with the stream.
+
+A `Stream` (and the `SSE` built on it) is valid only while `fn` runs. Once `fn` returns, `Write`,
+`WriteString`, `Flush` and `Send` each return an error without touching the underlying writer,
+because fasthttp may by then have put it back in a pool serving another response.
+
 ---
 
 ## 3. Middleware
