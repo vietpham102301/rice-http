@@ -59,6 +59,7 @@ any, and whether a middleware has already settled the request's error with `Hand
 | `Accepts(offers ...string) string` | the offer `Accept` prefers, or `""` | 0 | adds `Vary: Accept`; see ADR-0018 |
 | `Body() []byte` | request body | 0 | borrowed, may be empty on streamed bodies |
 | `ClientIP() net.IP` | connection peer address | 0 | borrowed, reads no header |
+| `Route() string` | matched route pattern | 0 | owned by the App, safe to keep; "" on a miss |
 | `Context() context.Context` | the context for work this request triggers | 0 | **owned** — safe to keep, see below |
 
 `Accepts` is the one read that writes: it adds `Vary: Accept` to the response, once, so a cache keys
@@ -69,8 +70,10 @@ handler with nothing acceptable returns `ErrNotAcceptable`, a 406.
 The pattern is consistent and worth stating once: **byte-returning methods are free and
 borrowed; string-returning methods copy and are yours.** Nothing in rice returns a string
 that secretly aliases a buffer. `ClientIP` follows the rule — a `net.IP` is a `[]byte`, and it
-is borrowed like every other one. `Context` is the single row that does not, and it has its own
-section below.
+is borrowed like every other one. `Context` and `Route` are the two rows that do not: `Context`
+has its own section below, and `Route` returns a string that costs nothing to return precisely
+because it copies nothing — it is a value the `App` already owns and keeps for as long as it
+runs, not a view into the request that would need copying to outlive the handler.
 
 `ClientIP` reports the address the connection came from, and reads no header. Behind a reverse
 proxy that is the proxy's address, which is the honest answer: trusting `X-Forwarded-For` by

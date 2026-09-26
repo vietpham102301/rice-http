@@ -50,3 +50,4 @@ Date: YYYY-MM-DD
 | [0017](0017-static-files-wrap-fasthttp-fs.md) | Static files wrap fasthttp.FS behind the error funnel | Accepted |
 | [0018](0018-accepts-negotiates-by-q-and-adds-vary.md) | Accepts picks by the client's q, breaks ties by the server's order, and adds Vary | Accepted |
 | [0019](0019-streams-run-after-the-handler.md) | Streams run after the handler, on their own context, and stop when Shutdown begins | Accepted |
+| [0020](0020-otel-in-its-own-module.md) | OpenTelemetry lives in its own module, on the API only, keyed by the matched route | Accepted |

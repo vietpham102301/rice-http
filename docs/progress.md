@@ -16,6 +16,61 @@ Each entry uses this shape:
 
 ---
 
+## 2026-09-26 — post-M8 — OpenTelemetry in its own module
+
+**Did:** `(*Ctx).Route() string` in core: each method's tree now stores a `routeEntry{h Handler;
+pattern string}` instead of a bare `Handler`, `lookup`/`lookupEntry` return the entry, and `handle`
+sets `c.route` from it — the pattern as registered and joined with its group's prefix, `""` on a
+miss, cleared by `reset`. `Route` calls `c.poison.check()` first and costs 0 allocations, pinned by
+`TestAllocBudgetCtxRoute`; every existing dispatch budget was re-measured and did not move. A
+separate Go module, `otelrice/`, requiring only the OpenTelemetry API
+(`go.opentelemetry.io/otel`, `/trace`, `/metric`) and semconv v1.40.0 — the SDK appears only in its
+own tests — with `Middleware(opts ...Option) rice.Middleware` and three options,
+`WithTracerProvider`, `WithMeterProvider` and `WithPropagators`, defaulting to OpenTelemetry's
+globals; a nil option panics with a `rice: otelrice:` message. One request: extract the caller's
+trace context through a carrier over `fasthttp.RequestHeader`; start a server span named
+`"{method} {route}"`, or `"{method}"` alone on a miss, an unknown method recorded as `_OTHER` in
+`http.request.method` and named `"HTTP"`, the real verb kept in `http.request.method_original` on
+the span only; install the span's context with `c.SetContext`; run the chain, settling a returned
+error with `c.HandleError` as `middleware.Logger` does; restore the previous context; set the
+semconv v1.40.0 attributes, the sampler-relevant ones at span start and the rest once the chain has
+run, never the query string; mark the span Error and set `error.type` for a status of 500 or above,
+recording the returned error too; record `http.server.request.duration`; end the span in a
+deferred call, so a panic reaching this frame — no `Recover` inside it — finishes it exactly as a
+normal 500 response does, through the same helper, before the panic keeps unwinding. Installed
+outermost, so its span covers every other middleware; for `c.Stream`/`c.SSE` the span ends when the
+handler returns, the same limit `middleware.Logger` has (ADR-0019 D8). `otelrice/go.mod` requires
+rice at the zero pseudo-version with `replace github.com/vietpham102301/rice-http => ../`, as
+`bench/compare/go.mod` does. The Makefile gained an `otelrice` step in `test`, `test-debug` and
+`lint`, and CI runs it and checks `otelrice/go.mod` is tidy.
+[ADR-0020](adr/0020-otel-in-its-own-module.md) records the decision; `03-core-concepts.md` gets
+`Route` in the read-side table; `05-performance-model.md` gets `c.Route` at 0 and otelrice's three
+budgets and its benchmark median under *Opt-in packages*; `04-roadmap.md` gets the *Done after M8*
+entry; the README gets an OpenTelemetry section; the ADR index gets a row.
+
+**Learned:**
+
+1. The route pattern is what makes the output usable at all: without it, a span name or a metric's
+   attributes would carry the raw request path, which is unbounded — one metric series per user id
+   rather than per route, the cardinality a Prometheus-shaped backend cannot absorb.
+2. The cost is mostly OpenTelemetry's own API, not rice's: even with no-op providers that record
+   nothing, `Middleware` costs 11 allocations building a span's context and the attribute slices,
+   and 13 with a `traceparent` header for the propagator to parse.
+3. `go mod tidy` resolved OpenTelemetry Go v1.46.0, not the v1.43.0 the design's own probe used —
+   the API had moved between probing and building, and the module is pinned at what `tidy` actually
+   resolved rather than at what was first tried.
+
+**Measured:** (darwin/arm64, Apple M2 Pro, go1.25.6; three runs each mode) `TestAllocBudgetCtxRoute`
+(core): 0. `otelrice`: `TestAllocBudgetNoop` (no-op providers, no `traceparent`) 11 both modes;
+`TestAllocBudgetNoopTraceparent` 13 both modes; `TestAllocBudgetSDK` (SDK with an in-memory span
+recorder and a manual metric reader) 19 without `-race`, 21 with. `BenchmarkMiddleware` (no-op
+providers): median 651.25 ns/op, 1088 B/op, 11 allocs/op over ten runs; no results file committed,
+cited in prose. Core coverage from `make cover`: 99.6%.
+
+**Next:** auth and rate limiting middleware, each needing a brainstorm of its own.
+
+---
+
 ## 2026-09-26 — post-M8 — Streaming and server-sent events
 
 **Did:** `(*Ctx).Stream(fn func(s *rice.Stream) error) error` and

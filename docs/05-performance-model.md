@@ -75,6 +75,7 @@ Every exported method of `Ctx`, one row each.
 | `c.Accepts` | 0 | MEASURED after M8 | `TestAllocBudgetAccepts`, `TestAllocBudgetAcceptsNoHeader`, `TestAllocBudgetAcceptsTwice` |
 | `c.Stream` / `c.SSE` (opening a stream, through the dispatch path) | 12 | MEASURED after M8 | `TestAllocBudgetStreamSetup` |
 | `SSE.Send` | 0 | MEASURED after M8 | `TestAllocBudgetSSESend` |
+| `c.Route` | 0 | MEASURED after M8 | `TestAllocBudgetCtxRoute` |
 
 The four M8 rows are new tests, not new code: `Status`, `SetHeader` and `SetContentType` write
 into fasthttp's reused response header, and `RequestCtx` returns a field. Each was broken once on
@@ -256,6 +257,9 @@ this cost, and a user who never imports the package pays none of it.
 | `middleware.CORS(corsBudgetConfig)`, a request with no `Origin` | 0, exactly, with and without `-race` | MEASURED after M8 | `TestAllocBudgetCORSNoOrigin` |
 | `middleware.CORS(corsBudgetConfig)`, a real request from the allowed origin | 0, exactly, with and without `-race` | MEASURED after M8 | `TestAllocBudgetCORSAllowedOrigin` |
 | `middleware.CORS(corsBudgetConfig)`, a preflight from the allowed origin | 0, exactly, with and without `-race` | MEASURED after M8 | `TestAllocBudgetCORSPreflight` |
+| `otelrice.Middleware()`, no-op providers, no `traceparent` | at most 11 | MEASURED after M8 | `TestAllocBudgetNoop` |
+| `otelrice.Middleware()`, no-op providers, a `traceparent` | at most 13 | MEASURED after M8 | `TestAllocBudgetNoopTraceparent` |
+| `otelrice.Middleware()`, SDK with an in-memory span recorder and a manual metric reader | at most 21 (measured 19 without `-race`, 21 with) | MEASURED after M8 | `TestAllocBudgetSDK` |
 
 **Why it allocates at all.** `DisallowUnknownFields` exists only on `json.Decoder`, not on
 `json.Unmarshal`, so a strict decode needs a `Decoder` and a `bytes.Reader` for it to read from,
@@ -443,6 +447,27 @@ B/op and 0 allocs/op over ten runs, on darwin/arm64 (Apple M2 Pro, go1.25.6). No
 committed for it; the figure is cited here in prose instead. Measured on darwin arm64 only; no Linux
 container run was taken for this feature. See
 [ADR-0019](adr/0019-streams-run-after-the-handler.md).
+
+#### `otelrice`
+
+**Outside core, and outside the zero-allocation claim.** `otelrice` is a separate module — core's
+`go.mod` does not change — and its `Middleware` costs allocations even with no SDK installed, because
+most of the cost is the OpenTelemetry API's own: building a span's context, the attribute slices, and
+the histogram record call. Three fixtures, each a full dispatch through `Middleware` around a handler
+that returns at once, warmed once before `AllocsPerRun`: with no-op providers (`otel`'s defaults, which
+record nothing) and no `traceparent` header, 11; the same request with a `traceparent` header, so the
+propagator's W3C parse runs too, 13; and with an SDK tracer provider using an in-memory span recorder
+and an SDK meter provider using a manual metric reader — the closest a test gets to a real exporter —
+19 without `-race` and 21 with it. Unlike `binding.JSON`'s row, these three are ceilings, not exact
+pins in both directions: `TestAllocBudgetNoop`, `TestAllocBudgetNoopTraceparent` and
+`TestAllocBudgetSDK` each fail only when the count rises above 11, 13 and 21, so a cheaper future
+OpenTelemetry release would pass silently rather than flag the improvement. `BenchmarkMiddleware`, no-op
+providers, an otherwise identical dispatch: median 651.25 ns/op, 1088 B/op, 11 allocs/op over ten runs.
+No results file is committed for it, so the figure is cited here in prose. All four were measured on
+darwin/arm64 (Apple M2 Pro, go1.25.6) only; no Linux container run was taken for this package.
+`otelrice`'s own `alloc_test.go` is excluded under `ricedebug`, the same exclusion `alloc_test.go` at
+the root has, because the debug build disables the `Ctx` pool and would measure that instead of the
+middleware. See [ADR-0020](adr/0020-otel-in-its-own-module.md).
 
 ## The techniques, and what each one costs
 

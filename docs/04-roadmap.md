@@ -287,3 +287,17 @@ Outside any milestone, because the API was already written down in
   returns unless the stream's context was already cancelled. `SSE.Send` costs zero allocations.
   [ADR-0019](adr/0019-streams-run-after-the-handler.md) records the decision and the alternatives
   that lost.
+- `c.Route() string` in core, and the separate module `otelrice`, the first of the observability
+  middleware the roadmap's completion left for its own brainstorm. `Route` reports the pattern a
+  request matched — as registered and joined with its group's prefix, `"/users/:id"`, or `""` on a
+  miss — from a `routeEntry` each method's tree now stores instead of a bare `Handler`; it costs zero
+  allocations, pinned by `TestAllocBudgetCtxRoute`, and no existing dispatch budget moved. Without it,
+  an integration keyed by path would have had to use the raw request path, which is unbounded — one
+  metric series per user id. `otelrice.Middleware()` starts a server span and records
+  `http.server.request.duration` for each request, named and attributed by the matched route rather
+  than the path, following the OpenTelemetry HTTP semantic conventions. It lives in its own module,
+  `github.com/vietpham102301/rice-http/otelrice`, requiring only the OpenTelemetry API and semconv
+  v1.40.0 — the SDK appears only in its tests — so core's `go.mod` is untouched and a user who does not
+  import `otelrice` pays nothing for it. [ADR-0020](adr/0020-otel-in-its-own-module.md) records why a
+  separate module, why the route rather than the path, and the placement and stream limits that follow
+  from `middleware.Logger`'s own (ADR-0019 D8).

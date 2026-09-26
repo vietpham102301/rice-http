@@ -303,6 +303,54 @@ silently disconnected is noticed — fasthttp reports a closed connection only o
 `rice.WithWriteTimeout` limits a streamed response as a whole, not each write, so an App serving
 long-lived streams leaves it at zero or serves its streams from a separate App.
 
+## OpenTelemetry
+
+The opt-in `otelrice` module traces and measures requests with OpenTelemetry, keyed by the matched
+route rather than the raw request path, so `/users/:id` is one span name and one metric series no
+matter how many ids it serves. It depends on the OpenTelemetry API only; with no SDK installed, the
+global providers are no-ops and `otelrice.Middleware()` costs a few allocations and records nothing.
+
+**Not yet published.** `otelrice/go.mod` requires rice through `replace
+github.com/vietpham102301/rice-http => ../`, the same shape `bench/compare` uses, so it resolves only
+inside a checkout of this repository. It becomes installable with `go get` once a core release tags
+`Route` and `otelrice` is tagged in turn (`otelrice/vX.Y.Z`); until then, build against it from a clone
+of this repository rather than `go get`ting it.
+
+Install an SDK tracer provider with an OTLP exporter and set it global, then put the middleware
+outermost so its span covers every other middleware:
+
+```go
+import (
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+
+	"github.com/vietpham102301/rice-http/otelrice"
+)
+
+exp, err := otlptracegrpc.New(ctx)
+if err != nil {
+	log.Fatal(err)
+}
+tp := sdktrace.NewTracerProvider(sdktrace.WithBatcher(exp))
+defer tp.Shutdown(ctx)
+
+otel.SetTracerProvider(tp)
+otel.SetTextMapPropagator(propagation.TraceContext{})
+
+app.Use(
+	otelrice.Middleware(),
+	middleware.Logger(l),
+	middleware.Recover(),
+	middleware.RealIP(1),
+)
+```
+
+The span is named `"{method} {route}"`, or the method alone on a route miss, and never carries the
+query string, in a span attribute or a metric. See
+[ADR-0020](docs/adr/0020-otel-in-its-own-module.md).
+
 ## Graceful shutdown
 
 `RunContext` serves until a context is done, then shuts down, giving in-flight requests a grace
