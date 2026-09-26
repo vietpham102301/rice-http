@@ -56,9 +56,15 @@ any, and whether a middleware has already settled the request's error with `Hand
 | `ParamString(name string) string` | route param | 1 | copies, safe to keep |
 | `Query(name string) []byte` | query value | 0 | borrowed |
 | `Header(name string) []byte` | request header | 0 | borrowed |
+| `Accepts(offers ...string) string` | the offer `Accept` prefers, or `""` | 0 | adds `Vary: Accept`; see ADR-0018 |
 | `Body() []byte` | request body | 0 | borrowed, may be empty on streamed bodies |
 | `ClientIP() net.IP` | connection peer address | 0 | borrowed, reads no header |
 | `Context() context.Context` | the context for work this request triggers | 0 | **owned** — safe to keep, see below |
+
+`Accepts` is the one read that writes: it adds `Vary: Accept` to the response, once, so a cache keys
+the response by the header it depended on. It follows RFC 9110 — the most specific matching range sets
+an offer's quality, `q=0` refuses it, the highest quality wins, and a tie goes to the earlier offer. A
+handler with nothing acceptable returns `ErrNotAcceptable`, a 406.
 
 The pattern is consistent and worth stating once: **byte-returning methods are free and
 borrowed; string-returning methods copy and are yours.** Nothing in rice returns a string
@@ -555,6 +561,8 @@ earlier when a middleware settles it with `c.HandleError` — whose default beha
    `*HTTPError` with no wrapped cause → respond with its own code. Both are checked with a
    type switch in front of the fallback below, which is what every error this funnel builds
    for itself (`ErrNotFound`, a fresh `NewHTTPError`) matches without allocating.
+   `ErrNotAcceptable` is the shared 406 in the same form, returned by a handler whose `Accepts`
+   found nothing acceptable.
 2. Otherwise, `errors.As` the error to `*PanicError` then `*HTTPError`. This is the path a
    handler-wrapped error takes (`fmt.Errorf("...: %w", err)`), and it is also the path an
    `*HTTPError` that itself wraps a cause takes, whether or not anything wraps the

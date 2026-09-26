@@ -154,7 +154,6 @@ design decisions recorded in the ADRs?
 
 Not scheduled, not promised. Each would need its own brainstorm.
 
-- Content negotiation
 - Streaming and server-sent events
 
 ## Done after M8
@@ -267,3 +266,9 @@ Outside any milestone, because the API was already written down in
   until told to stop, so rice wraps it and owns each edge: every failure reaches the ErrorHandler,
   the redirect is rice's 301, and Shutdown stops the goroutine
   ([ADR-0017](adr/0017-static-files-wrap-fasthttp-fs.md)).
+- `c.Accepts(offers ...string)` and `ErrNotAcceptable`: a handler answers the same resource in the
+  format the request's `Accept` header prefers, by RFC 9110's rules, and `Vary: Accept` is added for
+  it. Probing found that fasthttp's `Peek` reads only the first of several `Accept` lines and that the
+  ricedebug walker could not call a variadic method; the matching reads every line, and the walker
+  uses `CallSlice`. Zero allocations, and nothing stored on `Ctx`
+  ([ADR-0018](adr/0018-accepts-negotiates-by-q-and-adds-vary.md)).

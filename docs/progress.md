@@ -16,6 +16,73 @@ Each entry uses this shape:
 
 ---
 
+## 2026-09-26 — post-M8 — Accepts negotiates the response format
+
+**Did:** `(*Ctx).Accepts(offers ...string) string` and `ErrNotAcceptable`, a shared `*HTTPError`
+built once like `ErrNotFound`. `Accepts` calls `c.poison.check()` first, then walks the request's
+`Accept` header — every line `PeekAll` returns, not just the first — matching each offer against
+every element by RFC 9110 §12.5.1: the most specific range wins (`type/subtype` 3 > `type/*` 2 >
+`*/*` 1, first among equals), `q=0` excludes, the highest quality wins, and a tie goes to the
+earlier offer; no header, or only blank `Accept` lines, gives the first offer. An offer that is
+not `type/subtype`, or whose type or subtype is `*`, panics with the `rice: ` prefix, checked even
+when there is no `Accept` header so a bad offer fails on the first request rather than the first
+one that sends the header. Quality is parsed straight into thousandths — no float, no
+`strconv` — by `parseQ`, which accepts exactly RFC 9110's `qvalue` grammar. `Accepts` adds
+`Vary: Accept` with `Add`, once, whatever it returns and whether or not the request sent `Accept`,
+unless a `Vary` line already lists `Accept` in any case or `*`; it adds rather than sets, so a
+`Vary: Origin` a handler or CORS wrote first survives. It writes no status: a handler with
+nothing acceptable returns `ErrNotAcceptable`, answered 406 through the same funnel as every other
+error. It stores nothing on `Ctx` and allocates nothing. `ctx_accept_test.go`'s tests group into
+the matching table (`TestAcceptsMatchesByRFC9110`, 30 cases including curl's `*/*`, a wildcard
+`q=0`, and a 50-range header where only the last element matters), `parseQ` (`TestParseQ`),
+panics (`TestAcceptsPanicsOnABadOffer`, `TestAcceptsValidatesOffersWithoutAnAcceptHeader`), `Vary`
+(`TestAcceptsAddsVaryAccept`, `TestAcceptsAddsVaryWithoutAnAcceptHeader`,
+`TestAcceptsKeepsAVaryTheHandlerSet`, `TestA406KeepsVaryAccept`), the funnel
+(`TestErrNotAcceptableAnswers406`), and a fuzz target (`FuzzAccepts`). Four budgets —
+`TestAllocBudgetAccepts`, `TestAllocBudgetAcceptsNoHeader`, `TestAllocBudgetAcceptsTwice`,
+`TestAllocBudgetNotAcceptable` — and a benchmark, `BenchmarkCtxAccepts`, negotiating two offers
+against Chrome's six-element `Accept` header. Fixing `TestEveryCtxMethodPanicsAfterRelease` for a
+variadic method changed `ricedebug_test.go`'s walker to call `CallSlice` instead of `Call` when a
+method's last parameter is variadic. [ADR-0018](adr/0018-accepts-negotiates-by-q-and-adds-vary.md)
+records the decision; `03-core-concepts.md` gets the `Accepts` row in §2's read-side table, its own
+paragraph, and a sentence on `ErrNotAcceptable` in §7; `05-performance-model.md` pins the four
+budgets and the benchmark in the `Ctx` methods and dispatch tables; `04-roadmap.md` moves the item
+from *Explicitly deferred* to *Done after M8*; the ADR index gets a row.
+
+**Learned:** Three things, plus one surprise.
+
+1. fasthttp's `Header.Peek` reads only the first `Accept` line; a request with several separate
+   `Accept:` header lines (legal, if unusual) has its later lines silently ignored. `Accepts` uses
+   `PeekAll` and matches every line the client sent.
+2. `reflect.Call` cannot call a variadic method with a zero-length slice for its variadic
+   parameter: it tries to spread that slice as the sole argument to a `...string` parameter and
+   panics inside `reflect` before the method body runs, which hid the use-after-release panic
+   `TestEveryCtxMethodPanicsAfterRelease` exists to catch. `CallSlice` passes the slice as the
+   variadic argument itself.
+3. The matching needs no float and no buffer. A `qvalue` is at most three decimal digits, so
+   `parseQ` returns thousandths as a plain `int`, and each offer is checked against the header's
+   bytes directly, with no intermediate slice — one scan per offer, nothing kept between calls.
+4. Surprise met writing this documentation: `make cover`'s root-package figure is 99.3%, not the
+   99.5% this plan's brief expected. It is not a regression from this task — nothing here touched
+   code — but a gap already present in the branch's `ctx_accept.go`, at `trimOWSString` (80.0%)
+   and `matchRange` (96.2%); the figure below reports what was measured, not what was expected.
+
+**Measured:** `TestAllocBudgetAccepts`, `TestAllocBudgetAcceptsNoHeader`,
+`TestAllocBudgetAcceptsTwice` and `TestAllocBudgetNotAcceptable`: 0 allocations each, with and
+without `-race`. `BenchmarkCtxAccepts`: median 592.9 ns/op, 0 B/op, 0 allocs/op over ten runs, on
+darwin/arm64 (Apple M2 Pro, go1.25.6) — a full dispatch negotiating two offers against Chrome's
+header and adding `Vary`; a CPU profile put the `Accept` scanning (`nextItem`, `matchRange`) at
+about 79% of that time and dispatch plus fasthttp's header plumbing at about 15%. No results file
+was committed for it; the figure is cited here and in `05-performance-model.md` in prose instead.
+`FuzzAccepts` ran 60 s and found no failure over 7,365,570 executions. `make cover`: root package
+99.3% (99.3% total across modules) — below the 99.5% this plan expected; the shortfall is in code
+already committed on this branch (`trimOWSString` at 80%, `matchRange` at 96.2%), not in anything
+this documentation task touched, and is noted rather than silently rounded up.
+
+**Next:** streaming and server-sent events, the last deferred item, which needs its own brainstorm.
+
+---
+
 ## 2026-09-25 — post-M8 — Static files wrap fasthttp.FS
 
 **Did:** `App.Static(prefix, fsys, mw...)` and `Group.Static`, serving an `fs.FS` — `os.DirFS` for
