@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"time"
 )
@@ -111,10 +112,18 @@ func (a *App) Serve(ln net.Listener) error {
 // A grace of zero cuts every in-flight request off at once. A negative grace
 // panics.
 //
+// With WithDrainDelay(d), RunContext gives Shutdown d plus grace: the App
+// first goes on serving, not ready, for d, and grace still counts from the
+// moment the listener closes. The whole shutdown lasts up to d plus grace plus
+// the time the OnShutdown hooks take; on Kubernetes the pod's
+// terminationGracePeriodSeconds must exceed that, or the process is killed
+// mid-drain.
+//
 // If Shutdown is called elsewhere, RunContext waits for it to drain and run
 // the OnShutdown hooks, then returns nil; that Shutdown's result goes to its
-// own caller. If ctx ends during that wait, RunContext shuts down with grace
-// as usual, which cuts the other Shutdown's drain short at grace.
+// own caller. If ctx ends during that wait, RunContext shuts down with the
+// drain delay plus grace as usual, which cuts the other Shutdown's drain short
+// at that.
 //
 // RunContext never returns while OnShutdown hooks are running, whichever
 // Shutdown runs them, so a program that exits when RunContext returns does not
@@ -186,7 +195,13 @@ func (a *App) awaitRunningHooks() {
 // is not derived from RunContext's: that is already done, and the grace period
 // is new time.
 func (a *App) shutdownWithin(grace time.Duration) error {
-	ctx, cancel := context.WithTimeout(context.Background(), a.drainDelay+grace)
+	// Saturate rather than wrap: a practically unbounded grace plus the delay
+	// must not become a negative timeout that force-closes at once.
+	total := a.drainDelay + grace
+	if total < grace {
+		total = math.MaxInt64
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), total)
 	defer cancel()
 	return a.Shutdown(ctx)
 }
@@ -205,6 +220,13 @@ func (a *App) Addr() string {
 // Shutdown stops accepting new connections and waits for in-flight requests to
 // finish, or for ctx to end, whichever comes first. It returns nil after a clean
 // drain and an error wrapping ErrShutdownTimeout when ctx ended first.
+//
+// With WithDrainDelay(d), and an App that was ready, Shutdown first turns Ready
+// off and goes on accepting and serving for d, every response closing its
+// connection, before it stops accepting. One ctx covers both phases: to give
+// in-flight requests a grace after the listener closes, pass a ctx that lasts
+// d plus that grace, as RunContext does. A ctx that ends during the delay cuts
+// it short.
 //
 // Nothing is served after Shutdown returns, whatever it returns. When ctx ends
 // before the drain does, Shutdown closes every connection still open, busy or

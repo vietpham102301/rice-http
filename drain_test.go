@@ -3,6 +3,7 @@ package rice_test
 import (
 	"context"
 	"errors"
+	"math"
 	"net"
 	"net/http"
 	"testing"
@@ -235,4 +236,44 @@ func TestWithDrainDelayPanicsOnANegativeDuration(t *testing.T) {
 		}
 	}()
 	rice.WithDrainDelay(-1)
+}
+
+func TestRunContextWithAnUnboundedGraceStillDrains(t *testing.T) {
+	started := make(chan struct{})
+	app := rice.New(rice.WithDrainDelay(100 * time.Millisecond))
+	app.GET("/slow", func(c *rice.Ctx) error {
+		close(started)
+		time.Sleep(300 * time.Millisecond)
+		return c.String(200, "done")
+	})
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	ran := make(chan error, 1)
+	go func() { ran <- app.RunContext(ctx, addr, math.MaxInt64) }()
+	waitForAddr(t, app)
+
+	got := make(chan int, 1)
+	go func() {
+		resp, err := http.Get("http://" + addr + "/slow")
+		if err != nil {
+			got <- 0
+			return
+		}
+		resp.Body.Close()
+		got <- resp.StatusCode
+	}()
+	<-started
+	cancel()
+	if code := within(t, 3*time.Second, "the slow request", got); code != 200 {
+		t.Errorf("the in-flight request got %d, want 200: a grace of MaxInt64 plus the delay must not wrap", code)
+	}
+	if err := within(t, 3*time.Second, "RunContext", ran); err != nil {
+		t.Errorf("RunContext: %v", err)
+	}
 }
