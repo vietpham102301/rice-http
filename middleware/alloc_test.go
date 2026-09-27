@@ -268,11 +268,12 @@ func TestAllocBudgetCORSPreflight(t *testing.T) {
 }
 
 // TestAllocBudgetBasicAuth pins BasicAuth accepting a request whose identity
-// is a pointer: the decoded credentials and the user and password strings
-// handed to Validate. Measured at 2 on darwin arm64 (go1.25.6), with and
-// without -race.
+// is a pointer: one string holding the decoded credentials, from which the
+// user and password handed to Validate are sliced. The decode buffer is a
+// fixed array on the stack. Measured at 1 on darwin arm64 (go1.25.6), with
+// and without -race.
 func TestAllocBudgetBasicAuth(t *testing.T) {
-	const want float64 = 2
+	const want float64 = 1
 
 	u := &user{name: "ann"}
 	mw := middleware.BasicAuth(middleware.BasicAuthConfig[*user]{Key: userKey, Validate: func(context.Context, string, string) (*user, bool, error) { return u, true, nil }})
@@ -309,5 +310,20 @@ func TestAllocBudgetAuthRejects(t *testing.T) {
 	k := measure(t, middleware.KeyAuth(middleware.KeyAuthConfig[*user]{Key: userKey, Validate: neverKey}), nil)
 	if b != want || k != want {
 		t.Errorf("a 401 allocated %.1f (BasicAuth) and %.1f (KeyAuth) objects per call, want exactly %.0f", b, k, want)
+	}
+}
+
+// TestAllocBudgetBasicAuthRealisticCredentials pins BasicAuth with credentials
+// longer than the compiler keeps on the stack for a variable-size make (32
+// bytes): an email and a passphrase, 46 bytes decoded. The ann:secret fixture
+// above is too short to show a decode buffer escaping.
+func TestAllocBudgetBasicAuthRealisticCredentials(t *testing.T) {
+	const want float64 = 1
+
+	u := &user{name: "alice"}
+	mw := middleware.BasicAuth(middleware.BasicAuthConfig[*user]{Key: userKey, Validate: func(context.Context, string, string) (*user, bool, error) { return u, true, nil }})
+	got := measure(t, mw, map[string]string{"Authorization": basic("alice@example.com:correct-horse-battery-staple")})
+	if got != want {
+		t.Errorf("BasicAuth allocated %.1f objects per call with realistic credentials, want exactly %.0f", got, want)
 	}
 }

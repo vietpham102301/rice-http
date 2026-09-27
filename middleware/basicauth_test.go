@@ -63,6 +63,7 @@ func TestBasicAuthParsesCredentials(t *testing.T) {
 		{"colon in the password", basic("ann:se:cr:et"), "ann", "se:cr:et"},
 		{"empty user", basic(":secret"), "", "secret"},
 		{"empty password", basic("ann:"), "ann", ""},
+		{"longer than the stack buffer", basic("ann:" + strings.Repeat("p", 200)), "ann", strings.Repeat("p", 200)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

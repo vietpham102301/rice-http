@@ -8,6 +8,10 @@ import (
 	rice "github.com/vietpham102301/rice-http"
 )
 
+// basicDecodeBuf is how many decoded bytes of Basic credentials fit on the
+// stack; longer credentials allocate their decode buffer.
+const basicDecodeBuf = 128
+
 // BasicAuthConfig is what BasicAuth needs. Key and Validate are required.
 //
 // Validate receives the request's context — carrying a Timeout's deadline or
@@ -76,18 +80,27 @@ func BasicAuth[T any](cfg BasicAuthConfig[T]) rice.Middleware {
 				return unauthorized(c, challenge)
 			}
 			enc = trimOWS(enc)
-			dec := make([]byte, base64.StdEncoding.DecodedLen(len(enc)))
+			// Decode into a fixed buffer on the stack; a variable-size make
+			// stays on the stack only up to 32 bytes, and an email and a
+			// passphrase are longer. Credentials beyond the buffer take the
+			// allocating path.
+			var buf [basicDecodeBuf]byte
+			dec := buf[:]
+			if l := base64.StdEncoding.DecodedLen(len(enc)); l > len(buf) {
+				dec = make([]byte, l)
+			}
 			n, err := base64.StdEncoding.Decode(dec, enc)
 			if err != nil {
 				return unauthorized(c, challenge)
 			}
-			dec = dec[:n]
-			i := bytes.IndexByte(dec, ':')
+			i := bytes.IndexByte(dec[:n], ':')
 			if i < 0 {
 				return unauthorized(c, challenge)
 			}
 
-			id, ok, err := validate(c.Context(), string(dec[:i]), string(dec[i+1:]))
+			// One copy for both halves: Validate may keep them.
+			creds := string(dec[:n])
+			id, ok, err := validate(c.Context(), creds[:i], creds[i+1:])
 			if err != nil {
 				return err
 			}
