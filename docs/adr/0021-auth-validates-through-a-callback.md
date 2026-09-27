@@ -78,4 +78,4 @@ stack buffer, longer ones add the buffer); KeyAuth accepting a Bearer request, 1
 that logs its arguments — or wraps them into the error it returns, which the default error handler
 logs — leaks credentials; the doc comments say so, and rice cannot check it.
 
-**Brute force is the next design.** Rate limiting is separate middleware with state of its own.
+**Brute force is the next design.** Rate limiting is separate middleware with state of its own; it is ADR-0022.

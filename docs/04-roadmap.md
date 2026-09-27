@@ -309,4 +309,11 @@ Outside any milestone, because the API was already written down in
   reads `Authorization: Bearer` or a named header and never the query string. Both sit inside CORS,
   which answers a preflight without calling `next`, so a preflight never needs credentials and a 401
   carries the CORS headers. A 401 for a request without credentials costs zero allocations
-  ([ADR-0021](adr/0021-auth-validates-through-a-callback.md)). Rate limiting is next.
+  ([ADR-0021](adr/0021-auth-validates-through-a-callback.md)).
+- `middleware.RateLimit`, the second security middleware and the first with state across requests.
+  GCRA — a burst, then one request per interval, a refused request not charged — behind a
+  `RateLimitStore` that runs the algorithm in one step, so a shared store later needs no retry loop.
+  `MemoryStore` shards its keys and sweeps expired ones during `Take`, with no goroutine to stop. The
+  default key is the client address, IPv6 to its /64; a `KeyFunc` counts by identity. A 429 carries
+  `Retry-After`; a store error is a 500. 1 allocation allowed or refused, 0 for `Take`
+  ([ADR-0022](adr/0022-rate-limiting-is-gcra-behind-a-store.md)).

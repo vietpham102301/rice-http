@@ -218,6 +218,43 @@ hash, never `==`, and keep credentials out of the error it returns, which the de
 logs. Accepting a request costs 1 allocation for either middleware; a 401 for a request without
 credentials costs none ([ADR-0021](docs/adr/0021-auth-validates-through-a-callback.md)).
 
+### Rate limiting
+
+`RateLimit` admits a burst and then a steady rate per client, and answers the rest with `429 Too Many
+Requests` and a `Retry-After`:
+
+```go
+app.Use(
+	middleware.RealIP(1),
+	middleware.CORS(corsCfg),
+	middleware.RateLimit(middleware.RateLimitConfig{
+		Limit: middleware.Limit{Rate: 100, Per: time.Minute, Burst: 20},
+	}),
+)
+```
+
+The default key is the client address — IPv4 whole, IPv6 to its /64 — so install `RealIP` before it
+behind a proxy. For a quota per user, install it after `KeyAuth` or `BasicAuth` with a `KeyFunc` that
+reads the identity:
+
+```go
+api := app.Group("/api",
+	middleware.KeyAuth(keyCfg),
+	middleware.RateLimit(middleware.RateLimitConfig{
+		Limit: middleware.Limit{Rate: 1000, Per: time.Hour},
+		KeyFunc: func(c *rice.Ctx) (string, error) {
+			u, _ := userKey.Get(c)
+			return u.ID, nil
+		},
+	}),
+)
+```
+
+Counts live in a `MemoryStore` by default, per process: behind a load balancer each instance counts on
+its own until a shared `RateLimitStore` is installed. A store error answers 500; to keep serving while a
+shared store is down, wrap it and return `0, nil` on error. Allowed or refused, a request costs 1
+allocation ([ADR-0022](docs/adr/0022-rate-limiting-is-gcra-behind-a-store.md)).
+
 ## Reading requests, writing JSON
 
 ```go

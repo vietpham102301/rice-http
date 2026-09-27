@@ -378,12 +378,12 @@ empty on a miss, because nothing was captured. This is what lets a logger record
 [ADR-0012](adr/0012-application-middleware-runs-on-route-misses.md).
 
 **What rice ships.** `middleware.Recover`, `middleware.RealIP`, `middleware.RequestID`,
-`middleware.Logger`, `middleware.CORS`, `middleware.Timeout`, `middleware.BasicAuth` and
-`middleware.KeyAuth`, in the opt-in `middleware` package. `BasicAuth` and `KeyAuth` check credentials
+`middleware.Logger`, `middleware.CORS`, `middleware.Timeout`, `middleware.BasicAuth`,
+`middleware.KeyAuth` and `middleware.RateLimit`, in the opt-in `middleware` package. `BasicAuth` and `KeyAuth` check credentials
 with an application callback that returns an identity, whether the credentials are good, and an
 error; they answer 401 for the second and let the funnel answer 500 for the third, and store the
 identity under a `rice.Key[T]` the handler reads
-([ADR-0021](adr/0021-auth-validates-through-a-callback.md)). Their recommended order, and the two traps in it — a panicking request is not logged
+([ADR-0021](adr/0021-auth-validates-through-a-callback.md)). `RateLimit` admits a `Limit` of requests per client address or per `KeyFunc` key with GCRA and answers the rest with 429 and `Retry-After`; its state lives behind a `RateLimitStore`, in memory by default ([ADR-0022](adr/0022-rate-limiting-is-gcra-behind-a-store.md)). Their recommended order, and the two traps in it — a panicking request is not logged
 unless `Recover` sits inside `Logger`, and `CORS` answers a preflight only from `app.Use`, because
 a preflight is a miss and a group's middleware never sees one — are in that package's
 documentation and in the [README](../README.md#the-middleware-rice-ships).

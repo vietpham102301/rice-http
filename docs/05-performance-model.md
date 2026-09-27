@@ -260,6 +260,9 @@ this cost, and a user who never imports the package pays none of it.
 | `middleware.BasicAuth`, accepting a request, pointer identity | 1, exactly, with and without `-race` | MEASURED after M8 | `TestAllocBudgetBasicAuth`, `TestAllocBudgetBasicAuthRealisticCredentials` |
 | `middleware.KeyAuth`, accepting a Bearer request, pointer identity | 1, exactly, with and without `-race` | MEASURED after M8 | `TestAllocBudgetKeyAuth` |
 | `middleware.BasicAuth` and `middleware.KeyAuth`, a request without credentials (401) | 0, exactly, with and without `-race` | MEASURED after M8 | `TestAllocBudgetAuthRejects` |
+| `middleware.RateLimit`, default key and store, an allowed request | 1, exactly, with and without `-race` | MEASURED after M8 | `TestAllocBudgetRateLimitAllowed` |
+| `middleware.RateLimit`, default key and store, a 429 | 1, exactly, with and without `-race` | MEASURED after M8 | `TestAllocBudgetRateLimitDenied` |
+| `MemoryStore.Take`, a key the store holds | 0, exactly, with and without `-race` | MEASURED after M8 | `TestAllocBudgetMemoryStoreTake` |
 | `otelrice.Middleware()`, no-op providers, no `traceparent` | at most 11 | MEASURED after M8 | `TestAllocBudgetNoop` |
 | `otelrice.Middleware()`, no-op providers, a `traceparent` | at most 13 | MEASURED after M8 | `TestAllocBudgetNoopTraceparent` |
 | `otelrice.Middleware()`, SDK with an in-memory span recorder and a manual metric reader | at most 21 (measured 19 without `-race`, 21 with) | MEASURED after M8 | `TestAllocBudgetSDK` |
@@ -463,6 +466,16 @@ let `Validate` keep what it receives, which a borrowed `[]byte` would not allow.
 fixtures is a pointer, so `Key.Set` boxes nothing; a non-pointer identity adds its own boxing. A 401 for
 a request without credentials costs nothing: the error is one shared `*rice.HTTPError`, and the
 challenge is a string built once, when the middleware is.
+
+#### `middleware.RateLimit`
+
+**1, 1 and 0.** Measured on darwin arm64 (go1.25.6), three runs each with and without `-race`, all
+equal. The one allocation, allowed or refused, is the default key: the client address's 16 bytes as a
+string, which the store keeps. A 429 adds nothing: the error is one shared `*rice.HTTPError`, and
+`Retry-After` below 100 seconds is one of strconv's preformatted numbers (the refused fixture waits under
+a minute). `MemoryStore.Take` on a key it holds is a hash, a lock and a map update. Inserting a new key
+allocates its map entry and is not pinned; neither is a `KeyFunc` of the application's, which costs
+what it costs.
 
 #### `otelrice`
 

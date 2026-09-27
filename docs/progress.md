@@ -16,6 +16,39 @@ Each entry uses this shape:
 
 ---
 
+## 2026-09-27 — post-M8 — RateLimit
+
+**Did:** `middleware.RateLimit` with `Limit{Rate, Per, Burst}`, a `KeyFunc` (default: the client
+address, IPv4 whole and IPv6 to its /64) and a `RateLimitStore` whose one method runs GCRA atomically.
+`MemoryStore` keeps a theoretical arrival time per key in 64 locked shards, relative to its creation on
+the monotonic clock, and sweeps expired keys at most once a minute per shard inside `Take`. A refusal is
+a shared 429 with `Retry-After` in whole seconds rounded up; a `KeyFunc` or store error goes to the
+funnel. Tests: GCRA against a controlled clock, sweeping, 64 concurrent takes under `-race`, the
+outcomes, the default key for IPv4, IPv6 and mapped addresses and behind RealIP, placement with CORS, a
+group and a miss, the panics, and three budgets. ADR-0022.
+
+A correction to the entry below: its **Measured** line was edited in place on the same day, from
+BasicAuth 2 to 1, when the final review found the 2 held only for short credentials. This journal is
+append-only; that edit should have been this note.
+
+**Learned:** Two things.
+
+1. *Handing the store the whole algorithm is what makes a shared store possible.* With GCRA split
+   between a middleware and a store that only reads and writes, every request to a shared store is a
+   compare-and-set loop; with `Take` owning read, decision and write, it is one script.
+2. *Expiry makes a sweeper unnecessary.* A GCRA key whose time has passed is indistinguishable from an
+   absent one, so deleting it is always safe and can happen whenever a request is already holding the
+   lock — no goroutine, and nothing for a middleware without a lifecycle to stop.
+
+**Measured:** `TestAllocBudgetRateLimitAllowed` 1, `TestAllocBudgetRateLimitDenied` 1,
+`TestAllocBudgetMemoryStoreTake` 0 — darwin arm64 (go1.25.6), three runs each with and without `-race`,
+all equal.
+
+**Next:** tag `v0.3.0` with BasicAuth, KeyAuth and RateLimit. A Redis `RateLimitStore` is a separate
+module and design, when a service runs on several instances.
+
+---
+
 ## 2026-09-27 — post-M8 — BasicAuth and KeyAuth
 
 **Did:** `middleware.BasicAuth[T]` and `middleware.KeyAuth[T]`, each configured by a struct with a
