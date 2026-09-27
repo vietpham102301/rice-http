@@ -1,6 +1,7 @@
 package middleware_test
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"testing"
@@ -264,4 +265,49 @@ func TestAllocBudgetCORSPreflight(t *testing.T) {
 		"Access-Control-Request-Headers": "authorization, content-type",
 	})
 	assertAllocBudget(t, "CORS (preflight)", got, want, 0)
+}
+
+// TestAllocBudgetBasicAuth pins BasicAuth accepting a request whose identity
+// is a pointer: the decoded credentials and the user and password strings
+// handed to Validate. Measured at 2 on darwin arm64 (go1.25.6), with and
+// without -race.
+func TestAllocBudgetBasicAuth(t *testing.T) {
+	const want float64 = 2
+
+	u := &user{name: "ann"}
+	mw := middleware.BasicAuth(middleware.BasicAuthConfig[*user]{Key: userKey, Validate: func(context.Context, string, string) (*user, bool, error) { return u, true, nil }})
+	got := measure(t, mw, map[string]string{"Authorization": basic("ann:secret")})
+	if got != want {
+		t.Errorf("BasicAuth allocated %.1f objects per call, want exactly %.0f", got, want)
+	}
+}
+
+// TestAllocBudgetKeyAuth pins KeyAuth accepting a Bearer request whose identity
+// is a pointer: the key string handed to Validate. Measured at 1 on darwin
+// arm64 (go1.25.6), with and without -race.
+func TestAllocBudgetKeyAuth(t *testing.T) {
+	const want float64 = 1
+
+	u := &user{name: "svc"}
+	mw := middleware.KeyAuth(middleware.KeyAuthConfig[*user]{Key: userKey, Validate: func(context.Context, string) (*user, bool, error) { return u, true, nil }})
+	got := measure(t, mw, map[string]string{"Authorization": "Bearer k1"})
+	if got != want {
+		t.Errorf("KeyAuth allocated %.1f objects per call, want exactly %.0f", got, want)
+	}
+}
+
+// TestAllocBudgetAuthRejects pins a request without credentials at 0 for both
+// middleware: the 401 is a shared error and the challenge a string built once
+// at construction. Measured at 0 on darwin arm64 (go1.25.6), with and without
+// -race.
+func TestAllocBudgetAuthRejects(t *testing.T) {
+	const want float64 = 0
+
+	never := func(context.Context, string, string) (*user, bool, error) { return nil, false, nil }
+	neverKey := func(context.Context, string) (*user, bool, error) { return nil, false, nil }
+	b := measure(t, middleware.BasicAuth(middleware.BasicAuthConfig[*user]{Key: userKey, Validate: never}), nil)
+	k := measure(t, middleware.KeyAuth(middleware.KeyAuthConfig[*user]{Key: userKey, Validate: neverKey}), nil)
+	if b != want || k != want {
+		t.Errorf("a 401 allocated %.1f (BasicAuth) and %.1f (KeyAuth) objects per call, want exactly %.0f", b, k, want)
+	}
 }
