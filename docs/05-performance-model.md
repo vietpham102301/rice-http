@@ -261,7 +261,7 @@ this cost, and a user who never imports the package pays none of it.
 | `middleware.KeyAuth`, accepting a Bearer request, pointer identity | 1, exactly, with and without `-race` | MEASURED after M8 | `TestAllocBudgetKeyAuth` |
 | `middleware.BasicAuth` and `middleware.KeyAuth`, a request without credentials (401) | 0, exactly, with and without `-race` | MEASURED after M8 | `TestAllocBudgetAuthRejects` |
 | `middleware.RateLimit`, default key and store, an allowed request | 1, exactly, with and without `-race` | MEASURED after M8 | `TestAllocBudgetRateLimitAllowed` |
-| `middleware.RateLimit`, default key and store, a 429 | 1, exactly, with and without `-race` | MEASURED after M8 | `TestAllocBudgetRateLimitDenied` |
+| `middleware.RateLimit`, default key and store, a 429 with a `Retry-After` under 100 s | 1, exactly, with and without `-race` | MEASURED after M8 | `TestAllocBudgetRateLimitDenied` |
 | `MemoryStore.Take`, a key the store holds | 0, exactly, with and without `-race` | MEASURED after M8 | `TestAllocBudgetMemoryStoreTake` |
 | `otelrice.Middleware()`, no-op providers, no `traceparent` | at most 11 | MEASURED after M8 | `TestAllocBudgetNoop` |
 | `otelrice.Middleware()`, no-op providers, a `traceparent` | at most 13 | MEASURED after M8 | `TestAllocBudgetNoopTraceparent` |
@@ -473,7 +473,8 @@ challenge is a string built once, when the middleware is.
 equal. The one allocation, allowed or refused, is the default key: the client address's 16 bytes as a
 string, which the store keeps. A 429 adds nothing: the error is one shared `*rice.HTTPError`, and
 `Retry-After` below 100 seconds is one of strconv's preformatted numbers (the refused fixture waits under
-a minute). `MemoryStore.Take` on a key it holds is a hash, a lock and a map update. Inserting a new key
+a minute). A longer wait — an hourly limit's 3600, say — formats a new string: 2 allocations, not
+pinned. `MemoryStore.Take` on a key it holds is a hash, a lock and a map update. Inserting a new key
 allocates its map entry and is not pinned; neither is a `KeyFunc` of the application's, which costs
 what it costs.
 

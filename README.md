@@ -252,8 +252,9 @@ api := app.Group("/api",
 
 Counts live in a `MemoryStore` by default, per process: behind a load balancer each instance counts on
 its own until a shared `RateLimitStore` is installed. A store error answers 500; to keep serving while a
-shared store is down, wrap it and return `0, nil` on error. Allowed or refused, a request costs 1
-allocation ([ADR-0022](docs/adr/0022-rate-limiting-is-gcra-behind-a-store.md)).
+shared store is down, wrap it and return `0, nil` on error. An allowed request costs 1 allocation, and
+so does a 429 whose `Retry-After` is under 100 seconds; a longer one costs 2
+([ADR-0022](docs/adr/0022-rate-limiting-is-gcra-behind-a-store.md)).
 
 ## Reading requests, writing JSON
 

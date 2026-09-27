@@ -38,7 +38,8 @@ store that needed a background goroutine would need the application to stop it.
   to throttle guessing, by identity after them for a quota. With `app.Use` it counts misses (ADR-0012).
 
 A `Limit` whose `Rate` or `Per` is not positive, whose `Burst` is negative, whose `Per/Rate` is below a
-nanosecond or whose `Burst*Per/Rate` overflows a `time.Duration` panics at construction; `MemoryStore.Take`
+nanosecond or whose `Burst*Per/Rate` exceeds about 73 years — a quarter of a `time.Duration`'s range,
+so a stored time plus one more interval plus the store's uptime cannot wrap — panics at construction; `MemoryStore.Take`
 returns an error for it.
 
 ## Alternatives
@@ -64,7 +65,8 @@ limit exactly when a shared store is under stress. The application chooses it by
 
 **Costs, pinned exactly with and without `-race`:** RateLimit allowing a request with the default key
 and store, 1 allocation (the key string); a 429, 1 (the key; `Retry-After` below 100 seconds is one of
-strconv's preformatted numbers); `MemoryStore.Take` on an existing key, 0.
+strconv's preformatted numbers; a longer wait adds its formatted string, so 2); `MemoryStore.Take` on an
+existing key, 0.
 
 **Each instance counts alone with `MemoryStore`.** Behind a load balancer of N instances a client gets
 up to N times the limit until a shared store is installed. A Redis store is a separate module.

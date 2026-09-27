@@ -315,5 +315,6 @@ Outside any milestone, because the API was already written down in
   `RateLimitStore` that runs the algorithm in one step, so a shared store later needs no retry loop.
   `MemoryStore` shards its keys and sweeps expired ones during `Take`, with no goroutine to stop. The
   default key is the client address, IPv6 to its /64; a `KeyFunc` counts by identity. A 429 carries
-  `Retry-After`; a store error is a 500. 1 allocation allowed or refused, 0 for `Take`
+  `Retry-After`; a store error is a 500. 1 allocation allowed, or refused with a `Retry-After` under
+  100 seconds (2 above it), and 0 for `Take`
   ([ADR-0022](adr/0022-rate-limiting-is-gcra-behind-a-store.md)).

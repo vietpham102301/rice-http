@@ -100,5 +100,6 @@
 // it generates an id, Logger 3 with slog's JSON handler, Logger around
 // RequestID 6, Timeout 4, CORS 0 on every branch, BasicAuth and KeyAuth 1 when
 // they accept and 0 for a request without credentials, and RateLimit 1 with
-// its default key and store, allowed or refused.
+// its default key and store, allowed or refused with a Retry-After under 100
+// seconds (2 above it).
 package middleware
