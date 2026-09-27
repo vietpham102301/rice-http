@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/valyala/fasthttp v1.73.0
-	github.com/vietpham102301/rice-http v0.0.0-00010101000000-000000000000
+	github.com/vietpham102301/rice-http v0.2.0
 	go.opentelemetry.io/otel v1.46.0
 	go.opentelemetry.io/otel/metric v1.46.0
 	go.opentelemetry.io/otel/sdk v1.46.0

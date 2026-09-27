@@ -312,13 +312,14 @@ its `go.mod` also requires fasthttp directly and, for its own tests, the SDK. Wi
 the global providers are no-ops and `otelrice.Middleware()` costs a few allocations and records
 nothing.
 
-**Not yet published.** `otelrice/go.mod` requires rice through `replace
-github.com/vietpham102301/rice-http => ../`, the same shape `bench/compare` uses, so it resolves only
-inside a checkout of this repository. It becomes installable with `go get` once a core release tags
-`Route` and `otelrice` is tagged in turn (`otelrice/vX.Y.Z`); until then, build against it from a clone
-of this repository rather than `go get`ting it. Releasing it, in order: tag core with a version that
-carries `Route`; update `otelrice/go.mod` to require that version (the `replace` stays for development
-inside this repository; a published consumer ignores it); then tag `otelrice/vX.Y.Z`.
+```sh
+go get github.com/vietpham102301/rice-http/otelrice@v0.1.0
+```
+
+`otelrice` v0.1.0 requires rice v0.2.0, the first release carrying `Route`. Its `go.mod` also keeps
+`replace github.com/vietpham102301/rice-http => ../` for development inside this repository; a
+consumer ignores it. Releasing a new version, in order: tag core with the version `otelrice` needs;
+update `otelrice/go.mod` to require it; then tag `otelrice/vX.Y.Z`.
 
 Install an SDK tracer provider and a meter provider, each with an OTLP exporter, and set both global,
 then put the middleware outermost so its span covers every other middleware. Shut both providers down
