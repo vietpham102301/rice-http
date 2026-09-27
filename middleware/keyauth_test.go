@@ -47,6 +47,7 @@ func TestKeyAuthBearer(t *testing.T) {
 		{"empty token", "Bearer ", 401, false},
 		{"only spaces", "Bearer    ", 401, false},
 		{"basic scheme", "Basic k1", 401, false},
+		{"another scheme of the same length", "Tokens k1", 401, false},
 		{"missing", "", 401, false},
 	}
 	for _, tc := range cases {

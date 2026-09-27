@@ -84,12 +84,13 @@ func TestBasicAuthParsesCredentials(t *testing.T) {
 
 func TestBasicAuthRejectsMalformedCredentialsWithoutCallingValidate(t *testing.T) {
 	cases := map[string]string{
-		"missing":        "",
-		"empty":          "Basic ",
-		"other scheme":   "Bearer abc",
-		"no space":       "Basic" + base64.StdEncoding.EncodeToString([]byte("ann:secret")),
-		"invalid base64": "Basic !!!not-base64!!!",
-		"no colon":       basic("annsecret"),
+		"missing":                           "",
+		"empty":                             "Basic ",
+		"other scheme":                      "Bearer abc",
+		"another scheme of the same length": "Other " + base64.StdEncoding.EncodeToString([]byte("ann:secret")),
+		"no space":                          "Basic" + base64.StdEncoding.EncodeToString([]byte("ann:secret")),
+		"invalid base64":                    "Basic !!!not-base64!!!",
+		"no colon":                          basic("annsecret"),
 	}
 	for name, header := range cases {
 		t.Run(name, func(t *testing.T) {
