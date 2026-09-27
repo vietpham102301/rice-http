@@ -40,8 +40,11 @@ func (l Limit) params() (interval, burst int64, msg string) {
 	if burst == 0 {
 		burst = int64(l.Rate)
 	}
-	if burst > math.MaxInt64/interval {
-		return 0, 0, "Burst * Per / Rate overflows a time.Duration"
+	// A key's stored time reaches now + burst*interval, and Take adds one
+	// more interval to it; a quarter of the range (about 73 years) leaves
+	// room for both and for the store's uptime, so the sum never wraps.
+	if burst > math.MaxInt64/4/interval {
+		return 0, 0, "Burst * Per / Rate exceeds about 73 years"
 	}
 	return interval, burst, ""
 }
@@ -112,7 +115,7 @@ type RateLimitConfig struct {
 // route misses (ADR-0012). See ADR-0022.
 //
 // A Limit with a Rate or Per that is not positive, a negative Burst, a
-// Per/Rate below one nanosecond or a Burst*Per/Rate beyond a time.Duration
+// Per/Rate below one nanosecond or a Burst*Per/Rate beyond about 73 years
 // panics.
 func RateLimit(cfg RateLimitConfig) rice.Middleware {
 	if _, _, msg := cfg.Limit.params(); msg != "" {
@@ -148,7 +151,11 @@ func RateLimit(cfg RateLimitConfig) rice.Middleware {
 // retryAfter is wait in whole seconds, rounded up so that a client that waits
 // as told is admitted, and at least 1.
 func retryAfter(wait time.Duration) int64 {
-	return max(int64((wait+time.Second-1)/time.Second), 1)
+	s := int64(wait / time.Second)
+	if wait%time.Second != 0 {
+		s++
+	}
+	return max(s, 1)
 }
 
 // clientKey is the default key: the client's IPv4 address, or its IPv6

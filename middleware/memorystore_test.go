@@ -132,6 +132,8 @@ func TestMemoryStoreRejectsALimitThatCannotWork(t *testing.T) {
 		"negative Burst":    {Rate: 1, Per: time.Second, Burst: -1},
 		"sub-ns interval":   {Rate: 2, Per: 1},
 		"overflowing burst": {Rate: 1, Per: time.Hour, Burst: math.MaxInt},
+		"Per of forever":    {Rate: 1, Per: math.MaxInt64},
+		"Per of forever, 3": {Rate: 3, Per: math.MaxInt64},
 	}
 	for name, l := range cases {
 		t.Run(name, func(t *testing.T) {

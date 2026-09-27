@@ -3,6 +3,7 @@ package middleware_test
 import (
 	"context"
 	"errors"
+	"math"
 	"net"
 	"strings"
 	"testing"
@@ -56,6 +57,7 @@ func TestRateLimitOutcomes(t *testing.T) {
 		{"a fractional wait rounds up", 1200 * time.Millisecond, 429, "2"},
 		{"a whole wait stays whole", 2 * time.Second, 429, "2"},
 		{"a wait of a nanosecond is 1", 1, 429, "1"},
+		{"the longest wait does not wrap", math.MaxInt64, 429, "9223372037"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -242,10 +244,12 @@ func TestRateLimitPlacement(t *testing.T) {
 
 func TestRateLimitPanicsOnALimitThatCannotWork(t *testing.T) {
 	cases := map[string]middleware.Limit{
-		"zero Rate":       {Per: time.Second},
-		"zero Per":        {Rate: 1},
-		"negative Burst":  {Rate: 1, Per: time.Second, Burst: -1},
-		"sub-ns interval": {Rate: 2, Per: 1},
+		"zero Rate":         {Per: time.Second},
+		"zero Per":          {Rate: 1},
+		"negative Burst":    {Rate: 1, Per: time.Second, Burst: -1},
+		"sub-ns interval":   {Rate: 2, Per: 1},
+		"overflowing burst": {Rate: 1, Per: time.Hour, Burst: math.MaxInt},
+		"Per of forever":    {Rate: 1, Per: math.MaxInt64},
 	}
 	for name, l := range cases {
 		t.Run(name, func(t *testing.T) {
