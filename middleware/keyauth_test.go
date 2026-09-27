@@ -172,6 +172,8 @@ func TestKeyAuthPanicsOnAConfigurationThatCannotWork(t *testing.T) {
 		"zero Key":        {Validate: ok},
 		"space in Header": {Key: userKey, Validate: ok, Header: "X API Key"},
 		"colon in Header": {Key: userKey, Validate: ok, Header: "X-API-Key:"},
+		"Authorization":   {Key: userKey, Validate: ok, Header: "Authorization"},
+		"authorization":   {Key: userKey, Validate: ok, Header: "authorization"},
 	}
 	for name, cfg := range cases {
 		t.Run(name, func(t *testing.T) {

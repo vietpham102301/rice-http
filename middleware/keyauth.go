@@ -15,11 +15,12 @@ import (
 //
 // Look a key up by its hash — store SHA-256(key), never the key — or compare a
 // fixed key with crypto/subtle's ConstantTimeCompare, never with ==. Validate
-// must not log what it receives.
+// must not log what it receives, nor put it in the error it returns: the
+// default error handler logs that error.
 //
 // Header "" reads Authorization: Bearer <key>. Any other value names a header
 // whose whole value, trimmed, is the key, such as "X-API-Key"; it must be a
-// valid header name. The key is never read from the query string, which ends
+// valid header name other than Authorization. The key is never read from the query string, which ends
 // up in access logs, proxies and browser history.
 type KeyAuthConfig[T any] struct {
 	Key      rice.Key[T]
@@ -40,7 +41,8 @@ type KeyAuthConfig[T any] struct {
 // group to protect part of an application. It does not throttle guessing; see
 // the rate limiting middleware. See ADR-0021.
 //
-// A nil Validate, a zero Key or an invalid Header panics.
+// A nil Validate, a zero Key, an invalid Header or a Header of "Authorization"
+// panics.
 func KeyAuth[T any](cfg KeyAuthConfig[T]) rice.Middleware {
 	if cfg.Validate == nil {
 		panic("rice: middleware.KeyAuth: Validate is nil")
@@ -50,6 +52,9 @@ func KeyAuth[T any](cfg KeyAuthConfig[T]) rice.Middleware {
 	}
 	if cfg.Header != "" && !isToken(cfg.Header) {
 		panic("rice: middleware.KeyAuth: Header " + cfg.Header + " is not a valid header name")
+	}
+	if equalFoldASCII([]byte(cfg.Header), "Authorization") {
+		panic(`rice: middleware.KeyAuth: Header "Authorization" would hand Validate the scheme too; use "" for Authorization: Bearer <key>`)
 	}
 	bearer := cfg.Header == ""
 	header, challenge := cfg.Header, ""

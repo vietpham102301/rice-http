@@ -22,7 +22,8 @@ const basicDecodeBuf = 128
 //
 // Validate compares secrets, not rice: compare a password against a stored
 // bcrypt or argon2 hash, or a fixed secret with crypto/subtle's
-// ConstantTimeCompare, never with ==. It must not log what it receives.
+// ConstantTimeCompare, never with ==. It must not log what it receives, nor
+// put it in the error it returns: the default error handler logs that error.
 //
 // Realm names the protection space in the WWW-Authenticate challenge; ""
 // means "Restricted". It may not contain a quote, a backslash or a control
