@@ -257,6 +257,9 @@ this cost, and a user who never imports the package pays none of it.
 | `middleware.CORS(corsBudgetConfig)`, a request with no `Origin` | 0, exactly, with and without `-race` | MEASURED after M8 | `TestAllocBudgetCORSNoOrigin` |
 | `middleware.CORS(corsBudgetConfig)`, a real request from the allowed origin | 0, exactly, with and without `-race` | MEASURED after M8 | `TestAllocBudgetCORSAllowedOrigin` |
 | `middleware.CORS(corsBudgetConfig)`, a preflight from the allowed origin | 0, exactly, with and without `-race` | MEASURED after M8 | `TestAllocBudgetCORSPreflight` |
+| `middleware.BasicAuth`, accepting a request, pointer identity | 2, exactly, with and without `-race` | MEASURED after M8 | `TestAllocBudgetBasicAuth` |
+| `middleware.KeyAuth`, accepting a Bearer request, pointer identity | 1, exactly, with and without `-race` | MEASURED after M8 | `TestAllocBudgetKeyAuth` |
+| `middleware.BasicAuth` and `middleware.KeyAuth`, a request without credentials (401) | 0, exactly, with and without `-race` | MEASURED after M8 | `TestAllocBudgetAuthRejects` |
 | `otelrice.Middleware()`, no-op providers, no `traceparent` | at most 11 | MEASURED after M8 | `TestAllocBudgetNoop` |
 | `otelrice.Middleware()`, no-op providers, a `traceparent` | at most 13 | MEASURED after M8 | `TestAllocBudgetNoopTraceparent` |
 | `otelrice.Middleware()`, SDK with an in-memory span recorder and a manual metric reader | at most 21 (measured 19 without `-race`, 21 with) | MEASURED after M8 | `TestAllocBudgetSDK` |
@@ -447,6 +450,15 @@ B/op and 0 allocs/op over ten runs, on darwin/arm64 (Apple M2 Pro, go1.25.6). No
 committed for it; the figure is cited here in prose instead. Measured on darwin arm64 only; no Linux
 container run was taken for this feature. See
 [ADR-0019](adr/0019-streams-run-after-the-handler.md).
+
+#### `middleware.BasicAuth` and `middleware.KeyAuth`
+
+**2, 1 and 0.** Measured on darwin arm64 (go1.25.6), three runs each with and without `-race`, all
+equal. Accepting a Basic request costs the decoded credentials and the strings handed to `Validate`;
+accepting a Bearer request costs the key string. The copies are what let `Validate` keep what it
+receives, which a borrowed `[]byte` would not allow. The identity in the fixtures is a pointer, so
+`Key.Set` boxes nothing; a non-pointer identity adds its own boxing. A 401 costs nothing: the error is
+one shared `*rice.HTTPError`, and the challenge is a string built once, when the middleware is.
 
 #### `otelrice`
 

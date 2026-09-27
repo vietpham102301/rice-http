@@ -184,6 +184,39 @@ Unlike core, most of these allocate: 3 objects per request for `RealIP`, 2 for `
 on every branch — each pinned by a budget test, with its fixture named in the
 [performance model](docs/05-performance-model.md#opt-in-packages).
 
+### Authentication
+
+`BasicAuth` and `KeyAuth` check credentials with a callback of the application's and hand the handler
+the identity it returns, with its real type, through a `rice.Key`:
+
+```go
+var userKey = rice.NewKey[*User]("user")
+
+api := app.Group("/api", middleware.KeyAuth(middleware.KeyAuthConfig[*User]{
+	Key: userKey,
+	Validate: func(ctx context.Context, key string) (*User, bool, error) {
+		sum := sha256.Sum256([]byte(key)) // store the hash of a key, never the key
+		u, err := users.ByKeyHash(ctx, sum[:])
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, false, nil // wrong key: 401
+		}
+		return u, err == nil, err // a store failure: 500, never 401
+	},
+}))
+
+api.GET("/me", func(c *rice.Ctx) error {
+	u, _ := userKey.Get(c)
+	return c.JSON(200, u)
+})
+```
+
+`KeyAuth` reads `Authorization: Bearer <key>`, or a header you name such as `X-API-Key`, and never the
+query string. `BasicAuth` reads `Authorization: Basic`; its credentials are readable on the wire, so
+use it only behind TLS. Install either inside `CORS`, so a preflight is answered before it and a 401
+carries the CORS headers. Compare secrets in `Validate` with `crypto/subtle.ConstantTimeCompare` or a
+hash, never `==`. Accepting a request costs 2 allocations for `BasicAuth` and 1 for `KeyAuth`; a 401
+costs none ([ADR-0021](docs/adr/0021-auth-validates-through-a-callback.md)).
+
 ## Reading requests, writing JSON
 
 ```go

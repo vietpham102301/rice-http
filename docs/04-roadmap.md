@@ -302,3 +302,11 @@ Outside any milestone, because the API was already written down in
   [ADR-0020](adr/0020-otel-in-its-own-module.md) records why a separate module, why the route rather
   than the path, and the placement and stream limits that follow from `middleware.Logger`'s own
   (ADR-0019 D8).
+- `middleware.BasicAuth` and `middleware.KeyAuth`, the first of the security middleware. Each checks
+  credentials with a callback of the application's — the credential store stays the application's —
+  and stores the identity it returns under a `rice.Key[T]`, so the handler reads it with its real type.
+  The callback's third result keeps a store failure (500) apart from wrong credentials (401). KeyAuth
+  reads `Authorization: Bearer` or a named header and never the query string. Both sit inside CORS,
+  which answers a preflight without calling `next`, so a preflight never needs credentials and a 401
+  carries the CORS headers. A 401 costs zero allocations
+  ([ADR-0021](adr/0021-auth-validates-through-a-callback.md)). Rate limiting is next.
