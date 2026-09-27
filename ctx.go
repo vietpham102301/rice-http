@@ -49,6 +49,10 @@ type Ctx struct {
 	streamFn        func(*Stream) error
 	streamHeartbeat time.Duration
 	streamSet       bool
+
+	// route is the matched route's pattern, "" on a miss. handle sets it; it
+	// points at a string the App owns, so Route may hand it out freely.
+	route string
 }
 
 // reset binds the context to a request, or unbinds it when app and fctx are nil.
@@ -64,6 +68,7 @@ func (c *Ctx) reset(app *App, fctx *fasthttp.RequestCtx) {
 	c.streamFn = nil
 	c.streamHeartbeat = 0
 	c.streamSet = false
+	c.route = ""
 	c.params.Reset()
 	c.resetStore()
 }
@@ -190,4 +195,14 @@ func (c *Ctx) HandleError(err error) {
 	}
 	c.handled = true
 	c.app.callErrorHandler(c, err)
+}
+
+// Route returns the pattern of the route that matched, as registered and
+// joined with its group's prefix — "/users/:id" — or "" when no route matched.
+//
+// Unlike the request's bytes, the pattern belongs to the App and lives as long
+// as it does: it is safe to keep after the handler returns.
+func (c *Ctx) Route() string {
+	c.poison.check()
+	return c.route
 }

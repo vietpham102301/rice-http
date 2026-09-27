@@ -303,6 +303,120 @@ silently disconnected is noticed — fasthttp reports a closed connection only o
 `rice.WithWriteTimeout` limits a streamed response as a whole, not each write, so an App serving
 long-lived streams leaves it at zero or serves its streams from a separate App.
 
+## OpenTelemetry
+
+The opt-in `otelrice` module traces and measures requests with OpenTelemetry, keyed by the matched
+route rather than the raw request path, so `/users/:id` is one span name and one metric series no
+matter how many ids it serves. Its non-test code imports only the OpenTelemetry API and semconv;
+its `go.mod` also requires fasthttp directly and, for its own tests, the SDK. With no SDK installed,
+the global providers are no-ops and `otelrice.Middleware()` costs a few allocations and records
+nothing.
+
+**Not yet published.** `otelrice/go.mod` requires rice through `replace
+github.com/vietpham102301/rice-http => ../`, the same shape `bench/compare` uses, so it resolves only
+inside a checkout of this repository. It becomes installable with `go get` once a core release tags
+`Route` and `otelrice` is tagged in turn (`otelrice/vX.Y.Z`); until then, build against it from a clone
+of this repository rather than `go get`ting it. Releasing it, in order: tag core with a version that
+carries `Route`; update `otelrice/go.mod` to require that version (the `replace` stays for development
+inside this repository; a published consumer ignores it); then tag `otelrice/vX.Y.Z`.
+
+Install an SDK tracer provider and a meter provider, each with an OTLP exporter, and set both global,
+then put the middleware outermost so its span covers every other middleware. Shut both providers down
+after serving stops, not in a `defer` racing `log.Fatal`:
+
+```go
+package main
+
+import (
+	"context"
+	"log"
+	"log/slog"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/propagation"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+
+	rice "github.com/vietpham102301/rice-http"
+	"github.com/vietpham102301/rice-http/middleware"
+	"github.com/vietpham102301/rice-http/otelrice"
+)
+
+func main() {
+	setupCtx := context.Background()
+
+	traceExp, err := otlptracegrpc.New(setupCtx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	tp := sdktrace.NewTracerProvider(sdktrace.WithBatcher(traceExp))
+	otel.SetTracerProvider(tp)
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+
+	metricExp, err := otlpmetricgrpc.New(setupCtx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExp)))
+	otel.SetMeterProvider(mp)
+
+	app := rice.New()
+	// slog's built-in handlers do not add the trace id from the context to a
+	// log line; correlate logs with traces through a trace-aware handler, such
+	// as the OpenTelemetry contrib otelslog bridge.
+	l := slog.Default()
+
+	app.Use(
+		otelrice.Middleware(),
+		middleware.Logger(l),
+		middleware.Recover(),
+		middleware.RealIP(1),
+	)
+
+	app.GET("/hello", func(c *rice.Ctx) error {
+		return c.String(200, "hello")
+	})
+
+	runCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if err := app.RunContext(runCtx, ":8080", 10*time.Second); err != nil {
+		log.Print(err)
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := tp.Shutdown(shutdownCtx); err != nil {
+		log.Print(err)
+	}
+	if err := mp.Shutdown(shutdownCtx); err != nil {
+		log.Print(err)
+	}
+}
+```
+
+The span is named `"{method} {route}"`, or the method alone on a route miss, and never carries the
+query string, in a span attribute or a metric. With `middleware.Logger` installed inside otelrice, as
+above, `Logger` settles the chain's error itself and otelrice never sees it, so the error's text
+reaches the span only if the application records it. The recipe is a custom `ErrorHandler`:
+
+```go
+rice.WithErrorHandler(func(c *rice.Ctx, err error) {
+	trace.SpanFromContext(c.Context()).RecordError(err)
+	rice.DefaultErrorHandler(c, err)
+})
+```
+
+`c.Context()` there is still the span's context, since `HandleError` calls the `ErrorHandler` mid-chain
+and otelrice restores the previous context only once the whole chain has returned. See
+[ADR-0020](docs/adr/0020-otel-in-its-own-module.md).
+
 ## Graceful shutdown
 
 `RunContext` serves until a context is done, then shuts down, giving in-flight requests a grace
@@ -468,7 +582,7 @@ and cannot compare, and the reason for each result are in the performance model'
 ```
 make test        # go test ./... -race
 make test-debug  # the same suite under -tags ricedebug
-make cover       # coverage, currently 99.2%
+make cover       # coverage, currently 99.6%
 make lint        # gofmt and go vet
 make bench       # runs the suite and records to bench/results/
 make compare     # the comparison against Gin, Echo and Fiber: equivalence gate and smoke run
@@ -480,6 +594,11 @@ than quietly succeeding. CI runs both.
 
 Benchmarks are recorded to a committed file rather than read off a terminal, so a claim in
 these docs can always be traced to the run that produced it.
+
+An editor that needs every module loaded at once — for cross-module navigation into
+`otelrice` or `bench/compare` — can run `go work init . ./otelrice ./bench/compare` locally.
+The resulting `go.work` is gitignored: CI and `make` build and test each module on its own,
+never through a workspace.
 
 ## License
 

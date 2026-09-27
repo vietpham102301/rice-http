@@ -23,14 +23,14 @@ func (a *App) build() {
 	// The registration-time trees have done their job: they rejected bad
 	// configuration where the mistake was written. Discard them and build the
 	// trees that will actually serve, holding compiled chains.
-	a.trees = [methodCount]router.Tree[Handler]{}
+	a.trees = [methodCount]router.Tree[routeEntry]{}
 	a.rare = nil
 
 	for i := range a.routes {
 		r := &a.routes[i]
 		compiled := chain.Compile(r.h, a.middlewareFor(r))
 
-		if err := a.treeFor(r.method).Insert(r.path, compiled); err != nil {
+		if err := a.treeFor(r.method).Insert(r.path, routeEntry{h: compiled, pattern: r.path}); err != nil {
 			// Unreachable: this exact insertion succeeded during registration,
 			// against an identical route set. Panicking rather than ignoring it
 			// means a wrong assumption here surfaces instead of silently

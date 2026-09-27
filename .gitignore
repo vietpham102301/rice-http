@@ -6,6 +6,8 @@
 *.out
 /bin/
 coverage.out
+go.work
+go.work.sum
 
 # Superpowers SDD scratch
 .superpowers/

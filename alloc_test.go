@@ -891,3 +891,14 @@ func TestAllocBudgetStreamSetup(t *testing.T) {
 		}
 	})
 }
+
+// TestAllocBudgetCtxRoute pins Route at 0: it returns a string the App built
+// at registration.
+func TestAllocBudgetCtxRoute(t *testing.T) {
+	c := &Ctx{route: "/users/:id"}
+	c.reset(nil, &fasthttp.RequestCtx{})
+	c.route = "/users/:id"
+	var sink string
+	budget(t, "Ctx.Route", 0, func() { sink = c.Route() })
+	_ = sink
+}

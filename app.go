@@ -84,12 +84,13 @@ type App struct {
 	// trees holds one route tree per common verb, indexed by a method constant.
 	// Registration inserts raw handlers here so that a bad configuration panics
 	// at the call site that caused it; Build discards these and rebuilds from
-	// routes with compiled chains. See the M4 design doc, D1.
-	trees [methodCount]router.Tree[Handler]
+	// routes with compiled chains. Each entry carries the pattern it was registered
+	// under, so a match can report its route. See the M4 design doc, D1.
+	trees [methodCount]router.Tree[routeEntry]
 
 	// rare holds trees for verbs without a reserved slot. It stays nil for
 	// applications that never register one.
-	rare map[string]*router.Tree[Handler]
+	rare map[string]*router.Tree[routeEntry]
 
 	// mws is the application-level middleware, outermost in every chain.
 	mws []Middleware
@@ -344,7 +345,9 @@ func (a *App) handle(fctx *fasthttp.RequestCtx) {
 		}
 	}()
 
-	h, ok := a.lookup(fctx.Method(), fctx.Path(), &c.params)
+	e, ok := a.lookupEntry(fctx.Method(), fctx.Path(), &c.params)
+	h := e.h
+	c.route = e.pattern
 	if !ok {
 		// A miss runs the application's middleware like any route, so a
 		// logger sees 404s and a CORS middleware can answer a preflight for a
