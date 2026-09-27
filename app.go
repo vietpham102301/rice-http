@@ -7,6 +7,7 @@ import (
 	"net"
 	"runtime/debug"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/valyala/fasthttp"
@@ -76,6 +77,27 @@ func WithMaxBodySize(n int) Option {
 		panic("rice: WithMaxBodySize: size must be positive")
 	}
 	return func(a *App) { a.srv.MaxRequestBodySize = n }
+}
+
+// WithDrainDelay makes Shutdown keep serving for d before it closes the
+// listener. Meanwhile Ready reports false and every response carries
+// Connection: close, so a load balancer that is still routing to this process
+// is answered, stops routing to it, and moves its keep-alive connections
+// elsewhere.
+//
+// On Kubernetes, the pod leaves its Service at the same moment it receives
+// SIGTERM, and kube-proxy and ingress controllers take seconds to notice;
+// without a delay the requests they send meanwhile are refused. Five seconds
+// is a common choice. The pod's terminationGracePeriodSeconds must exceed the
+// delay plus RunContext's grace plus the OnShutdown hooks.
+//
+// Zero, the default, closes the listener as soon as Shutdown begins. A
+// negative d panics. See docs/adr/0023-shutdown-drains-before-it-closes.md.
+func WithDrainDelay(d time.Duration) Option {
+	if d < 0 {
+		panic("rice: WithDrainDelay: duration is negative")
+	}
+	return func(a *App) { a.drainDelay = d }
 }
 
 // App is the root of a rice application. It owns the routes, the fasthttp
@@ -195,6 +217,25 @@ type App struct {
 	// shutdownOnce makes the OnShutdown hooks run on the first Shutdown only.
 	shutdownOnce sync.Once
 
+	// drainDelay is how long Shutdown keeps serving before it closes the
+	// listener. See WithDrainDelay.
+	drainDelay time.Duration
+
+	// ready is true from the moment Serve publishes its listener until
+	// Shutdown begins or Serve returns. See Ready.
+	ready atomic.Bool
+
+	// draining is set when Shutdown begins and never cleared, since an App
+	// serves once. While it is set, handle closes every connection after its
+	// response.
+	draining atomic.Bool
+
+	// drainOnce starts the drain in the first Shutdown. drainEnd is when the
+	// drain ends, the zero Time when there is none; it is written inside
+	// drainOnce and read after it, which orders the two.
+	drainOnce sync.Once
+	drainEnd  time.Time
+
 	// shutdownSem, capacity 1, lets one Shutdown at a time drive fasthttp's
 	// drain, the force-close and the hooks. It is a channel rather than a mutex
 	// so that a Shutdown waiting for its turn can give up when its own ctx ends.
@@ -300,6 +341,13 @@ func (a *App) FasthttpHandler() fasthttp.RequestHandler {
 
 // handle is the dispatch path: one request in, one response out.
 func (a *App) handle(fctx *fasthttp.RequestCtx) {
+	// While Shutdown drains, every response closes its connection, so a
+	// keep-alive client's next request opens a new one, which the load
+	// balancer no longer sends here. See WithDrainDelay.
+	if a.draining.Load() {
+		fctx.SetConnectionClose()
+	}
+
 	// The Ctx is acquired before the lookup because the lookup fills c.params in
 	// place. That ordering is ADR-0005's design; see the Ctx.params comment.
 	c := a.acquire(fctx)

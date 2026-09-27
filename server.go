@@ -69,6 +69,7 @@ func (a *App) Serve(ln net.Listener) error {
 	// error, a serve error — can be retried. After a Shutdown, closed stops
 	// the retry instead.
 	defer func() {
+		a.ready.Store(false)
 		a.mu.Lock()
 		a.serving = false
 		a.mu.Unlock()
@@ -88,6 +89,7 @@ func (a *App) Serve(ln net.Listener) error {
 		return nil
 	}
 	a.ln = ln
+	a.ready.Store(true)
 	a.mu.Unlock()
 
 	return a.srv.Serve(ln)
@@ -179,10 +181,12 @@ func (a *App) awaitRunningHooks() {
 	}
 }
 
-// shutdownWithin calls Shutdown with grace to drain. The ctx is not derived
-// from RunContext's: that is already done, and the grace period is new time.
+// shutdownWithin calls Shutdown with the drain delay plus grace, so that grace
+// is still the time in-flight requests get once the listener closes. The ctx
+// is not derived from RunContext's: that is already done, and the grace period
+// is new time.
 func (a *App) shutdownWithin(grace time.Duration) error {
-	ctx, cancel := context.WithTimeout(context.Background(), grace)
+	ctx, cancel := context.WithTimeout(context.Background(), a.drainDelay+grace)
 	defer cancel()
 	return a.Shutdown(ctx)
 }
@@ -239,6 +243,8 @@ func (a *App) Shutdown(ctx context.Context) error {
 	// cancelled until force-close. See ADR-0019.
 	a.cancelStreams()
 
+	a.drain(ctx)
+
 	// Take the turn. The first select prefers it: a first Shutdown whose ctx
 	// has already ended must still close the listener and run the hooks.
 	select {
@@ -293,4 +299,39 @@ func (a *App) Shutdown(ctx context.Context) error {
 		return err
 	}
 	return errors.Join(append([]error{err}, hookErrs...)...)
+}
+
+// Ready reports whether the App is serving and not shutting down: its OnStart
+// hooks have succeeded, its listener is published, and Shutdown has not begun.
+// It is safe to call from any goroutine, including a handler of another App,
+// which is how a probe on a separate port reads it. See health.Ready.
+func (a *App) Ready() bool {
+	return a.ready.Load()
+}
+
+// drain is Shutdown's first phase. The first Shutdown turns readiness off and
+// starts draining; if the App was ready and a drain delay is set, every
+// Shutdown then waits until the delay has passed since that moment, or until
+// its own ctx ends, while the listener stays open.
+func (a *App) drain(ctx context.Context) {
+	a.drainOnce.Do(func() {
+		wasReady := a.ready.Swap(false)
+		a.draining.Store(true)
+		if wasReady && a.drainDelay > 0 {
+			a.drainEnd = time.Now().Add(a.drainDelay)
+		}
+	})
+	if a.drainEnd.IsZero() {
+		return
+	}
+	wait := time.Until(a.drainEnd)
+	if wait <= 0 {
+		return
+	}
+	t := time.NewTimer(wait)
+	defer t.Stop()
+	select {
+	case <-t.C:
+	case <-ctx.Done():
+	}
 }

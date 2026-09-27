@@ -902,3 +902,32 @@ func TestAllocBudgetCtxRoute(t *testing.T) {
 	budget(t, "Ctx.Route", 0, func() { sink = c.Route() })
 	_ = sink
 }
+
+// TestAllocBudgetDispatchDraining pins a request served while Shutdown drains:
+// marking the response Connection: close costs nothing, so it is the same 0 as
+// TestAllocBudgetDispatchNoMiddleware.
+func TestAllocBudgetDispatchDraining(t *testing.T) {
+	app := New()
+	app.GET("/x", func(c *Ctx) error { return c.String(200, "ok") })
+	app.Build()
+	app.draining.Store(true)
+
+	fctx := &fasthttp.RequestCtx{}
+	fctx.Request.Header.SetMethod("GET")
+	fctx.Request.SetRequestURI("/x")
+
+	app.handle(fctx)
+	if !fctx.Response.ConnectionClose() {
+		t.Fatal("a draining response did not close its connection; this budget would be measuring the wrong path")
+	}
+
+	budget(t, "App.handle while draining", 0, func() {
+		app.handle(fctx)
+	})
+}
+
+// TestAllocBudgetReady pins App.Ready at 0: an atomic load.
+func TestAllocBudgetReady(t *testing.T) {
+	app := New()
+	budget(t, "App.Ready", 0, func() { _ = app.Ready() })
+}
