@@ -537,7 +537,7 @@ does: the pod leaves its Service as it receives SIGTERM, and kube-proxy and ingr
 notice seconds later. With a delay, `Shutdown` first turns `Ready` off — `/readyz` answers 503 — and
 goes on serving for the delay, closing each keep-alive connection after its response, and only then
 closes the listener; `RunContext` counts the delay outside its grace. Set the pod's
-`terminationGracePeriodSeconds` above the delay plus the grace. `health.Live` checks nothing, so a
+`terminationGracePeriodSeconds` above the delay plus the grace plus the `OnShutdown` hooks. `health.Live` checks nothing, so a
 database outage never restarts pods; `health.Ready` takes optional checks, whose failures are logged
 and never sent. Install authentication on groups rather than with `app.Use`, or probes get a 401
 ([ADR-0023](docs/adr/0023-shutdown-drains-before-it-closes.md)).

@@ -483,8 +483,8 @@ and goes on serving for `d`, answering every request with `Connection: close`, b
 listener; `RunContext` adds `d` to its grace. The `health` package serves `Ready` as a probe
 ([ADR-0023](adr/0023-shutdown-drains-before-it-closes.md)).
 
-`Shutdown` stops accepting connections and waits for in-flight requests until they finish or
-its `ctx` ends. It returns `nil` after a clean drain, and an error wrapping both
+`Shutdown` stops accepting connections — after the drain delay, when `WithDrainDelay` is set, with
+one `ctx` covering both — and waits for in-flight requests until they finish or its `ctx` ends. It returns `nil` after a clean drain, and an error wrapping both
 `ErrShutdownTimeout` and the context's own error when the deadline came first. **Whatever it
 returns, nothing is served after it returns.** At the deadline rice closes every connection
 still open, because fasthttp's own shutdown, when it times out, lets a busy keep-alive
