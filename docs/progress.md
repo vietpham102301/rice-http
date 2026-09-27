@@ -26,7 +26,7 @@ answers a rejection with `WWW-Authenticate: Basic realm="…", charset="UTF-8"`.
 `Bearer` challenge only for the default header. Malformed credentials never reach `Validate`; a
 rejection is one shared 401; an error from `Validate` goes to the funnel as a 500 whatever `ok` says.
 Construction panics on a nil `Validate`, a zero `Key`, a `Realm` with a quote, backslash or control
-byte, or a `Header` that is not a header name. Tests: Basic and Bearer parsing tables, the custom
+byte, or a `Header` that is not a header name or is `Authorization`. Tests: Basic and Bearer parsing tables, the custom
 header, the three outcomes including a custom ErrorHandler, the request context reaching `Validate`,
 placement with CORS, a group and a miss, the construction panics, and three budgets.
 [ADR-0021](adr/0021-auth-validates-through-a-callback.md) records the decision; the README gains an
@@ -41,7 +41,8 @@ Authentication section. Executed inline from a plan whose code had been run in a
    preflight carries no credentials; had CORS passed it on, every protected route would have failed its
    browser callers before their first real request.
 
-**Measured:** `TestAllocBudgetBasicAuth` 2, `TestAllocBudgetKeyAuth` 1, `TestAllocBudgetAuthRejects` 0 —
+**Measured:** `TestAllocBudgetBasicAuth` 1, `TestAllocBudgetBasicAuthRealisticCredentials` 1,
+`TestAllocBudgetKeyAuth` 1, `TestAllocBudgetAuthRejects` 0 —
 darwin arm64 (go1.25.6), three runs each with and without `-race`, all equal.
 
 **Next:** rate limiting middleware, which needs its own brainstorm: it keeps state across requests.

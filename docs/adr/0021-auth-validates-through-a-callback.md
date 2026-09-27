@@ -44,7 +44,8 @@ KeyAuth[T any](KeyAuthConfig[T]{Key, Validate func(ctx, key string) (T, bool, er
   base64, readable on the wire, so BasicAuth belongs behind TLS. Guessing is not throttled here.
 
 A nil `Validate`, a zero `Key`, a `Realm` with a quote, backslash or control byte, and a `Header` that
-is not a header name panic at construction.
+is not a header name — or is `Authorization`, which would hand `Validate` the scheme too — panic at
+construction.
 
 ## Alternatives
 
@@ -68,11 +69,13 @@ mechanism would be a second place to look when a route is unexpectedly open.
 
 ## Consequences
 
-**Costs, pinned exactly with and without `-race`:** BasicAuth accepting a request, 2 allocations (the
-decoded credentials and the strings handed to `Validate`); KeyAuth accepting a Bearer request, 1 (the
-key string); a 401, 0.
+**Costs, pinned exactly with and without `-race`:** BasicAuth accepting a request, 1 allocation (one
+string holding both halves handed to `Validate`; credentials up to 128 decoded bytes are decoded into a
+stack buffer, longer ones add the buffer); KeyAuth accepting a Bearer request, 1 (the key string); a
+401 for a request without credentials, 0.
 
 **The application owns secret handling.** A `Validate` that compares with `==` leaks timing, and one
-that logs its arguments leaks credentials; the doc comments say so, and rice cannot check it.
+that logs its arguments — or wraps them into the error it returns, which the default error handler
+logs — leaks credentials; the doc comments say so, and rice cannot check it.
 
 **Brute force is the next design.** Rate limiting is separate middleware with state of its own.

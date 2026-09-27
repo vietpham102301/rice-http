@@ -308,5 +308,5 @@ Outside any milestone, because the API was already written down in
   The callback's third result keeps a store failure (500) apart from wrong credentials (401). KeyAuth
   reads `Authorization: Bearer` or a named header and never the query string. Both sit inside CORS,
   which answers a preflight without calling `next`, so a preflight never needs credentials and a 401
-  carries the CORS headers. A 401 costs zero allocations
+  carries the CORS headers. A 401 for a request without credentials costs zero allocations
   ([ADR-0021](adr/0021-auth-validates-through-a-callback.md)). Rate limiting is next.

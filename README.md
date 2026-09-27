@@ -214,8 +214,9 @@ api.GET("/me", func(c *rice.Ctx) error {
 query string. `BasicAuth` reads `Authorization: Basic`; its credentials are readable on the wire, so
 use it only behind TLS. Install either inside `CORS`, so a preflight is answered before it and a 401
 carries the CORS headers. Compare secrets in `Validate` with `crypto/subtle.ConstantTimeCompare` or a
-hash, never `==`. Accepting a request costs 2 allocations for `BasicAuth` and 1 for `KeyAuth`; a 401
-costs none ([ADR-0021](docs/adr/0021-auth-validates-through-a-callback.md)).
+hash, never `==`, and keep credentials out of the error it returns, which the default error handler
+logs. Accepting a request costs 1 allocation for either middleware; a 401 for a request without
+credentials costs none ([ADR-0021](docs/adr/0021-auth-validates-through-a-callback.md)).
 
 ## Reading requests, writing JSON
 
