@@ -455,6 +455,7 @@ func (a *App) Run(addr string) error
 func (a *App) Serve(ln net.Listener) error
 func (a *App) RunContext(ctx context.Context, addr string, grace time.Duration) error
 func (a *App) Addr() string
+func (a *App) Ready() bool
 func (a *App) Shutdown(ctx context.Context) error
 
 var ErrShutdownTimeout error
@@ -475,6 +476,12 @@ returns `ErrAlreadyServing`. A `Serve` that returned without a `Shutdown` — an
 failed, or serving failed — may be called again; after a serve error the old listener stays
 open, and `Addr` keeps reporting it, until the retried `Serve` replaces it or a `Shutdown`
 closes it.
+
+`Ready` is true from the moment `Serve` publishes its listener — after the `OnStart` hooks — until
+`Shutdown` begins or `Serve` returns. With `WithDrainDelay(d)`, `Shutdown` first turns readiness off
+and goes on serving for `d`, answering every request with `Connection: close`, before it closes the
+listener; `RunContext` adds `d` to its grace. The `health` package serves `Ready` as a probe
+([ADR-0023](adr/0023-shutdown-drains-before-it-closes.md)).
 
 `Shutdown` stops accepting connections and waits for in-flight requests until they finish or
 its `ctx` ends. It returns `nil` after a clean drain, and an error wrapping both

@@ -318,3 +318,9 @@ Outside any milestone, because the API was already written down in
   `Retry-After`; a store error is a 500. 1 allocation allowed, or refused with a `Retry-After` under
   100 seconds (2 above it), and 0 for `Take`
   ([ADR-0022](adr/0022-rate-limiting-is-gcra-behind-a-store.md)).
+- `rice.WithDrainDelay`, `App.Ready` and the `health` package. On Kubernetes a pod leaves its Service
+  as it receives SIGTERM, and the network learns of it seconds later; `Shutdown` now turns readiness off
+  and keeps serving for the delay, closing each keep-alive connection after its response, before it
+  closes the listener. `RunContext` counts the delay outside its grace. `health.Live` checks nothing;
+  `health.Ready` follows the lifecycle and takes optional checks whose failures are logged, not sent.
+  All of it costs 0 allocations ([ADR-0023](adr/0023-shutdown-drains-before-it-closes.md)).

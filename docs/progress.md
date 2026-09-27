@@ -16,6 +16,34 @@ Each entry uses this shape:
 
 ---
 
+## 2026-09-27 — post-M8 — Health probes and the drain
+
+**Did:** `rice.WithDrainDelay(d)`: `Shutdown` first clears `Ready`, sets draining — `handle` then
+answers with `Connection: close` — and, once for all concurrent calls, waits out `d` bounded by its
+ctx, with the listener open; `RunContext` gives `Shutdown` `d + grace`. `(*App).Ready` is an atomic
+flag set when `Serve` publishes its listener and cleared when `Shutdown` begins or `Serve` returns. New
+package `health`: `Live` (200, no checks) and `Ready(app, checks...)` (503 while not ready, then checks
+in order under their timeouts, the failing check named in the logged error only). Tests: serving and
+`Connection: close` during the drain, the drain bounded by ctx, skipped when never ready, shared by
+concurrent Shutdowns, `Ready` through the lifecycle, `RunContext`'s grace after the drain, streams
+stopping at once; the probes' outcomes, timeouts, a late answer, the panics; five budgets. ADR-0023.
+
+**Learned:** Two things.
+
+1. *Readiness cannot be reported by a process that has closed its listener.* The 503 is only worth
+   anything while requests still arrive, so turning readiness off has to come before closing, with time
+   between — and that time has to be the framework's, because only it knows when the listener closes.
+2. *Keep-alive defeats readiness.* A proxy holding a connection keeps sending on it whatever the probe
+   says; `Connection: close` on each response during the drain is what actually moves traffic.
+
+**Measured:** `TestAllocBudgetDispatchDraining` 0, `TestAllocBudgetReady` 0, `TestAllocBudgetLive` 0,
+`TestAllocBudgetReadyNoChecks` 0, `TestAllocBudgetReadyNotReady` 0 — darwin arm64 (go1.25.6), with and
+without `-race`.
+
+**Next:** a sample service built on rice, to find what a real one lacks.
+
+---
+
 ## 2026-09-27 — post-M8 — RateLimit
 
 **Did:** `middleware.RateLimit` with `Limit{Rate, Per, Burst}`, a `KeyFunc` (default: the client

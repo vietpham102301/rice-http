@@ -132,6 +132,8 @@ not move.
 | Router lookup, 1 parameter | 0 | MEASURED M3 | `TestAllocBudgetLookupOneParameter` |
 | Router lookup, 5 parameters | 0 | MEASURED M6 | `TestAllocBudgetLookupFiveParameters` |
 | Chain call, 0 middleware | 0 | MEASURED M4 | `TestAllocBudgetDispatchNoMiddleware` |
+| Chain call, 0 middleware, while `Shutdown` drains (`Connection: close`) | 0 | MEASURED after M8 | `TestAllocBudgetDispatchDraining` |
+| `App.Ready` | 0 | MEASURED after M8 | `TestAllocBudgetReady` |
 | Chain call, 5 middleware | 0 | MEASURED M4 | `TestAllocBudgetDispatchFiveMiddleware`, `TestAllocBudgetChainCompile` |
 | Recovery installed, nothing panics | 0 extra | MEASURED M5 | `TestAllocBudgetDispatchWithRecover` |
 | `ConnState` hook, per request (`StateActive` + `StateIdle`) | 0 | MEASURED M7 | `TestConnStateActiveAndIdleAreFree` |
@@ -263,6 +265,9 @@ this cost, and a user who never imports the package pays none of it.
 | `middleware.RateLimit`, default key and store, an allowed request | 1, exactly, with and without `-race` | MEASURED after M8 | `TestAllocBudgetRateLimitAllowed` |
 | `middleware.RateLimit`, default key and store, a 429 with a `Retry-After` under 100 s | 1, exactly, with and without `-race` | MEASURED after M8 | `TestAllocBudgetRateLimitDenied` |
 | `MemoryStore.Take`, a key the store holds | 0, exactly, with and without `-race` | MEASURED after M8 | `TestAllocBudgetMemoryStoreTake` |
+| `health.Live` | 0, exactly, with and without `-race` | MEASURED after M8 | `TestAllocBudgetLive` |
+| `health.Ready`, ready, no checks | 0, exactly, with and without `-race` | MEASURED after M8 | `TestAllocBudgetReadyNoChecks` |
+| `health.Ready`, not ready (503) | 0, exactly, with and without `-race` | MEASURED after M8 | `TestAllocBudgetReadyNotReady` |
 | `otelrice.Middleware()`, no-op providers, no `traceparent` | at most 11 | MEASURED after M8 | `TestAllocBudgetNoop` |
 | `otelrice.Middleware()`, no-op providers, a `traceparent` | at most 13 | MEASURED after M8 | `TestAllocBudgetNoopTraceparent` |
 | `otelrice.Middleware()`, SDK with an in-memory span recorder and a manual metric reader | at most 21 (measured 19 without `-race`, 21 with) | MEASURED after M8 | `TestAllocBudgetSDK` |

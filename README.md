@@ -499,12 +499,15 @@ program picks which:
 ```go
 func main() {
 	app := rice.New(
+		rice.WithDrainDelay(5*time.Second), // Kubernetes: keep serving while the network forgets this pod
 		rice.WithReadTimeout(5*time.Second),
 		rice.WithWriteTimeout(10*time.Second),
 		rice.WithIdleTimeout(60*time.Second),
 		rice.WithMaxBodySize(1<<20), // 1 MiB; a larger body gets 413 before any handler runs
 	)
 	app.GET("/hello", func(c *rice.Ctx) error { return c.String(200, "hello") })
+	app.GET("/livez", health.Live())
+	app.GET("/readyz", health.Ready(app))
 
 	db := openDB()
 	app.OnShutdown(func(ctx context.Context) error { return db.Close() })
@@ -528,6 +531,16 @@ connection keep serving after a timeout; tracking open connections so rice can c
 costs about 2.5 ns on every request, and
 [ADR-0009](docs/adr/0009-shutdown-force-closes-at-deadline.md) records why it is paid. The
 drain polls every 100 ms, so a shutdown takes about that long even with nothing in flight.
+
+`WithDrainDelay` is for load balancers that learn late that an instance is going, as Kubernetes'
+does: the pod leaves its Service as it receives SIGTERM, and kube-proxy and ingress controllers
+notice seconds later. With a delay, `Shutdown` first turns `Ready` off — `/readyz` answers 503 — and
+goes on serving for the delay, closing each keep-alive connection after its response, and only then
+closes the listener; `RunContext` counts the delay outside its grace. Set the pod's
+`terminationGracePeriodSeconds` above the delay plus the grace. `health.Live` checks nothing, so a
+database outage never restarts pods; `health.Ready` takes optional checks, whose failures are logged
+and never sent. Install authentication on groups rather than with `app.Use`, or probes get a 401
+([ADR-0023](docs/adr/0023-shutdown-drains-before-it-closes.md)).
 
 Set all three timeouts in production. They default to zero, which means unlimited: without a
 read timeout, a client that sends half a request holds its connection for as long as it likes.

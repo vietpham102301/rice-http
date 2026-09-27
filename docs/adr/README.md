@@ -53,3 +53,4 @@ Date: YYYY-MM-DD
 | [0020](0020-otel-in-its-own-module.md) | OpenTelemetry lives in its own module, on the API only, keyed by the matched route | Accepted |
 | [0021](0021-auth-validates-through-a-callback.md) | Authentication validates through a callback and hands a typed identity to the handler | Accepted |
 | [0022](0022-rate-limiting-is-gcra-behind-a-store.md) | Rate limiting is GCRA behind a store that runs the algorithm | Accepted |
+| [0023](0023-shutdown-drains-before-it-closes.md) | Shutdown drains before it closes, and readiness reports it | Accepted |
