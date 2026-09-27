@@ -327,3 +327,41 @@ func TestAllocBudgetBasicAuthRealisticCredentials(t *testing.T) {
 		t.Errorf("BasicAuth allocated %.1f objects per call with realistic credentials, want exactly %.0f", got, want)
 	}
 }
+
+// TestAllocBudgetRateLimitAllowed pins RateLimit admitting a request with the
+// default key and store, the key already in the store: the key string. The
+// Limit admits a million at once, so every run of the measurement is allowed.
+func TestAllocBudgetRateLimitAllowed(t *testing.T) {
+	const want float64 = 1
+
+	mw := middleware.RateLimit(middleware.RateLimitConfig{Limit: middleware.Limit{Rate: 1_000_000, Per: time.Second, Burst: 1_000_000}})
+	if got := measure(t, mw, nil); got != want {
+		t.Errorf("RateLimit allocated %.1f objects per allowed request, want exactly %.0f", got, want)
+	}
+}
+
+// TestAllocBudgetRateLimitDenied pins a 429 with the default key and store:
+// the key string; the 429 is a shared error, and Retry-After, below 100
+// seconds here, is one of strconv's preformatted small numbers.
+func TestAllocBudgetRateLimitDenied(t *testing.T) {
+	const want float64 = 1
+
+	mw := middleware.RateLimit(middleware.RateLimitConfig{Limit: middleware.Limit{Rate: 1, Per: time.Minute}})
+	if got := measure(t, mw, nil); got != want {
+		t.Errorf("RateLimit allocated %.1f objects per 429, want exactly %.0f", got, want)
+	}
+}
+
+// TestAllocBudgetMemoryStoreTake pins Take on a key the store already holds:
+// a map lookup and update under the shard's lock, no allocation.
+func TestAllocBudgetMemoryStoreTake(t *testing.T) {
+	const want float64 = 0
+
+	s := middleware.NewMemoryStore()
+	l := middleware.Limit{Rate: 1_000_000, Per: time.Second, Burst: 1_000_000}
+	ctx := context.Background()
+	_, _ = s.Take(ctx, "k", l)
+	if got := testing.AllocsPerRun(1000, func() { _, _ = s.Take(ctx, "k", l) }); got != want {
+		t.Errorf("MemoryStore.Take allocated %.1f objects per call, want exactly %.0f", got, want)
+	}
+}
